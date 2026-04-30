@@ -1,8 +1,10 @@
-import { app, BrowserWindow, ipcMain, type BrowserWindowConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, type BrowserWindowConstructorOptions } from 'electron';
 import path from 'node:path';
-import { ipcChannels, type HealthStatus } from '../shared/ipc';
+import { CsvDataService } from './csv-data-service';
+import { ipcChannels, type HealthStatus, type OpenCsvResult } from '../shared/ipc';
 
 const electronRoot = __dirname;
+const csvDataService = new CsvDataService();
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -41,6 +43,24 @@ function registerIpcHandlers() {
       timestamp: new Date().toISOString(),
     };
   });
+
+  ipcMain.handle(ipcChannels.openCsv, async (): Promise<OpenCsvResult> => {
+    const result = await dialog.showOpenDialog({
+      title: 'Open CSV',
+      properties: ['openFile'],
+      filters: [
+        { name: 'CSV files', extensions: ['csv', 'tsv', 'txt'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { status: 'cancelled' };
+    }
+
+    const session = await csvDataService.openCsv(result.filePaths[0]);
+    return { status: 'opened', session };
+  });
 }
 
 app.whenReady().then(() => {
@@ -58,4 +78,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  void csvDataService.closeActiveSession();
 });

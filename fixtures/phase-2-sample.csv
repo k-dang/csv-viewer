@@ -1,0 +1,6 @@
+id,name,email,signup_date,total_spend,status,notes,empty_field,weird column,$amount
+1,Ada Lovelace,ada@example.com,2024-01-12,149.95,active,"Uses commas, quotes ""carefully"", and CSV correctly",,alpha,149.95
+2,Grace Hopper,grace@example.com,2024-02-03,0,inactive,"Legacy account; imported from TSV export",,beta,0
+3,Katherine Johnson,katherine@example.com,2024-03-19,230.5,active,"Needs review after address update",,gamma,230.5
+4,Dorothy Vaughan,dorothy@example.com,2024-04-27,,pending,"Missing spend value should infer nullable data",,delta,
+5,Mary Jackson,mary@example.com,2024-05-30,88.1,active,"Contains a delimiter-like value: a,b,c",,epsilon,88.1
