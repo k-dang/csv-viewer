@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import type { CsvSessionMetadata, HealthStatus } from '../../shared/ipc';
 
 type HealthState =
@@ -63,16 +65,16 @@ export function App() {
   const isOpening = openState.status === 'opening';
 
   return (
-    <main className="app-shell">
-      <header className="top-bar">
+    <main className="grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
+      <header className="flex min-h-[76px] flex-col items-start justify-center gap-4 border-b bg-card px-5 py-4 md:h-[76px] md:flex-row md:items-center md:justify-between md:gap-6 md:px-7 md:py-0">
         <div>
-          <p className="eyebrow">Desktop CSV Viewer</p>
-          <h1>CSV Viewer</h1>
+          <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Desktop CSV Viewer</p>
+          <h1 className="text-[22px] leading-tight font-semibold text-foreground">CSV Viewer</h1>
         </div>
-        <div className="top-bar__actions">
-          <button type="button" onClick={openCsv} disabled={isOpening}>
+        <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
+          <Button type="button" onClick={openCsv} disabled={isOpening}>
             {isOpening ? 'Opening...' : 'Open CSV'}
-          </button>
+          </Button>
           <HealthBadge health={health} />
         </div>
       </header>
@@ -80,21 +82,29 @@ export function App() {
       {openState.status === 'opened' ? (
         <CsvMetadataView session={openState.session} />
       ) : (
-        <section className="empty-state" aria-labelledby="empty-state-title">
-          <div className="empty-state__icon" aria-hidden="true">
+        <section
+          className="grid w-[min(440px,calc(100vw_-_32px))] grid-cols-1 items-center gap-6 self-center justify-self-center rounded-lg border bg-card p-6 shadow-[0_18px_50px_rgba(23,32,42,0.08)] md:w-[min(640px,calc(100vw_-_48px))] md:grid-cols-[96px_minmax(0,1fr)] md:p-8"
+          aria-labelledby="empty-state-title"
+        >
+          <div
+            className="grid size-24 place-items-center rounded-lg bg-emerald-100 text-xl font-extrabold text-emerald-900"
+            aria-hidden="true"
+          >
             CSV
           </div>
-          <div className="empty-state__content">
-            <h2 id="empty-state-title">No CSV open</h2>
-            <p>
+          <div className="grid min-w-0 gap-3.5">
+            <h2 id="empty-state-title" className="text-[28px] leading-none font-semibold text-foreground">
+              No CSV open
+            </h2>
+            <p className="max-w-[46ch] text-[15px] leading-relaxed text-muted-foreground">
               Open a local CSV file to inspect its columns, row count, and data without loading the
               full file into the renderer.
             </p>
-            <button type="button" onClick={openCsv} disabled={isOpening}>
+            <Button type="button" onClick={openCsv} disabled={isOpening}>
               {isOpening ? 'Opening...' : 'Open CSV'}
-            </button>
+            </Button>
             {openState.status === 'failed' ? (
-              <p className="error-message" role="alert">
+              <p className="font-semibold text-destructive" role="alert">
                 {openState.message}
               </p>
             ) : null}
@@ -107,35 +117,36 @@ export function App() {
 
 function CsvMetadataView({ session }: { session: CsvSessionMetadata }) {
   return (
-    <section className="metadata-view" aria-labelledby="metadata-title">
-      <div className="metadata-view__summary">
+    <section className="grid min-w-0 gap-[18px] p-[18px] md:p-7" aria-labelledby="metadata-title">
+      <div className="flex flex-col items-stretch gap-6 rounded-lg border bg-card p-[22px] md:flex-row md:items-start md:justify-between">
         <div>
-          <p className="eyebrow">Current file</p>
-          <h2 id="metadata-title">{session.file.name}</h2>
+          <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Current file</p>
+          <h2 id="metadata-title" className="[overflow-wrap:anywhere] text-[26px] leading-tight font-semibold text-foreground">
+            {session.file.name}
+          </h2>
         </div>
-        <dl className="metadata-stats">
-          <div>
-            <dt>Rows</dt>
-            <dd>{formatNumber(session.rowCount)}</dd>
-          </div>
-          <div>
-            <dt>Columns</dt>
-            <dd>{formatNumber(session.columns.length)}</dd>
-          </div>
-          <div>
-            <dt>Size</dt>
-            <dd>{formatFileSize(session.file.sizeBytes)}</dd>
-          </div>
+        <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <MetadataStat label="Rows" value={formatNumber(session.rowCount)} />
+          <MetadataStat label="Columns" value={formatNumber(session.columns.length)} />
+          <MetadataStat label="Size" value={formatFileSize(session.file.sizeBytes)} />
         </dl>
       </div>
 
-      <div className="column-panel">
-        <h3>Inferred columns</h3>
-        <div className="column-table" role="table" aria-label="Inferred CSV columns">
+      <div className="min-h-0 overflow-hidden rounded-lg border bg-card">
+        <h3 className="border-b px-[18px] py-4 text-base font-semibold text-foreground">Inferred columns</h3>
+        <div className="max-h-[calc(100vh-238px)] overflow-auto" role="table" aria-label="Inferred CSV columns">
           {session.columns.map((column) => (
-            <div className="column-row" role="row" key={column.name}>
-              <span role="cell">{column.name}</span>
-              <span role="cell">{column.type}</span>
+            <div
+              className="grid grid-cols-1 gap-4 border-b border-border/70 px-[18px] py-[11px] md:grid-cols-[minmax(0,1fr)_180px]"
+              role="row"
+              key={column.name}
+            >
+              <span className="min-w-0 break-words text-sm text-foreground/85" role="cell">
+                {column.name}
+              </span>
+              <span className="min-w-0 break-words font-mono text-sm text-muted-foreground" role="cell">
+                {column.type}
+              </span>
             </div>
           ))}
         </div>
@@ -144,17 +155,40 @@ function CsvMetadataView({ session }: { session: CsvSessionMetadata }) {
   );
 }
 
+function MetadataStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border bg-muted/60 px-3 py-2.5 md:min-w-24">
+      <dt className="text-xs font-bold uppercase text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-xl font-bold text-foreground">{value}</dd>
+    </div>
+  );
+}
+
 function HealthBadge({ health }: { health: HealthState }) {
+  const baseClassName =
+    'shrink-0 rounded-full border px-3 py-[7px] text-[13px] font-semibold';
+
   if (health.status === 'checking') {
-    return <span className="health-badge health-badge--pending">Checking IPC</span>;
+    return (
+      <span className={cn(baseClassName, 'border-amber-200 bg-amber-50 text-amber-900')}>
+        Checking IPC
+      </span>
+    );
   }
 
   if (health.status === 'failed') {
-    return <span className="health-badge health-badge--failed">IPC unavailable</span>;
+    return (
+      <span className={cn(baseClassName, 'border-rose-200 bg-rose-50 text-rose-800')}>
+        IPC unavailable
+      </span>
+    );
   }
 
   return (
-    <span className="health-badge health-badge--healthy" title={health.value.timestamp}>
+    <span
+      className={cn(baseClassName, 'border-emerald-200 bg-emerald-50 text-emerald-800')}
+      title={health.value.timestamp}
+    >
       Main process connected
     </span>
   );
