@@ -191,7 +191,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           cacheBlockSize={100}
           maxBlocksInCache={6}
           rowBuffer={8}
-          rowSelection={{ mode: 'multiRow', enableClickSelection: true }}
+          rowSelection={{ mode: 'multiRow', enableClickSelection: true, checkboxes: false, headerCheckbox: false }}
           enableCellTextSelection
           ensureDomOrder
           suppressDragLeaveHidesColumns
@@ -264,7 +264,11 @@ function formatFileSize(bytes: number): string {
 }
 
 function formatCellValue(value: CsvCellValue | undefined): string {
-  if (value === null || value === undefined) {
+  if (value === undefined) {
+    return '';
+  }
+
+  if (value === null) {
     return '[null]';
   }
 
