@@ -75,6 +75,7 @@ describe('CsvDataService', () => {
     expect(window).toEqual({
       sessionId: session.sessionId,
       offset: 1,
+      filteredRowCount: 3,
       rows: [{ name: 'Grace', age: 41, note: 'second' }],
     });
   });
@@ -92,6 +93,96 @@ describe('CsvDataService', () => {
       { name: 'Ada', note: null, score: 10 },
       { name: 'Grace', note: 'NULL', score: null },
     ]);
+  });
+
+  it('sorts rows by a structured column descriptor and clears sort by omitting descriptors', async () => {
+    const filePath = await writeFixture(
+      'sort.csv',
+      ['name,age', 'Ada,37', 'Grace,41', 'Linus,54'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const sorted = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 3,
+      sort: [{ column: 'age', direction: 'desc' }],
+    });
+    const originalOrder = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+
+    expect(sorted.rows.map((row) => row.name)).toEqual(['Linus', 'Grace', 'Ada']);
+    expect(originalOrder.rows.map((row) => row.name)).toEqual(['Ada', 'Grace', 'Linus']);
+  });
+
+  it('applies text, numeric, and combined filters with filtered row counts', async () => {
+    const filePath = await writeFixture(
+      'filters.csv',
+      [
+        'name,age,team',
+        'Ada,37,compiler',
+        'Grace,41,navy',
+        'Linus,54,kernel',
+        'Margaret,87,compiler',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      filters: [
+        { column: 'team', kind: 'text', operator: 'contains', value: 'compiler' },
+        { column: 'age', kind: 'number', operator: 'greaterThan', value: 40 },
+      ],
+    });
+
+    expect(window.filteredRowCount).toBe(1);
+    expect(window.rows).toEqual([{ name: 'Margaret', age: 87, team: 'compiler' }]);
+  });
+
+  it('filters inferred date columns', async () => {
+    const filePath = await writeFixture(
+      'dates.csv',
+      ['name,joined', 'Ada,2024-01-10', 'Grace,2024-02-12', 'Linus,2024-03-20'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      filters: [
+        {
+          column: 'joined',
+          kind: 'date',
+          operator: 'greaterThanOrEqual',
+          value: '2024-02-01',
+        },
+      ],
+    });
+
+    expect(window.filteredRowCount).toBe(2);
+    expect(window.rows.map((row) => row.name)).toEqual(['Grace', 'Linus']);
+  });
+
+  it('handles unusual column names and parameterized filter values', async () => {
+    const filePath = await writeFixture(
+      'unusual.csv',
+      ['"full name","select","quote""name"', '"Ada Lovelace","alpha","safe"', '"Grace Hopper","beta","unsafe"'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      sort: [{ column: 'full name', direction: 'desc' }],
+      filters: [{ column: 'quote"name', kind: 'text', operator: 'contains', value: `safe' OR 1=1 --` }],
+    });
+
+    expect(window.filteredRowCount).toBe(0);
+    expect(window.rows).toEqual([]);
   });
 
   it('rejects stale sessions and oversized row windows', async () => {

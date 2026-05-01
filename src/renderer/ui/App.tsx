@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
   ModuleRegistry,
   type ColDef,
+  type GridApi,
   type GridReadyEvent,
 } from 'ag-grid-community';
 import { Button } from '@/components/ui/button';
@@ -148,6 +149,9 @@ function CsvMetadataView({ session }: { session: CsvSessionMetadata }) {
 }
 
 function CsvGrid({ session }: { session: CsvSessionMetadata }) {
+  const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
+  const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
+  const [hasActiveQuery, setHasActiveQuery] = useState(false);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
       session.columns.map((column) => ({
@@ -155,7 +159,9 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         headerName: column.name,
         minWidth: 140,
         resizable: true,
-        sortable: false,
+        sortable: true,
+        filter: getColumnFilter(column.type),
+        floatingFilter: true,
         suppressMovable: false,
         cellClassRules: {
           'csv-cell-empty': (params) => params.value === '',
@@ -167,17 +173,50 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   );
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
-    const datasource = createCsvGridDataSource(session, window.csvViewer);
+    gridApiRef.current = event.api;
+    const datasource = createCsvGridDataSource(session, window.csvViewer, setFilteredRowCount);
     event.api.setGridOption('datasource', datasource);
   }
 
+  function clearSortAndFilters() {
+    const api = gridApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    api.applyColumnState({
+      defaultState: { sort: null },
+    });
+    api.setFilterModel(null);
+    setFilteredRowCount(session.rowCount);
+    setHasActiveQuery(false);
+    api.refreshInfiniteCache();
+  }
+
+  function refreshQuery(event: { api: GridApi<CsvRow> }) {
+    const hasSort = event.api.getColumnState().some((column) => Boolean(column.sort));
+    const hasFilter = Object.keys(event.api.getFilterModel()).length > 0;
+    setHasActiveQuery(hasSort || hasFilter);
+    event.api.refreshInfiniteCache();
+  }
+
+  const canClearQuery = hasActiveQuery || filteredRowCount !== session.rowCount;
+
   return (
     <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card">
-      <div className="flex min-h-[54px] flex-col gap-1 border-b px-[18px] py-3 md:flex-row md:items-center md:justify-between">
-        <h3 className="text-base font-semibold text-foreground">Rows</h3>
-        <p className="text-sm text-muted-foreground">
-          {formatNumber(session.rowCount)} rows, {formatNumber(session.columns.length)} columns
-        </p>
+      <div className="flex min-h-[62px] flex-col gap-3 border-b px-[18px] py-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Rows</h3>
+          <p className="text-sm text-muted-foreground">
+            {formatNumber(filteredRowCount)} visible of {formatNumber(session.rowCount)} total rows,
+            {' '}
+            {formatNumber(session.columns.length)} columns
+          </p>
+        </div>
+        <Button type="button" variant="outline" onClick={clearSortAndFilters} disabled={!canClearQuery}>
+          Clear sort and filters
+        </Button>
       </div>
       <div className="ag-theme-alpine min-h-0 w-full" aria-label="CSV row grid">
         <AgGridReact<CsvRow>
@@ -197,10 +236,24 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           suppressDragLeaveHidesColumns
           maintainColumnOrder
           onGridReady={onGridReady}
+          onSortChanged={refreshQuery}
+          onFilterChanged={refreshQuery}
         />
       </div>
     </div>
   );
+}
+
+function getColumnFilter(columnType: string): string {
+  if (/^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|FLOAT|DOUBLE|DECIMAL)/i.test(columnType)) {
+    return 'agNumberColumnFilter';
+  }
+
+  if (/^(DATE|TIMESTAMP|TIMESTAMP_TZ|TIME)/i.test(columnType)) {
+    return 'agDateColumnFilter';
+  }
+
+  return 'agTextColumnFilter';
 }
 
 function MetadataStat({ label, value }: { label: string; value: string }) {

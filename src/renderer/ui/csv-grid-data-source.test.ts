@@ -21,15 +21,22 @@ describe('createCsvGridDataSource', () => {
     const getCsvRows = vi.fn().mockResolvedValue({
       sessionId: session.sessionId,
       offset: 100,
+      filteredRowCount: 250,
       rows: [{ name: 'Ada', age: 37 }],
     });
     const successCallback = vi.fn();
     const failCallback = vi.fn();
+    const onFilteredRowCount = vi.fn();
 
-    const datasource = createCsvGridDataSource(session, { getCsvRows });
+    const datasource = createCsvGridDataSource(session, { getCsvRows }, onFilteredRowCount);
     datasource.getRows({
       startRow: 100,
       endRow: 125,
+      sortModel: [{ colId: 'age', sort: 'desc' }],
+      filterModel: {
+        name: { filterType: 'text', type: 'contains', filter: 'Ada' },
+        age: { filterType: 'number', type: 'greaterThan', filter: 30 },
+      },
       successCallback,
       failCallback,
     } as never);
@@ -42,7 +49,13 @@ describe('createCsvGridDataSource', () => {
       sessionId: session.sessionId,
       offset: 100,
       limit: 25,
+      sort: [{ column: 'age', direction: 'desc' }],
+      filters: [
+        { column: 'name', kind: 'text', operator: 'contains', value: 'Ada' },
+        { column: 'age', kind: 'number', operator: 'greaterThan', value: 30, valueTo: undefined },
+      ],
     });
+    expect(onFilteredRowCount).toHaveBeenCalledWith(250);
     expect(failCallback).not.toHaveBeenCalled();
   });
 
@@ -55,6 +68,8 @@ describe('createCsvGridDataSource', () => {
     datasource.getRows({
       startRow: 0,
       endRow: 100,
+      sortModel: [],
+      filterModel: {},
       successCallback,
       failCallback,
     } as never);
