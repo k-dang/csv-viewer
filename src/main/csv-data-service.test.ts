@@ -63,6 +63,52 @@ describe('CsvDataService', () => {
     expect(second.columns.map((column) => column.name)).toEqual(['b', 'c']);
   });
 
+  it('returns bounded row windows without reading the full CSV', async () => {
+    const filePath = await writeFixture(
+      'window.csv',
+      ['name,age,note', 'Ada,37,first', 'Grace,41,second', 'Linus,54,third'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 1, limit: 1 });
+
+    expect(window).toEqual({
+      sessionId: session.sessionId,
+      offset: 1,
+      rows: [{ name: 'Grace', age: 41, note: 'second' }],
+    });
+  });
+
+  it('preserves empty strings and null values distinctly in row windows', async () => {
+    const filePath = await writeFixture(
+      'missing.csv',
+      ['name,note,score', 'Ada,,10', 'Grace,NULL,'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+
+    expect(window.rows).toEqual([
+      { name: 'Ada', note: null, score: 10 },
+      { name: 'Grace', note: 'NULL', score: null },
+    ]);
+  });
+
+  it('rejects stale sessions and oversized row windows', async () => {
+    const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
+    const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));
+
+    const first = await service.openCsv(firstPath);
+    await service.openCsv(secondPath);
+
+    await expect(service.getRows({ sessionId: first.sessionId, offset: 0, limit: 1 })).rejects.toThrow(
+      'CSV session is no longer active',
+    );
+    await expect(
+      service.getRows({ sessionId: service.getActiveSession()?.sessionId ?? '', offset: 0, limit: 1001 }),
+    ).rejects.toThrow('1000 or less');
+  });
+
   it('returns a clear error for missing files without keeping an active session', async () => {
     await expect(service.openCsv(path.join(tempDir, 'missing.csv'))).rejects.toThrow(
       'Unable to open CSV',

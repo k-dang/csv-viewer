@@ -2,7 +2,14 @@ import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { CsvColumn, CsvSessionMetadata } from '../shared/ipc';
+import type {
+  CsvCellValue,
+  CsvColumn,
+  CsvRow,
+  CsvRowWindow,
+  CsvRowWindowRequest,
+  CsvSessionMetadata,
+} from '../shared/ipc';
 
 const viewName = 'active_csv';
 
@@ -62,6 +69,33 @@ export class CsvDataService {
     return this.session;
   }
 
+  async getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow> {
+    if (!this.session || !this.connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    if (request.sessionId !== this.session.sessionId) {
+      throw new Error('CSV session is no longer active.');
+    }
+
+    const offset = validateWindowInteger(request.offset, 'offset');
+    const limit = validateWindowInteger(request.limit, 'limit');
+
+    if (limit > 1000) {
+      throw new Error('Row window limit must be 1000 or less.');
+    }
+
+    const result = await this.connection.runAndReadAll(
+      `SELECT * FROM ${quoteIdentifier(viewName)} LIMIT ${limit} OFFSET ${offset}`,
+    );
+
+    return {
+      sessionId: this.session.sessionId,
+      offset,
+      rows: result.getRowObjectsJS().map(normalizeRow),
+    };
+  }
+
   async closeActiveSession(): Promise<void> {
     this.session = null;
 
@@ -75,6 +109,40 @@ export class CsvDataService {
       this.instance = null;
     }
   }
+}
+
+function validateWindowInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Row window ${label} must be a non-negative integer.`);
+  }
+
+  return value;
+}
+
+function normalizeRow(row: Record<string, unknown>): CsvRow {
+  return Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [key, normalizeCellValue(value)]),
+  );
+}
+
+function normalizeCellValue(value: unknown): CsvCellValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  return String(value);
 }
 
 function quoteIdentifier(identifier: string): string {

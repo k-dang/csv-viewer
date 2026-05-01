@@ -1,7 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, type BrowserWindowConstructorOptions } from 'electron';
 import path from 'node:path';
 import { CsvDataService } from './csv-data-service';
-import { ipcChannels, type HealthStatus, type OpenCsvResult } from '../shared/ipc';
+import {
+  ipcChannels,
+  type CsvRowWindow,
+  type CsvRowWindowRequest,
+  type HealthStatus,
+  type OpenCsvResult,
+} from '../shared/ipc';
 
 const electronRoot = __dirname;
 const csvDataService = new CsvDataService();
@@ -61,6 +67,13 @@ function registerIpcHandlers() {
     const session = await csvDataService.openCsv(result.filePaths[0]);
     return { status: 'opened', session };
   });
+
+  ipcMain.handle(
+    ipcChannels.getCsvRows,
+    async (_event, request: CsvRowWindowRequest): Promise<CsvRowWindow> => {
+      return csvDataService.getRows(request);
+    },
+  );
 }
 
 app.whenReady().then(() => {

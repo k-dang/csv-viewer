@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-alpine.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -179,4 +181,26 @@
   body {
     @apply min-h-screen bg-background text-foreground;
   }
+}
+
+.ag-theme-alpine {
+  --ag-background-color: var(--card);
+  --ag-foreground-color: var(--foreground);
+  --ag-border-color: var(--border);
+  --ag-header-background-color: var(--muted);
+  --ag-header-foreground-color: var(--foreground);
+  --ag-row-hover-color: color-mix(in oklch, var(--accent) 70%, transparent);
+  --ag-selected-row-background-color: color-mix(in oklch, var(--chart-1) 18%, transparent);
+  --ag-font-family: var(--font-sans);
+  --ag-font-size: 13px;
+}
+
+.csv-cell-empty {
+  color: oklch(0.47 0.1 245);
+  font-style: italic;
+}
+
+.csv-cell-null {
+  color: oklch(0.45 0.13 28);
+  font-style: italic;
 }

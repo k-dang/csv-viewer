@@ -1,7 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { AgGridReact } from 'ag-grid-react';
+import {
+  AllCommunityModule,
+  ModuleRegistry,
+  type ColDef,
+  type GridReadyEvent,
+} from 'ag-grid-community';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { CsvSessionMetadata, HealthStatus } from '../../shared/ipc';
+import type { CsvCellValue, CsvRow, CsvSessionMetadata, HealthStatus } from '../../shared/ipc';
+import { createCsvGridDataSource } from './csv-grid-data-source';
+
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 type HealthState =
   | { status: 'checking' }
@@ -117,7 +127,7 @@ export function App() {
 
 function CsvMetadataView({ session }: { session: CsvSessionMetadata }) {
   return (
-    <section className="grid min-w-0 gap-[18px] p-[18px] md:p-7" aria-labelledby="metadata-title">
+    <section className="grid min-h-0 min-w-0 grid-rows-[auto_1fr] gap-[18px] p-[18px] md:p-7" aria-labelledby="metadata-title">
       <div className="flex flex-col items-stretch gap-6 rounded-lg border bg-card p-[22px] md:flex-row md:items-start md:justify-between">
         <div>
           <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Current file</p>
@@ -132,26 +142,64 @@ function CsvMetadataView({ session }: { session: CsvSessionMetadata }) {
         </dl>
       </div>
 
-      <div className="min-h-0 overflow-hidden rounded-lg border bg-card">
-        <h3 className="border-b px-[18px] py-4 text-base font-semibold text-foreground">Inferred columns</h3>
-        <div className="max-h-[calc(100vh-238px)] overflow-auto" role="table" aria-label="Inferred CSV columns">
-          {session.columns.map((column) => (
-            <div
-              className="grid grid-cols-1 gap-4 border-b border-border/70 px-[18px] py-[11px] md:grid-cols-[minmax(0,1fr)_180px]"
-              role="row"
-              key={column.name}
-            >
-              <span className="min-w-0 break-words text-sm text-foreground/85" role="cell">
-                {column.name}
-              </span>
-              <span className="min-w-0 break-words font-mono text-sm text-muted-foreground" role="cell">
-                {column.type}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+      <CsvGrid session={session} />
     </section>
+  );
+}
+
+function CsvGrid({ session }: { session: CsvSessionMetadata }) {
+  const columnDefs = useMemo<ColDef<CsvRow>[]>(
+    () =>
+      session.columns.map((column) => ({
+        field: column.name,
+        headerName: column.name,
+        minWidth: 140,
+        resizable: true,
+        sortable: false,
+        suppressMovable: false,
+        cellClassRules: {
+          'csv-cell-empty': (params) => params.value === '',
+          'csv-cell-null': (params) => params.value === null || params.value === undefined,
+        },
+        valueFormatter: ({ value }) => formatCellValue(value as CsvCellValue | undefined),
+      })),
+    [session.columns],
+  );
+
+  function onGridReady(event: GridReadyEvent<CsvRow>) {
+    const datasource = createCsvGridDataSource(session, window.csvViewer);
+    event.api.setGridOption('datasource', datasource);
+  }
+
+  return (
+    <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card">
+      <div className="flex min-h-[54px] flex-col gap-1 border-b px-[18px] py-3 md:flex-row md:items-center md:justify-between">
+        <h3 className="text-base font-semibold text-foreground">Rows</h3>
+        <p className="text-sm text-muted-foreground">
+          {formatNumber(session.rowCount)} rows, {formatNumber(session.columns.length)} columns
+        </p>
+      </div>
+      <div className="ag-theme-alpine min-h-0 w-full" aria-label="CSV row grid">
+        <AgGridReact<CsvRow>
+          key={session.sessionId}
+          columnDefs={columnDefs}
+          defaultColDef={{
+            editable: false,
+            minWidth: 120,
+          }}
+          rowModelType="infinite"
+          cacheBlockSize={100}
+          maxBlocksInCache={6}
+          rowBuffer={8}
+          rowSelection={{ mode: 'multiRow', enableClickSelection: true }}
+          enableCellTextSelection
+          ensureDomOrder
+          suppressDragLeaveHidesColumns
+          maintainColumnOrder
+          onGridReady={onGridReady}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -213,4 +261,16 @@ function formatFileSize(bytes: number): string {
   }
 
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function formatCellValue(value: CsvCellValue | undefined): string {
+  if (value === null || value === undefined) {
+    return '[null]';
+  }
+
+  if (value === '') {
+    return '[empty]';
+  }
+
+  return String(value);
 }
