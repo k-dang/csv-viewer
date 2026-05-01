@@ -157,7 +157,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       session.columns.map((column) => ({
         field: column.name,
         headerName: column.name,
-        minWidth: 140,
+        minWidth: getColumnMinWidth(column.type),
         resizable: true,
         sortable: true,
         filter: getColumnFilter(column.type),
@@ -254,6 +254,18 @@ function getColumnFilter(columnType: string): string {
   }
 
   return 'agTextColumnFilter';
+}
+
+function getColumnMinWidth(columnType: string): number {
+  if (isDateLikeColumn(columnType)) {
+    return 180;
+  }
+
+  return 140;
+}
+
+function isDateLikeColumn(columnType: string): boolean {
+  return /^(DATE|TIMESTAMP|TIMESTAMP_TZ|TIME)/i.test(columnType);
 }
 
 function MetadataStat({ label, value }: { label: string; value: string }) {

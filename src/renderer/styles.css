@@ -195,6 +195,24 @@
   --ag-font-size: 13px;
 }
 
+.ag-theme-alpine .ag-floating-filter,
+.ag-theme-alpine .ag-floating-filter-body,
+.ag-theme-alpine .ag-floating-filter-input,
+.ag-theme-alpine .ag-date-filter,
+.ag-theme-alpine .ag-date-filter input {
+  min-width: 0;
+}
+
+.ag-theme-alpine .ag-floating-filter-input,
+.ag-theme-alpine .ag-date-filter input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ag-theme-alpine .ag-floating-filter-button {
+  flex: 0 0 auto;
+}
+
 .csv-cell-empty {
   color: oklch(0.47 0.1 245);
   font-style: italic;
