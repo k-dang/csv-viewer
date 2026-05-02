@@ -90,6 +90,7 @@ export class CsvDataService {
     const query = buildRowsQuery({
       columns: this.session.columns,
       filters: request.filters ?? [],
+      search: request.search ?? '',
       sort: request.sort ?? [],
       limit,
       offset,
@@ -165,12 +166,14 @@ type QueryParts = {
 function buildRowsQuery({
   columns,
   filters,
+  search,
   sort,
   limit,
   offset,
 }: {
   columns: CsvColumn[];
   filters: CsvFilterDescriptor[];
+  search: string;
   sort: CsvSortDescriptor[];
   limit: number;
   offset: number;
@@ -178,6 +181,12 @@ function buildRowsQuery({
   const knownColumns = new Set(columns.map((column) => column.name));
   const values: Array<string | number | boolean | null> = [];
   const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));
+  const searchClause = buildSearchClause(columns, search, values);
+
+  if (searchClause) {
+    whereClauses.push(searchClause);
+  }
+
   const whereSql = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
   const orderSql = orderClauses.length > 0 ? ` ORDER BY ${orderClauses.join(', ')}` : '';
@@ -188,6 +197,27 @@ function buildRowsQuery({
     rowsSql: `SELECT *${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
     values,
   };
+}
+
+function buildSearchClause(
+  columns: CsvColumn[],
+  search: string,
+  values: Array<string | number | boolean | null>,
+): string | null {
+  const normalizedSearch = search.trim();
+
+  if (normalizedSearch.length === 0) {
+    return null;
+  }
+
+  const searchableColumns = columns.map((column) => quoteIdentifier(column.name));
+  const pattern = `%${escapeLike(normalizedSearch)}%`;
+
+  values.push(...searchableColumns.map(() => pattern));
+
+  return `(${searchableColumns
+    .map((columnSql) => `${castForText(columnSql)} ILIKE ? ESCAPE '\\'`)
+    .join(' OR ')})`;
 }
 
 function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {

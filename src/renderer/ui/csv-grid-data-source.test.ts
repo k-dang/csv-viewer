@@ -28,7 +28,7 @@ describe('createCsvGridDataSource', () => {
     const failCallback = vi.fn();
     const onFilteredRowCount = vi.fn();
 
-    const datasource = createCsvGridDataSource(session, { getCsvRows }, onFilteredRowCount);
+    const datasource = createCsvGridDataSource(session, { getCsvRows }, onFilteredRowCount, 'Ada');
     datasource.getRows({
       startRow: 100,
       endRow: 125,
@@ -54,6 +54,7 @@ describe('createCsvGridDataSource', () => {
         { column: 'name', kind: 'text', operator: 'contains', value: 'Ada' },
         { column: 'age', kind: 'number', operator: 'greaterThan', value: 30, valueTo: undefined },
       ],
+      search: 'Ada',
     });
     expect(onFilteredRowCount).toHaveBeenCalledWith(250);
     expect(failCallback).not.toHaveBeenCalled();
@@ -79,5 +80,73 @@ describe('createCsvGridDataSource', () => {
     });
 
     expect(successCallback).not.toHaveBeenCalled();
+  });
+
+  it('ignores stale row-window responses when a newer request supersedes them', async () => {
+    let resolveFirst: (value: unknown) => void = () => undefined;
+    const firstRequest = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const getCsvRows = vi
+      .fn()
+      .mockReturnValueOnce(firstRequest)
+      .mockResolvedValueOnce({
+        sessionId: session.sessionId,
+        offset: 0,
+        filteredRowCount: 1,
+        rows: [{ name: 'Grace', age: 41 }],
+      });
+    const firstSuccessCallback = vi.fn();
+    const secondSuccessCallback = vi.fn();
+    const onFilteredRowCount = vi.fn();
+    const requestState = { latestRequestId: 0 };
+
+    const firstDatasource = createCsvGridDataSource(
+      session,
+      { getCsvRows },
+      onFilteredRowCount,
+      'Ada',
+      requestState,
+    );
+    const secondDatasource = createCsvGridDataSource(
+      session,
+      { getCsvRows },
+      onFilteredRowCount,
+      'Grace',
+      requestState,
+    );
+
+    firstDatasource.getRows({
+      startRow: 0,
+      endRow: 100,
+      sortModel: [],
+      filterModel: {},
+      successCallback: firstSuccessCallback,
+      failCallback: vi.fn(),
+    } as never);
+    secondDatasource.getRows({
+      startRow: 0,
+      endRow: 100,
+      sortModel: [],
+      filterModel: {},
+      successCallback: secondSuccessCallback,
+      failCallback: vi.fn(),
+    } as never);
+
+    await vi.waitFor(() => {
+      expect(secondSuccessCallback).toHaveBeenCalledWith([{ name: 'Grace', age: 41 }], 1);
+    });
+
+    resolveFirst({
+      sessionId: session.sessionId,
+      offset: 0,
+      filteredRowCount: 1,
+      rows: [{ name: 'Ada', age: 37 }],
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(firstSuccessCallback).not.toHaveBeenCalled();
+    expect(onFilteredRowCount).toHaveBeenCalledTimes(1);
   });
 });

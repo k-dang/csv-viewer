@@ -185,6 +185,76 @@ describe('CsvDataService', () => {
     expect(window.rows).toEqual([]);
   });
 
+  it('searches across columns and returns matching row counts', async () => {
+    const filePath = await writeFixture(
+      'search.csv',
+      [
+        'name,age,team',
+        'Ada,37,compiler',
+        'Grace,41,navy',
+        'Linus,54,kernel',
+        'Margaret,87,compiler',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'comp',
+    });
+
+    expect(window.filteredRowCount).toBe(2);
+    expect(window.rows.map((row) => row.name)).toEqual(['Ada', 'Margaret']);
+  });
+
+  it('returns no rows for searches without matches and clears search when omitted', async () => {
+    const filePath = await writeFixture('search-clear.csv', ['name,team', 'Ada,compiler', 'Grace,navy'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const noResults = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'missing',
+    });
+    const cleared = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 10 });
+
+    expect(noResults.filteredRowCount).toBe(0);
+    expect(noResults.rows).toEqual([]);
+    expect(cleared.filteredRowCount).toBe(2);
+    expect(cleared.rows.map((row) => row.name)).toEqual(['Ada', 'Grace']);
+  });
+
+  it('composes search with active filters using parameterized search values', async () => {
+    const filePath = await writeFixture(
+      'search-filter.csv',
+      ['"full name",age,team', '"Ada Lovelace",37,compiler', '"Grace Hopper",41,navy', '"Margaret Hamilton",87,compiler'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const filteredSearch = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'compiler',
+      filters: [{ column: 'age', kind: 'number', operator: 'greaterThan', value: 40 }],
+    });
+    const parameterizedSearch = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: `compiler%' OR 1=1 --`,
+      filters: [{ column: 'age', kind: 'number', operator: 'greaterThan', value: 40 }],
+    });
+
+    expect(filteredSearch.filteredRowCount).toBe(1);
+    expect(filteredSearch.rows.map((row) => row['full name'])).toEqual(['Margaret Hamilton']);
+    expect(parameterizedSearch.filteredRowCount).toBe(0);
+    expect(parameterizedSearch.rows).toEqual([]);
+  });
+
   it('rejects stale sessions and oversized row windows', async () => {
     const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));

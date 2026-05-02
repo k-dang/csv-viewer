@@ -87,6 +87,7 @@ export type CsvRowWindowRequest = {
   limit: number;
   sort?: CsvSortDescriptor[];
   filters?: CsvFilterDescriptor[];
+  search?: string;
 };
 
 export type CsvRowWindow = {

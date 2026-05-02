@@ -13,24 +13,37 @@ export function createCsvGridDataSource(
   session: CsvSessionMetadata,
   api: Pick<CsvViewerApi, 'getCsvRows'>,
   onFilteredRowCount?: (rowCount: number) => void,
+  search = '',
+  requestState: { latestRequestId: number } = { latestRequestId: 0 },
 ): IDatasource {
   return {
     rowCount: session.rowCount,
     getRows: (params: IGetRowsParams) => {
+      const requestId = requestState.latestRequestId + 1;
+      requestState.latestRequestId = requestId;
       const offset = params.startRow;
       const limit = Math.max(0, params.endRow - params.startRow);
       const query = {
         sort: toCsvSortDescriptors(params.sortModel),
         filters: toCsvFilterDescriptors(params.filterModel),
+        search: search.trim(),
       };
 
       api
         .getCsvRows({ sessionId: session.sessionId, offset, limit, ...query })
         .then((window) => {
+          if (requestId !== requestState.latestRequestId) {
+            return;
+          }
+
           onFilteredRowCount?.(window.filteredRowCount);
           params.successCallback(window.rows, window.filteredRowCount);
         })
         .catch(() => {
+          if (requestId !== requestState.latestRequestId) {
+            return;
+          }
+
           params.failCallback();
         });
     },

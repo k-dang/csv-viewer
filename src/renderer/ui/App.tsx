@@ -152,6 +152,9 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
+  const [search, setSearch] = useState('');
+  const searchRef = useRef(search);
+  const requestStateRef = useRef({ latestRequestId: 0 });
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
       session.columns.map((column) => ({
@@ -172,14 +175,44 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     [session.columns],
   );
 
+  useEffect(() => {
+    searchRef.current = search;
+  }, [search]);
+
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
-    const datasource = createCsvGridDataSource(session, window.csvViewer, setFilteredRowCount);
+    const datasource = createCsvGridDataSource(
+      session,
+      window.csvViewer,
+      setFilteredRowCount,
+      searchRef.current,
+      requestStateRef.current,
+    );
     event.api.setGridOption('datasource', datasource);
   }
 
-  function clearSortAndFilters() {
+  useEffect(() => {
     const api = gridApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    setHasActiveQuery(hasGridSortOrFilters(api) || search.trim().length > 0);
+    const datasource = createCsvGridDataSource(
+      session,
+      window.csvViewer,
+      setFilteredRowCount,
+      search,
+      requestStateRef.current,
+    );
+    api.setGridOption('datasource', datasource);
+  }, [search, session]);
+
+  function clearQuery() {
+    const api = gridApiRef.current;
+
+    setSearch('');
 
     if (!api) {
       return;
@@ -191,21 +224,27 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     api.setFilterModel(null);
     setFilteredRowCount(session.rowCount);
     setHasActiveQuery(false);
-    api.refreshInfiniteCache();
+    const datasource = createCsvGridDataSource(
+      session,
+      window.csvViewer,
+      setFilteredRowCount,
+      '',
+      requestStateRef.current,
+    );
+    api.setGridOption('datasource', datasource);
   }
 
   function refreshQuery(event: { api: GridApi<CsvRow> }) {
-    const hasSort = event.api.getColumnState().some((column) => Boolean(column.sort));
-    const hasFilter = Object.keys(event.api.getFilterModel()).length > 0;
-    setHasActiveQuery(hasSort || hasFilter);
+    setHasActiveQuery(hasGridSortOrFilters(event.api) || searchRef.current.trim().length > 0);
     event.api.refreshInfiniteCache();
   }
 
-  const canClearQuery = hasActiveQuery || filteredRowCount !== session.rowCount;
+  const hasSearch = search.trim().length > 0;
+  const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== session.rowCount;
 
   return (
     <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card">
-      <div className="flex min-h-[62px] flex-col gap-3 border-b px-[18px] py-3 md:flex-row md:items-center md:justify-between">
+      <div className="flex min-h-[62px] flex-col gap-3 border-b px-[18px] py-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h3 className="text-base font-semibold text-foreground">Rows</h3>
           <p className="text-sm text-muted-foreground">
@@ -214,9 +253,22 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
             {formatNumber(session.columns.length)} columns
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={clearSortAndFilters} disabled={!canClearQuery}>
-          Clear sort and filters
-        </Button>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="sr-only" htmlFor="global-search">
+            Global search
+          </label>
+          <input
+            id="global-search"
+            className="h-9 min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-xs outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:w-[260px]"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search all columns"
+          />
+          <Button type="button" variant="outline" onClick={clearQuery} disabled={!canClearQuery}>
+            Clear query
+          </Button>
+        </div>
       </div>
       <div className="ag-theme-alpine min-h-0 w-full" aria-label="CSV row grid">
         <AgGridReact<CsvRow>
@@ -242,6 +294,12 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       </div>
     </div>
   );
+}
+
+function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {
+  const hasSort = api.getColumnState().some((column) => Boolean(column.sort));
+  const hasFilter = Object.keys(api.getFilterModel()).length > 0;
+  return hasSort || hasFilter;
 }
 
 function getColumnFilter(columnType: string): string {
