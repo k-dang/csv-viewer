@@ -161,7 +161,6 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         resizable: true,
         sortable: true,
         filter: getColumnFilter(column.type),
-        filterParams: getColumnFilterParams(column.type),
         floatingFilter: true,
         suppressMovable: false,
         cellClassRules: {
@@ -255,16 +254,6 @@ function getColumnFilter(columnType: string): string {
   }
 
   return 'agTextColumnFilter';
-}
-
-function getColumnFilterParams(columnType: string): Record<string, unknown> | undefined {
-  if (isDateLikeColumn(columnType)) {
-    return {
-      browserDatePicker: false,
-    };
-  }
-
-  return undefined;
 }
 
 function getColumnMinWidth(columnType: string): number {
