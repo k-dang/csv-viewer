@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { FieldError } from '@/components/ui/field';
 import type { CsvSessionMetadata } from '../../shared/ipc';
 import { CsvGrid } from './csv-grid';
 
@@ -18,9 +19,9 @@ export function CsvMetadataView({
       aria-labelledby="metadata-title"
     >
       {dialectError ? (
-        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive" role="alert">
+        <FieldError className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 font-semibold">
           {dialectError}
-        </p>
+        </FieldError>
       ) : null}
 
       <CsvGrid session={session} />

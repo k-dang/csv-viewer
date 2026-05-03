@@ -1,22 +1,61 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
-  AllCommunityModule,
+  CellApiModule,
+  ColumnApiModule,
+  DateFilterModule,
+  InfiniteRowModelModule,
   ModuleRegistry,
+  NumberFilterModule,
+  RenderApiModule,
+  RowSelectionModule,
+  TextFilterModule,
+  themeQuartz,
   type ColDef,
   type GridApi,
   type GridReadyEvent,
 } from 'ag-grid-community';
 import { Database, HardDrive, RotateCcw, Search, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
 import { createCsvGridDataSource } from '../ui/csv-grid-data-source';
-import { formControlClassName } from './dialect-controls';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([
+  CellApiModule,
+  ColumnApiModule,
+  DateFilterModule,
+  InfiniteRowModelModule,
+  NumberFilterModule,
+  RenderApiModule,
+  RowSelectionModule,
+  TextFilterModule,
+]);
+
+const csvGridTheme = themeQuartz.withParams({
+  accentColor: '#0f766e',
+  backgroundColor: '#ffffff',
+  borderColor: '#d7dee8',
+  browserColorScheme: 'light',
+  cellFontSize: 13,
+  chromeBackgroundColor: '#f8fafc',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontSize: 13,
+  foregroundColor: '#0f172a',
+  headerBackgroundColor: '#f1f5f9',
+  headerFontSize: 13,
+  headerFontWeight: 700,
+  headerTextColor: '#111827',
+  iconSize: 15,
+  oddRowBackgroundColor: '#f8fafc',
+  rowHeight: 38,
+  selectedRowBackgroundColor: 'rgba(15, 118, 110, 0.12)',
+  spacing: 7,
+  wrapperBorder: false,
+  wrapperBorderRadius: 8,
+});
 
 export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
@@ -35,7 +74,6 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         resizable: true,
         sortable: true,
         filter: getColumnFilter(column.type),
-        floatingFilter: true,
         suppressMovable: false,
         cellClassRules: {
           'csv-cell-empty': (params) => params.value === '',
@@ -147,9 +185,9 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           </label>
           <div className="relative min-w-0 sm:w-[270px]">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <input
+            <Input
               id="global-search"
-              className={cn(formControlClassName, 'w-full min-w-0 pr-3 pl-9')}
+              className="w-full min-w-0 bg-card pr-3 pl-9"
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -162,9 +200,10 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           </Button>
         </div>
       </div>
-      <div className="ag-theme-alpine min-h-0 w-full" aria-label="CSV row grid">
+      <div className="csv-grid-frame min-h-0 w-full" aria-label="CSV row grid">
         <AgGridReact<CsvRow>
           key={session.sessionId}
+          theme={csvGridTheme}
           columnDefs={columnDefs}
           defaultColDef={{
             editable: false,

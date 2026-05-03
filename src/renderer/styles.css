@@ -1,7 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "ag-grid-community/styles/ag-grid.css";
-@import "ag-grid-community/styles/ag-theme-alpine.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -196,80 +194,28 @@
     var(--background);
 }
 
-.ag-theme-alpine {
-  --ag-background-color: var(--card);
-  --ag-foreground-color: var(--foreground);
-  --ag-border-color: var(--border);
-  --ag-secondary-border-color: color-mix(in oklch, var(--border) 70%, transparent);
-  --ag-header-background-color: oklch(0.965 0.012 247);
-  --ag-header-foreground-color: var(--foreground);
-  --ag-row-hover-color: color-mix(in oklch, var(--accent) 70%, transparent);
-  --ag-selected-row-background-color: color-mix(in oklch, var(--chart-1) 18%, transparent);
-  --ag-odd-row-background-color: color-mix(in oklch, var(--muted) 28%, transparent);
-  --ag-control-panel-background-color: var(--card);
-  --ag-input-border-color: var(--input);
-  --ag-input-focus-border-color: var(--ring);
-  --ag-range-selection-border-color: var(--ring);
-  --ag-font-family: var(--font-sans);
-  --ag-font-size: 13px;
-  --ag-header-height: 42px;
-  --ag-row-height: 36px;
-  --ag-list-item-height: 32px;
-  --ag-wrapper-border-radius: 0;
-}
-
-.ag-theme-alpine .ag-root-wrapper {
-  border: 0;
-}
-
-.ag-theme-alpine .ag-header-cell-label {
+.csv-grid-frame .ag-header-cell-label {
   font-weight: 700;
 }
 
-.ag-theme-alpine .ag-header-cell-text {
+.csv-grid-frame .ag-header-cell-text {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.ag-theme-alpine .ag-cell {
+.csv-grid-frame .ag-cell {
   align-items: center;
   display: flex;
   line-height: 1.35;
 }
 
-.ag-theme-alpine .ag-row {
-  border-color: color-mix(in oklch, var(--border) 72%, transparent);
-}
-
-.ag-theme-alpine .ag-row-selected::before {
-  background-color: color-mix(in oklch, var(--chart-1) 14%, transparent);
-}
-
-.ag-theme-alpine .ag-overlay-loading-center {
+.csv-grid-frame .ag-overlay-loading-center {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   color: var(--muted-foreground);
   font-weight: 600;
   padding: 10px 14px;
-}
-
-.ag-theme-alpine .ag-floating-filter,
-.ag-theme-alpine .ag-floating-filter-body,
-.ag-theme-alpine .ag-floating-filter-input,
-.ag-theme-alpine .ag-date-filter,
-.ag-theme-alpine .ag-date-filter input {
-  min-width: 0;
-}
-
-.ag-theme-alpine .ag-floating-filter-input,
-.ag-theme-alpine .ag-date-filter input {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.ag-theme-alpine .ag-floating-filter-button {
-  flex: 0 0 auto;
 }
 
 .csv-cell-empty {
