@@ -285,6 +285,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
+  const [queryState, setQueryState] = useState<'idle' | 'querying' | 'ready' | 'failed'>('idle');
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
   const requestStateRef = useRef({ latestRequestId: 0 });
@@ -320,6 +321,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       setFilteredRowCount,
       searchRef.current,
       requestStateRef.current,
+      setQueryState,
     );
     event.api.setGridOption('datasource', datasource);
   }
@@ -338,6 +340,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       setFilteredRowCount,
       search,
       requestStateRef.current,
+      setQueryState,
     );
     api.setGridOption('datasource', datasource);
   }, [search, session]);
@@ -363,6 +366,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       setFilteredRowCount,
       '',
       requestStateRef.current,
+      setQueryState,
     );
     api.setGridOption('datasource', datasource);
   }
@@ -387,6 +391,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           </p>
         </div>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+          <QueryStatusBadge state={queryState} />
           <label className="sr-only" htmlFor="global-search">
             Global search
           </label>
@@ -423,6 +428,7 @@ function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           onGridReady={onGridReady}
           onSortChanged={refreshQuery}
           onFilterChanged={refreshQuery}
+          overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
         />
       </div>
     </div>
@@ -510,6 +516,32 @@ function HealthBadge({ health }: { health: HealthState }) {
       title={health.value.timestamp}
     >
       Main process connected
+    </span>
+  );
+}
+
+function QueryStatusBadge({ state }: { state: 'idle' | 'querying' | 'ready' | 'failed' }) {
+  const baseClassName = 'h-9 shrink-0 rounded-full border px-3 text-[13px] font-semibold leading-9';
+
+  if (state === 'querying') {
+    return (
+      <span className={cn(baseClassName, 'border-sky-200 bg-sky-50 text-sky-900')}>
+        Querying
+      </span>
+    );
+  }
+
+  if (state === 'failed') {
+    return (
+      <span className={cn(baseClassName, 'border-rose-200 bg-rose-50 text-rose-800')}>
+        Query failed
+      </span>
+    );
+  }
+
+  return (
+    <span className={cn(baseClassName, 'border-emerald-200 bg-emerald-50 text-emerald-800')}>
+      Ready
     </span>
   );
 }

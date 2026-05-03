@@ -15,6 +15,7 @@ export function createCsvGridDataSource(
   onFilteredRowCount?: (rowCount: number) => void,
   search = '',
   requestState: { latestRequestId: number } = { latestRequestId: 0 },
+  onQueryState?: (state: 'querying' | 'ready' | 'failed') => void,
 ): IDatasource {
   return {
     rowCount: session.rowCount,
@@ -29,6 +30,8 @@ export function createCsvGridDataSource(
         search: search.trim(),
       };
 
+      onQueryState?.('querying');
+
       api
         .getCsvRows({ sessionId: session.sessionId, offset, limit, ...query })
         .then((window) => {
@@ -37,6 +40,7 @@ export function createCsvGridDataSource(
           }
 
           onFilteredRowCount?.(window.filteredRowCount);
+          onQueryState?.('ready');
           params.successCallback(window.rows, window.filteredRowCount);
         })
         .catch(() => {
@@ -44,6 +48,7 @@ export function createCsvGridDataSource(
             return;
           }
 
+          onQueryState?.('failed');
           params.failCallback();
         });
     },

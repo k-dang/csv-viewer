@@ -339,6 +339,38 @@ describe('CsvDataService', () => {
     expect(service.getActiveSession()).toBeNull();
   });
 
+  it('validates large-file access through bounded row windows', async () => {
+    const rows = ['id,name,score'];
+
+    for (let index = 0; index < 5000; index += 1) {
+      rows.push(`${index},Person ${index},${index % 100}`);
+    }
+
+    const filePath = await writeFixture('large.csv', rows.join('\n'));
+    const session = await service.openCsv(filePath);
+    const firstWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 100 });
+    const laterWindow = await service.getRows({ sessionId: session.sessionId, offset: 4500, limit: 75 });
+
+    expect(session.rowCount).toBe(5000);
+    expect(firstWindow.rows).toHaveLength(100);
+    expect(laterWindow.rows).toHaveLength(75);
+    expect(laterWindow.rows[0]).toEqual({ id: 4500, name: 'Person 4500', score: 0 });
+  });
+
+  it('validates wide-file access without requiring all columns to be manually mapped', async () => {
+    const headers = Array.from({ length: 120 }, (_value, index) => `metric_${index}`);
+    const row = headers.map((_header, index) => String(index));
+    const filePath = await writeFixture('wide.csv', [headers.join(','), row.join(',')].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+
+    expect(session.columns).toHaveLength(120);
+    expect(window.rows).toHaveLength(1);
+    expect(window.rows[0].metric_0).toBe(0);
+    expect(window.rows[0].metric_119).toBe(119);
+  });
+
   it('returns a distinct error for unsupported files', async () => {
     const filePath = await writeFixture('people.json', '{"name":"Ada"}');
 

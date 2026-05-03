@@ -8,6 +8,7 @@
     "build": "pnpm run typecheck && vite build && tsc -p tsconfig.electron.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "fixtures:validation": "node scripts/generate-validation-fixtures.cjs",
     "start": "pnpm run build && node scripts/launch-electron.cjs ."
   },
   "keywords": [],

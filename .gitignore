@@ -3,3 +3,4 @@ dist-renderer/
 dist-electron/
 .vite/
 *.log
+fixtures/validation/

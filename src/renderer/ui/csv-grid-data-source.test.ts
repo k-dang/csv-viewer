@@ -28,8 +28,16 @@ describe('createCsvGridDataSource', () => {
     const successCallback = vi.fn();
     const failCallback = vi.fn();
     const onFilteredRowCount = vi.fn();
+    const onQueryState = vi.fn();
 
-    const datasource = createCsvGridDataSource(session, { getCsvRows }, onFilteredRowCount, 'Ada');
+    const datasource = createCsvGridDataSource(
+      session,
+      { getCsvRows },
+      onFilteredRowCount,
+      'Ada',
+      undefined,
+      onQueryState,
+    );
     datasource.getRows({
       startRow: 100,
       endRow: 125,
@@ -58,6 +66,8 @@ describe('createCsvGridDataSource', () => {
       search: 'Ada',
     });
     expect(onFilteredRowCount).toHaveBeenCalledWith(250);
+    expect(onQueryState).toHaveBeenNthCalledWith(1, 'querying');
+    expect(onQueryState).toHaveBeenNthCalledWith(2, 'ready');
     expect(failCallback).not.toHaveBeenCalled();
   });
 
@@ -65,8 +75,16 @@ describe('createCsvGridDataSource', () => {
     const getCsvRows = vi.fn().mockRejectedValue(new Error('query failed'));
     const successCallback = vi.fn();
     const failCallback = vi.fn();
+    const onQueryState = vi.fn();
 
-    const datasource = createCsvGridDataSource(session, { getCsvRows });
+    const datasource = createCsvGridDataSource(
+      session,
+      { getCsvRows },
+      undefined,
+      '',
+      undefined,
+      onQueryState,
+    );
     datasource.getRows({
       startRow: 0,
       endRow: 100,
@@ -81,6 +99,8 @@ describe('createCsvGridDataSource', () => {
     });
 
     expect(successCallback).not.toHaveBeenCalled();
+    expect(onQueryState).toHaveBeenNthCalledWith(1, 'querying');
+    expect(onQueryState).toHaveBeenNthCalledWith(2, 'failed');
   });
 
   it('ignores stale row-window responses when a newer request supersedes them', async () => {
