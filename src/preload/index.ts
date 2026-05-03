@@ -3,7 +3,8 @@ import { type CsvViewerApi, ipcChannels } from '../shared/ipc';
 
 const api: CsvViewerApi = {
   healthCheck: () => ipcRenderer.invoke(ipcChannels.healthCheck),
-  openCsv: () => ipcRenderer.invoke(ipcChannels.openCsv),
+  openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
+  reopenCsv: (options) => ipcRenderer.invoke(ipcChannels.reopenCsv, options),
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
 };
 

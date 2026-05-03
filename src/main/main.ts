@@ -3,6 +3,7 @@ import path from 'node:path';
 import { CsvDataService } from './csv-data-service';
 import {
   ipcChannels,
+  type CsvDialectOptions,
   type CsvRowWindow,
   type CsvRowWindowRequest,
   type HealthStatus,
@@ -50,7 +51,7 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle(ipcChannels.openCsv, async (): Promise<OpenCsvResult> => {
+  ipcMain.handle(ipcChannels.openCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
     const result = await dialog.showOpenDialog({
       title: 'Open CSV',
       properties: ['openFile'],
@@ -64,7 +65,12 @@ function registerIpcHandlers() {
       return { status: 'cancelled' };
     }
 
-    const session = await csvDataService.openCsv(result.filePaths[0]);
+    const session = await csvDataService.openCsv(result.filePaths[0], options);
+    return { status: 'opened', session };
+  });
+
+  ipcMain.handle(ipcChannels.reopenCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+    const session = await csvDataService.reopenActiveCsv(options);
     return { status: 'opened', session };
   });
 

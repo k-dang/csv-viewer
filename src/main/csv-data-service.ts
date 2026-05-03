@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   CsvCellValue,
   CsvColumn,
+  CsvDialectOptions,
   CsvFilterDescriptor,
   CsvRow,
   CsvRowWindow,
@@ -14,14 +15,18 @@ import type {
 } from '../shared/ipc';
 
 const viewName = 'active_csv';
+const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
 export class CsvDataService {
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
   private session: CsvSessionMetadata | null = null;
+  private openOperationId = 0;
 
-  async openCsv(filePath: string): Promise<CsvSessionMetadata> {
-    await this.closeActiveSession();
+  async openCsv(filePath: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
+    const operationId = this.openOperationId + 1;
+    this.openOperationId = operationId;
+    const dialect = validateDialectOptions(options);
 
     const fileStats = await stat(filePath).catch((error: unknown) => {
       throw normalizeOpenError(error);
@@ -31,13 +36,21 @@ export class CsvDataService {
       throw normalizeOpenError(new Error('Selected path is not a file.'));
     }
 
+    if (!supportedFileExtensions.has(path.extname(filePath).toLowerCase())) {
+      throw new CsvOpenError(
+        'unsupported-file',
+        'Unsupported file type. Choose a CSV, TSV, or text file.',
+      );
+    }
+
     const instance = await DuckDBInstance.create(':memory:');
     const connection = await instance.connect();
 
     try {
       await connection.run(
-        `CREATE VIEW ${quoteIdentifier(viewName)} AS SELECT * FROM read_csv_auto(${quoteLiteral(
+        `CREATE VIEW ${quoteIdentifier(viewName)} AS SELECT * FROM read_csv_auto(${buildReadCsvArguments(
           filePath,
+          dialect,
         )})`,
       );
 
@@ -53,8 +66,16 @@ export class CsvDataService {
         },
         columns,
         rowCount,
+        dialect,
       };
 
+      if (operationId !== this.openOperationId) {
+        connection.closeSync();
+        instance.closeSync();
+        throw new Error('CSV open was superseded by a newer request.');
+      }
+
+      await this.closeActiveSession();
       this.instance = instance;
       this.connection = connection;
       this.session = session;
@@ -69,6 +90,15 @@ export class CsvDataService {
 
   getActiveSession(): CsvSessionMetadata | null {
     return this.session;
+  }
+
+  async reopenActiveCsv(options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
+    if (!this.session) {
+      throw new Error('No active CSV session.');
+    }
+
+    const filePath = this.session.file.path;
+    return this.openCsv(filePath, options);
   }
 
   async getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow> {
@@ -121,6 +151,38 @@ export class CsvDataService {
       this.instance = null;
     }
   }
+}
+
+function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
+  const dialect: CsvDialectOptions = {};
+
+  if (options.delimiter !== undefined && options.delimiter !== '') {
+    if (options.delimiter.length !== 1) {
+      throw new Error('Delimiter must be exactly one character.');
+    }
+
+    dialect.delimiter = options.delimiter;
+  }
+
+  if (options.header !== undefined) {
+    dialect.header = options.header;
+  }
+
+  return dialect;
+}
+
+function buildReadCsvArguments(filePath: string, dialect: CsvDialectOptions): string {
+  const args = [quoteLiteral(filePath)];
+
+  if (dialect.delimiter) {
+    args.push(`delim = ${quoteLiteral(dialect.delimiter)}`);
+  }
+
+  if (dialect.header !== undefined) {
+    args.push(`header = ${dialect.header ? 'true' : 'false'}`);
+  }
+
+  return args.join(', ');
 }
 
 function validateWindowInteger(value: number, label: string): number {
@@ -370,10 +432,41 @@ async function readRowCount(connection: DuckDBConnection): Promise<number> {
   return Number(value);
 }
 
+class CsvOpenError extends Error {
+  constructor(
+    readonly code: 'missing-file' | 'permissions' | 'unsupported-file' | 'parse' | 'file-access',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CsvOpenError';
+  }
+}
+
 function normalizeOpenError(error: unknown): Error {
-  if (error instanceof Error) {
-    return new Error(`Unable to open CSV: ${error.message}`);
+  if (error instanceof CsvOpenError) {
+    return error;
   }
 
-  return new Error('Unable to open CSV.');
+  if (error instanceof Error) {
+    const nodeError = error as NodeJS.ErrnoException;
+
+    if (nodeError.code === 'ENOENT') {
+      return new CsvOpenError('missing-file', 'Unable to open CSV: the file no longer exists.');
+    }
+
+    if (nodeError.code === 'EACCES' || nodeError.code === 'EPERM') {
+      return new CsvOpenError(
+        'permissions',
+        'Unable to open CSV: permission was denied for this file.',
+      );
+    }
+
+    if (/read_csv|csv|delimiter|quote|header|sniff|parse/i.test(error.message)) {
+      return new CsvOpenError('parse', `Unable to parse CSV: ${error.message}`);
+    }
+
+    return new CsvOpenError('file-access', `Unable to open CSV: ${error.message}`);
+  }
+
+  return new CsvOpenError('file-access', 'Unable to open CSV.');
 }

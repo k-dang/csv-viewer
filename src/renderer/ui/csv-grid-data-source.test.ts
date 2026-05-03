@@ -14,6 +14,7 @@ const session: CsvSessionMetadata = {
     { name: 'age', type: 'BIGINT' },
   ],
   rowCount: 250,
+  dialect: {},
 };
 
 describe('createCsvGridDataSource', () => {

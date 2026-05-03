@@ -49,6 +49,68 @@ describe('CsvDataService', () => {
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'note']);
   });
 
+  it('opens files with a delimiter override', async () => {
+    const filePath = await writeFixture(
+      'pipe.csv',
+      ['name|age', 'Ada|37', 'Grace|41'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath, { delimiter: '|' });
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+
+    expect(session.dialect).toEqual({ delimiter: '|' });
+    expect(session.columns.map((column) => column.name)).toEqual(['name', 'age']);
+    expect(window.rows).toEqual([
+      { name: 'Ada', age: 37 },
+      { name: 'Grace', age: 41 },
+    ]);
+  });
+
+  it('opens files with a header override', async () => {
+    const filePath = await writeFixture('no-header.csv', ['Ada,37', 'Grace,41'].join('\n'));
+
+    const session = await service.openCsv(filePath, { header: false });
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+
+    expect(session.dialect).toEqual({ header: false });
+    expect(session.columns.map((column) => column.name)).toEqual(['column0', 'column1']);
+    expect(window.rows).toEqual([
+      { column0: 'Ada', column1: 37 },
+      { column0: 'Grace', column1: 41 },
+    ]);
+  });
+
+  it('reopens the active file with new dialect options', async () => {
+    const filePath = await writeFixture('reopen.txt', ['name|age', 'Ada|37'].join('\n'));
+
+    const auto = await service.openCsv(filePath);
+    const reopened = await service.reopenActiveCsv({ delimiter: '|' });
+
+    expect(reopened.sessionId).not.toBe(auto.sessionId);
+    expect(reopened.file.path).toBe(filePath);
+    expect(reopened.dialect).toEqual({ delimiter: '|' });
+    expect(reopened.columns.map((column) => column.name)).toEqual(['name', 'age']);
+  });
+
+  it('rejects invalid delimiter choices before opening', async () => {
+    const filePath = await writeFixture('invalid-delimiter.csv', ['name,age', 'Ada,37'].join('\n'));
+
+    await expect(service.openCsv(filePath, { delimiter: '||' })).rejects.toThrow(
+      'Delimiter must be exactly one character',
+    );
+  });
+
+  it('keeps the active session when a reopen option is invalid', async () => {
+    const filePath = await writeFixture('keep-active.csv', ['name,age', 'Ada,37'].join('\n'));
+    const session = await service.openCsv(filePath);
+
+    await expect(service.reopenActiveCsv({ delimiter: '||' })).rejects.toThrow(
+      'Delimiter must be exactly one character',
+    );
+
+    expect(service.getActiveSession()).toEqual(session);
+  });
+
   it('replaces the active session when opening another CSV', async () => {
     const firstPath = await writeFixture('first.csv', ['a', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['b,c', '2,3', '4,5'].join('\n'));
@@ -275,6 +337,12 @@ describe('CsvDataService', () => {
       'Unable to open CSV',
     );
     expect(service.getActiveSession()).toBeNull();
+  });
+
+  it('returns a distinct error for unsupported files', async () => {
+    const filePath = await writeFixture('people.json', '{"name":"Ada"}');
+
+    await expect(service.openCsv(filePath)).rejects.toThrow('Unsupported file type');
   });
 });
 

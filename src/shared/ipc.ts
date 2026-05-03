@@ -15,11 +15,17 @@ export type CsvFileMetadata = {
   sizeBytes: number;
 };
 
+export type CsvDialectOptions = {
+  delimiter?: string;
+  header?: boolean;
+};
+
 export type CsvSessionMetadata = {
   sessionId: string;
   file: CsvFileMetadata;
   columns: CsvColumn[];
   rowCount: number;
+  dialect: CsvDialectOptions;
 };
 
 export type CsvCellValue = string | number | boolean | null;
@@ -103,12 +109,14 @@ export type OpenCsvResult =
 
 export type CsvViewerApi = {
   healthCheck: () => Promise<HealthStatus>;
-  openCsv: () => Promise<OpenCsvResult>;
+  openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
 };
 
 export const ipcChannels = {
   healthCheck: 'app:health-check',
   openCsv: 'csv:open',
+  reopenCsv: 'csv:reopen',
   getCsvRows: 'csv:get-rows',
 } as const;
