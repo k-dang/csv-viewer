@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import type {
   CsvCellValue,
   CsvDialectOptions,
+  RecentCsvFile,
   CsvRow,
   CsvSessionMetadata,
   HealthStatus,
@@ -37,6 +38,7 @@ export function App() {
   const [delimiter, setDelimiter] = useState('');
   const [headerMode, setHeaderMode] = useState<'auto' | 'yes' | 'no'>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentCsvFile[]>([]);
   const openRequestRef = useRef(0);
 
   useEffect(() => {
@@ -62,6 +64,19 @@ export function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    void refreshRecentFiles();
+  }, []);
+
+  async function refreshRecentFiles() {
+    try {
+      const files = await window.csvViewer.getRecentFiles();
+      setRecentFiles(files);
+    } catch {
+      setRecentFiles([]);
+    }
+  }
 
   async function openCsv() {
     const options = buildDialectOptions(delimiter, headerMode);
@@ -89,6 +104,7 @@ export function App() {
       }
 
       setOpenState({ status: 'opened', session: result.session });
+      await refreshRecentFiles();
     } catch (error: unknown) {
       if (requestId !== openRequestRef.current) {
         return;
@@ -98,6 +114,43 @@ export function App() {
         status: 'failed',
         message: error instanceof Error ? error.message : 'Unable to open CSV.',
       });
+    }
+  }
+
+  async function openRecentCsv(filePath: string) {
+    const options = buildDialectOptions(delimiter, headerMode);
+
+    if (typeof options === 'string') {
+      setDialectError(options);
+      return;
+    }
+
+    setDialectError(null);
+    const requestId = openRequestRef.current + 1;
+    openRequestRef.current = requestId;
+    setOpenState({ status: 'opening' });
+
+    try {
+      const result = await window.csvViewer.openRecentCsv(filePath, options);
+
+      if (requestId !== openRequestRef.current) {
+        return;
+      }
+
+      if (result.status === 'opened') {
+        setOpenState({ status: 'opened', session: result.session });
+        await refreshRecentFiles();
+      }
+    } catch (error: unknown) {
+      if (requestId !== openRequestRef.current) {
+        return;
+      }
+
+      setOpenState({
+        status: 'failed',
+        message: error instanceof Error ? error.message : 'Unable to open recent CSV.',
+      });
+      await refreshRecentFiles();
     }
   }
 
@@ -123,6 +176,7 @@ export function App() {
 
       if (result.status === 'opened') {
         setOpenState({ status: 'opened', session: result.session });
+        await refreshRecentFiles();
       }
     } catch (error: unknown) {
       if (requestId !== openRequestRef.current) {
@@ -198,10 +252,50 @@ export function App() {
                 {dialectError}
               </p>
             ) : null}
+            {recentFiles.length > 0 ? (
+              <RecentFilesList
+                files={recentFiles}
+                disabled={isOpening}
+                onOpenRecent={openRecentCsv}
+              />
+            ) : null}
           </div>
         </section>
       )}
     </main>
+  );
+}
+
+function RecentFilesList({
+  files,
+  disabled,
+  onOpenRecent,
+}: {
+  files: RecentCsvFile[];
+  disabled: boolean;
+  onOpenRecent: (path: string) => void;
+}) {
+  return (
+    <div className="mt-1 grid gap-2 border-t pt-4">
+      <p className="text-xs font-bold uppercase text-muted-foreground">Recent files</p>
+      <div className="grid gap-2">
+        {files.slice(0, 5).map((file) => (
+          <button
+            key={file.path}
+            type="button"
+            className="grid min-w-0 gap-1 rounded-md border bg-background px-3 py-2 text-left shadow-xs transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            onClick={() => onOpenRecent(file.path)}
+            title={file.path}
+          >
+            <span className="truncate text-sm font-semibold text-foreground">{file.name}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {formatFileSize(file.sizeBytes)} - {file.path}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

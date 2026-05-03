@@ -28,6 +28,10 @@ export type CsvSessionMetadata = {
   dialect: CsvDialectOptions;
 };
 
+export type RecentCsvFile = CsvFileMetadata & {
+  lastOpenedAt: string;
+};
+
 export type CsvCellValue = string | number | boolean | null;
 
 export type CsvRow = Record<string, CsvCellValue>;
@@ -110,13 +114,17 @@ export type OpenCsvResult =
 export type CsvViewerApi = {
   healthCheck: () => Promise<HealthStatus>;
   openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  openRecentCsv: (path: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
 };
 
 export const ipcChannels = {
   healthCheck: 'app:health-check',
   openCsv: 'csv:open',
+  openRecentCsv: 'csv:open-recent',
   reopenCsv: 'csv:reopen',
+  getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
 } as const;

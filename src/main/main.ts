@@ -1,9 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, type BrowserWindowConstructorOptions } from 'electron';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { CsvDataService } from './csv-data-service';
 import {
   ipcChannels,
   type CsvDialectOptions,
+  type CsvFileMetadata,
+  type RecentCsvFile,
   type CsvRowWindow,
   type CsvRowWindowRequest,
   type HealthStatus,
@@ -12,6 +15,7 @@ import {
 
 const electronRoot = __dirname;
 const csvDataService = new CsvDataService();
+const maxRecentFiles = 8;
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -66,12 +70,27 @@ function registerIpcHandlers() {
     }
 
     const session = await csvDataService.openCsv(result.filePaths[0], options);
+    await recordRecentFile(session.file);
     return { status: 'opened', session };
   });
 
+  ipcMain.handle(
+    ipcChannels.openRecentCsv,
+    async (_event, filePath: string, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+      const session = await csvDataService.openCsv(filePath, options);
+      await recordRecentFile(session.file);
+      return { status: 'opened', session };
+    },
+  );
+
   ipcMain.handle(ipcChannels.reopenCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
     const session = await csvDataService.reopenActiveCsv(options);
+    await recordRecentFile(session.file);
     return { status: 'opened', session };
+  });
+
+  ipcMain.handle(ipcChannels.getRecentFiles, async (): Promise<RecentCsvFile[]> => {
+    return readRecentFiles();
   });
 
   ipcMain.handle(
@@ -80,6 +99,64 @@ function registerIpcHandlers() {
       return csvDataService.getRows(request);
     },
   );
+}
+
+function getRecentFilesPath(): string {
+  return path.join(app.getPath('userData'), 'recent-files.json');
+}
+
+async function readRecentFiles(): Promise<RecentCsvFile[]> {
+  try {
+    const raw = await fs.readFile(getRecentFilesPath(), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(isRecentCsvFile).slice(0, maxRecentFiles);
+  } catch (error: unknown) {
+    if (isFileSystemError(error) && error.code === 'ENOENT') {
+      return [];
+    }
+
+    console.warn('Unable to read recent CSV files.', error);
+    return [];
+  }
+}
+
+async function recordRecentFile(file: CsvFileMetadata): Promise<void> {
+  const recentFiles = await readRecentFiles();
+  const normalizedPath = path.resolve(file.path);
+  const nextRecentFiles = [
+    { ...file, path: normalizedPath, lastOpenedAt: new Date().toISOString() },
+    ...recentFiles.filter((recentFile) => path.resolve(recentFile.path) !== normalizedPath),
+  ].slice(0, maxRecentFiles);
+
+  try {
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    await fs.writeFile(getRecentFilesPath(), JSON.stringify(nextRecentFiles, null, 2), 'utf8');
+  } catch (error: unknown) {
+    console.warn('Unable to write recent CSV files.', error);
+  }
+}
+
+function isRecentCsvFile(value: unknown): value is RecentCsvFile {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<RecentCsvFile>;
+  return (
+    typeof candidate.path === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.sizeBytes === 'number' &&
+    typeof candidate.lastOpenedAt === 'string'
+  );
+}
+
+function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
 }
 
 app.whenReady().then(() => {
