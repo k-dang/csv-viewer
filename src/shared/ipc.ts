@@ -118,6 +118,8 @@ export type CsvViewerApi = {
   reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
+  onOpenCsvRequest: (callback: () => void) => () => void;
+  onReopenCsvRequest: (callback: () => void) => () => void;
 };
 
 export const ipcChannels = {
@@ -127,4 +129,6 @@ export const ipcChannels = {
   reopenCsv: 'csv:reopen',
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
+  menuOpenCsv: 'menu:open-csv',
+  menuReopenCsv: 'menu:reopen-csv',
 } as const;

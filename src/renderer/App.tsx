@@ -6,7 +6,7 @@ import { CsvMetadataView } from '@/components/csv-metadata-view';
 import { DialectControls } from '@/components/dialect-controls';
 import { EmptyCsvState } from '@/components/empty-csv-state';
 import { HealthBadge, type HealthState } from '@/components/health-badge';
-import type { CsvSessionMetadata, RecentCsvFile } from '../../shared/ipc';
+import type { CsvSessionMetadata, RecentCsvFile } from '../shared/ipc';
 
 type OpenState =
   | { status: 'idle' }
@@ -50,6 +50,24 @@ export function App() {
   useEffect(() => {
     void refreshRecentFiles();
   }, []);
+
+  useEffect(() => {
+    if (!window.csvViewer.onOpenCsvRequest || !window.csvViewer.onReopenCsvRequest) {
+      return;
+    }
+
+    const removeOpenListener = window.csvViewer.onOpenCsvRequest(() => {
+      void openCsv();
+    });
+    const removeReopenListener = window.csvViewer.onReopenCsvRequest(() => {
+      void reopenCsv();
+    });
+
+    return () => {
+      removeOpenListener();
+      removeReopenListener();
+    };
+  });
 
   async function refreshRecentFiles() {
     try {

@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, type BrowserWindowConstructorOptions } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  session,
+  type BrowserWindowConstructorOptions,
+  type MenuItemConstructorOptions,
+} from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { CsvDataService } from './csv-data-service';
@@ -18,6 +27,29 @@ const csvDataService = new CsvDataService();
 const maxRecentFiles = 8;
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+
+function registerContentSecurityPolicy() {
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self'${isDevelopment ? " 'unsafe-inline'" : ''}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    `connect-src 'self'${isDevelopment ? ' http://127.0.0.1:5173 ws://127.0.0.1:5173' : ''}`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp],
+      },
+    });
+  });
+}
 
 function createWindow() {
   const windowOptions: BrowserWindowConstructorOptions = {
@@ -44,6 +76,87 @@ function createWindow() {
   }
 
   void mainWindow.loadFile(path.join(electronRoot, '../../dist-renderer/index.html'));
+}
+
+function createApplicationMenu() {
+  const fileMenu: MenuItemConstructorOptions = {
+    label: 'File',
+    submenu: [
+      {
+        label: 'Open CSV...',
+        accelerator: 'CmdOrCtrl+O',
+        click: () => {
+          sendMenuRequest(ipcChannels.menuOpenCsv);
+        },
+      },
+      {
+        label: 'Reopen CSV',
+        accelerator: 'CmdOrCtrl+R',
+        click: () => {
+          sendMenuRequest(ipcChannels.menuReopenCsv);
+        },
+      },
+      { type: 'separator' },
+      process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
+    ],
+  };
+
+  const viewMenu: MenuItemConstructorOptions = {
+    label: 'View',
+    submenu: [
+      { role: 'reload' },
+      ...(isDevelopment ? ([{ role: 'toggleDevTools' }, { type: 'separator' }] as MenuItemConstructorOptions[]) : []),
+      { role: 'resetZoom' },
+      { role: 'zoomIn' },
+      { role: 'zoomOut' },
+      { type: 'separator' },
+      { role: 'togglefullscreen' },
+    ],
+  };
+
+  const windowMenu: MenuItemConstructorOptions = {
+    label: 'Window',
+    submenu: [{ role: 'minimize' }, { role: 'close' }],
+  };
+
+  const helpMenu: MenuItemConstructorOptions = {
+    label: 'Help',
+    submenu: [
+      {
+        label: 'About CSV Viewer',
+        click: () => {
+          const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          void dialog.showMessageBox(ownerWindow, {
+            type: 'info',
+            title: 'About CSV Viewer',
+            message: 'CSV Viewer',
+            detail: 'A desktop viewer for opening, inspecting, filtering, and sorting CSV-style files.',
+          });
+        },
+      },
+    ],
+  };
+
+  const template: MenuItemConstructorOptions[] =
+    process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit' }],
+          },
+          fileMenu,
+          viewMenu,
+          windowMenu,
+          helpMenu,
+        ]
+      : [fileMenu, viewMenu, windowMenu, helpMenu];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function sendMenuRequest(channel: typeof ipcChannels.menuOpenCsv | typeof ipcChannels.menuReopenCsv) {
+  const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  targetWindow?.webContents.send(channel);
 }
 
 function registerIpcHandlers() {
@@ -160,6 +273,8 @@ function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
 }
 
 app.whenReady().then(() => {
+  registerContentSecurityPolicy();
+  createApplicationMenu();
   registerIpcHandlers();
   createWindow();
 

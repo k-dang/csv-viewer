@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellApiModule,
+  CellStyleModule,
   ColumnApiModule,
   DateFilterModule,
   InfiniteRowModelModule,
@@ -19,12 +20,13 @@ import { Database, HardDrive, RotateCcw, Search, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
-import { createCsvGridDataSource } from '../ui/csv-grid-data-source';
+import { createCsvGridDataSource } from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
 
 ModuleRegistry.registerModules([
   CellApiModule,
+  CellStyleModule,
   ColumnApiModule,
   DateFilterModule,
   InfiniteRowModelModule,
@@ -57,6 +59,8 @@ const csvGridTheme = themeQuartz.withParams({
   wrapperBorderRadius: 8,
 });
 
+const filterDebounceMs = 1500;
+
 export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
@@ -74,6 +78,9 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         resizable: true,
         sortable: true,
         filter: getColumnFilter(column.type),
+        filterParams: {
+          debounceMs: filterDebounceMs,
+        },
         suppressMovable: false,
         cellClassRules: {
           'csv-cell-empty': (params) => params.value === '',
