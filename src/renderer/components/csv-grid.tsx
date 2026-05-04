@@ -10,8 +10,10 @@ import {
   NumberFilterModule,
   RenderApiModule,
   RowSelectionModule,
+  TextEditorModule,
   TextFilterModule,
   themeQuartz,
+  type CellValueChangedEvent,
   type ColDef,
   type GridApi,
   type GridReadyEvent,
@@ -20,6 +22,7 @@ import { Database, HardDrive, RotateCcw, Search, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
+import { csvInternalRowIdField } from '../../shared/ipc';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
@@ -33,6 +36,7 @@ ModuleRegistry.registerModules([
   NumberFilterModule,
   RenderApiModule,
   RowSelectionModule,
+  TextEditorModule,
   TextFilterModule,
 ]);
 
@@ -66,9 +70,11 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
+  const [editError, setEditError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
   const requestStateRef = useRef({ latestRequestId: 0 });
+  const revertingCellRef = useRef(false);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
       session.columns.map((column) => ({
@@ -158,6 +164,36 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     event.api.refreshInfiniteCache();
   }
 
+  async function onCellValueChanged(event: CellValueChangedEvent<CsvRow>) {
+    if (revertingCellRef.current) {
+      return;
+    }
+
+    const rowId = event.data?.[csvInternalRowIdField];
+    const column = event.colDef.field;
+
+    if (!rowId || !column) {
+      return;
+    }
+
+    try {
+      setEditError(null);
+      await window.csvViewer.editCsvCell({
+        sessionId: session.sessionId,
+        rowId,
+        column,
+        value: String(event.newValue ?? ''),
+      });
+      event.api.refreshInfiniteCache();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to edit cell.';
+      setEditError(message);
+      revertingCellRef.current = true;
+      event.node.setDataValue(column, event.oldValue as CsvCellValue);
+      revertingCellRef.current = false;
+    }
+  }
+
   const hasSearch = search.trim().length > 0;
   const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== session.rowCount;
 
@@ -183,6 +219,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
                 {formatFileSize(session.file.sizeBytes)}
               </span>
             </div>
+            {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
@@ -213,9 +250,11 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           theme={csvGridTheme}
           columnDefs={columnDefs}
           defaultColDef={{
-            editable: false,
+            editable: true,
+            cellEditor: 'agTextCellEditor',
             minWidth: 120,
           }}
+          getRowId={(params) => params.data[csvInternalRowIdField]}
           rowModelType="infinite"
           cacheBlockSize={100}
           maxBlocksInCache={6}
@@ -226,6 +265,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           suppressDragLeaveHidesColumns
           maintainColumnOrder
           onGridReady={onGridReady}
+          onCellValueChanged={onCellValueChanged}
           onSortChanged={refreshQuery}
           onFilterChanged={refreshQuery}
           overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"

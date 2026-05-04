@@ -13,6 +13,8 @@ import path from 'node:path';
 import { CsvDataService } from './csv-data-service';
 import {
   ipcChannels,
+  type CsvCellEditRequest,
+  type CsvCellEditResult,
   type CsvDialectOptions,
   type CsvFileMetadata,
   type RecentCsvFile,
@@ -210,6 +212,13 @@ function registerIpcHandlers() {
     ipcChannels.getCsvRows,
     async (_event, request: CsvRowWindowRequest): Promise<CsvRowWindow> => {
       return csvDataService.getRows(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.editCsvCell,
+    async (_event, request: CsvCellEditRequest): Promise<CsvCellEditResult> => {
+      return csvDataService.editCell(request);
     },
   );
 }

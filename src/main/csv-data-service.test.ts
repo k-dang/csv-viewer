@@ -361,6 +361,96 @@ describe('CsvDataService', () => {
     expect(parameterizedSearch.rows).toEqual([]);
   });
 
+  it('edits a cell by row identifier and returns edited values in later row windows', async () => {
+    const filePath = await writeFixture('edit.csv', ['name,code', 'Ada,001', 'Grace,002'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const firstWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const result = await service.editCell({
+      sessionId: session.sessionId,
+      rowId: firstWindow.rows[1][csvInternalRowIdField],
+      column: 'code',
+      value: '00042',
+    });
+    const editedWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+
+    expect(result).toEqual({
+      sessionId: session.sessionId,
+      rowId: '2',
+      column: 'code',
+      dirty: true,
+    });
+    expectVisibleRows(editedWindow.rows).toEqual([
+      { name: 'Ada', code: '001' },
+      { name: 'Grace', code: '00042' },
+    ]);
+  });
+
+  it('edits the source row selected from a sorted window', async () => {
+    const filePath = await writeFixture(
+      'edit-sorted.csv',
+      ['name,score', 'Ada,10', 'Grace,30', 'Linus,20'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const sorted = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 3,
+      sort: [{ column: 'score', direction: 'desc' }],
+    });
+
+    await service.editCell({
+      sessionId: session.sessionId,
+      rowId: sorted.rows[0][csvInternalRowIdField],
+      column: 'name',
+      value: 'Rear Admiral Grace',
+    });
+    const sourceOrder = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+
+    expect(rowIds(sorted.rows)).toEqual(['2', '3', '1']);
+    expect(sourceOrder.rows[1].name).toBe('Rear Admiral Grace');
+    expect(sourceOrder.rows[0].name).toBe('Ada');
+  });
+
+  it('refreshes filtered and searched row windows when an edit changes query membership', async () => {
+    const filePath = await writeFixture(
+      'edit-query.csv',
+      ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const searched = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'navy',
+    });
+
+    await service.editCell({
+      sessionId: session.sessionId,
+      rowId: searched.rows[0][csvInternalRowIdField],
+      column: 'team',
+      value: 'compiler',
+    });
+    const filtered = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+    const searchedAgain = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'navy',
+    });
+
+    expect(rowIds(filtered.rows)).toEqual(['1', '2']);
+    expect(searchedAgain.filteredRowCount).toBe(0);
+    expect(searchedAgain.rows).toEqual([]);
+  });
+
   it('rejects stale sessions and oversized row windows', async () => {
     const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));

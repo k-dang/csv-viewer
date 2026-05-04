@@ -111,6 +111,20 @@ export type CsvRowWindow = {
   filteredRowCount: number;
 };
 
+export type CsvCellEditRequest = {
+  sessionId: string;
+  rowId: string;
+  column: string;
+  value: string;
+};
+
+export type CsvCellEditResult = {
+  sessionId: string;
+  rowId: string;
+  column: string;
+  dirty: boolean;
+};
+
 export type OpenCsvResult =
   | { status: 'opened'; session: CsvSessionMetadata }
   | { status: 'cancelled' };
@@ -122,6 +136,7 @@ export type CsvViewerApi = {
   reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
+  editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
   onOpenCsvRequest: (callback: () => void) => () => void;
   onReopenCsvRequest: (callback: () => void) => () => void;
 };
@@ -133,6 +148,7 @@ export const ipcChannels = {
   reopenCsv: 'csv:reopen',
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
+  editCsvCell: 'csv:edit-cell',
   menuOpenCsv: 'menu:open-csv',
   menuReopenCsv: 'menu:reopen-csv',
 } as const;

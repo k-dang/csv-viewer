@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  CsvCellEditRequest,
+  CsvCellEditResult,
   CsvCellValue,
   CsvColumn,
   CsvDialectOptions,
@@ -23,6 +25,7 @@ export class CsvDataService {
   private connection: DuckDBConnection | null = null;
   private session: CsvSessionMetadata | null = null;
   private openOperationId = 0;
+  private dirty = false;
 
   async openCsv(filePath: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
     const operationId = this.openOperationId + 1;
@@ -82,6 +85,7 @@ export class CsvDataService {
       this.instance = instance;
       this.connection = connection;
       this.session = session;
+      this.dirty = false;
 
       return session;
     } catch (error) {
@@ -141,8 +145,53 @@ export class CsvDataService {
     };
   }
 
+  async editCell(request: CsvCellEditRequest): Promise<CsvCellEditResult> {
+    this.assertActiveSession(request.sessionId);
+    const connection = this.connection;
+    const session = this.session;
+
+    if (!connection || !session) {
+      throw new Error('No active CSV session.');
+    }
+
+    const knownColumns = new Set(session.columns.map((column) => column.name));
+    assertKnownColumn(request.column, knownColumns);
+
+    if (request.rowId.length === 0) {
+      throw new Error('CSV row identifier is required.');
+    }
+
+    const result = await connection.runAndReadAll(
+      `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} = ?`,
+      [request.rowId],
+    );
+    const [row] = result.getRowObjectsJS();
+
+    if (normalizeCount(row.row_count) !== 1) {
+      throw new Error('CSV row no longer exists.');
+    }
+
+    await connection.run(
+      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(request.column)} = ? WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} = ?`,
+      [request.value, request.rowId],
+    );
+    this.dirty = true;
+
+    return {
+      sessionId: session.sessionId,
+      rowId: request.rowId,
+      column: request.column,
+      dirty: this.dirty,
+    };
+  }
+
   async closeActiveSession(): Promise<void> {
     this.session = null;
+    this.dirty = false;
 
     if (this.connection) {
       this.connection.closeSync();
@@ -152,6 +201,16 @@ export class CsvDataService {
     if (this.instance) {
       this.instance.closeSync();
       this.instance = null;
+    }
+  }
+
+  private assertActiveSession(sessionId: string): void {
+    if (!this.session || !this.connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    if (sessionId !== this.session.sessionId) {
+      throw new Error('CSV session is no longer active.');
     }
   }
 }
