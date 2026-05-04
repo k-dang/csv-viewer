@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { csvInternalRowIdField, type CsvRow } from '../shared/ipc';
 import { CsvDataService } from './csv-data-service';
 
 let tempDir: string;
@@ -31,7 +32,7 @@ describe('CsvDataService', () => {
     expect(session.file.sizeBytes).toBeGreaterThan(0);
     expect(session.rowCount).toBe(2);
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'age', 'joined']);
-    expect(session.columns.map((column) => column.type)).toEqual(['VARCHAR', 'BIGINT', 'DATE']);
+    expect(session.columns.map((column) => column.type)).toEqual(['VARCHAR', 'VARCHAR', 'VARCHAR']);
     expect(service.getActiveSession()?.sessionId).toBe(session.sessionId);
   });
 
@@ -60,10 +61,11 @@ describe('CsvDataService', () => {
 
     expect(session.dialect).toEqual({ delimiter: '|' });
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'age']);
-    expect(window.rows).toEqual([
-      { name: 'Ada', age: 37 },
-      { name: 'Grace', age: 41 },
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada', age: '37' },
+      { name: 'Grace', age: '41' },
     ]);
+    expect(rowIds(window.rows)).toEqual(['1', '2']);
   });
 
   it('opens files with a header override', async () => {
@@ -74,10 +76,11 @@ describe('CsvDataService', () => {
 
     expect(session.dialect).toEqual({ header: false });
     expect(session.columns.map((column) => column.name)).toEqual(['column0', 'column1']);
-    expect(window.rows).toEqual([
-      { column0: 'Ada', column1: 37 },
-      { column0: 'Grace', column1: 41 },
+    expectVisibleRows(window.rows).toEqual([
+      { column0: 'Ada', column1: '37' },
+      { column0: 'Grace', column1: '41' },
     ]);
+    expect(rowIds(window.rows)).toEqual(['1', '2']);
   });
 
   it('reopens the active file with new dialect options', async () => {
@@ -138,23 +141,24 @@ describe('CsvDataService', () => {
       sessionId: session.sessionId,
       offset: 1,
       filteredRowCount: 3,
-      rows: [{ name: 'Grace', age: 41, note: 'second' }],
+      rows: [{ [csvInternalRowIdField]: '2', name: 'Grace', age: '41', note: 'second' }],
     });
   });
 
-  it('preserves empty strings and null values distinctly in row windows', async () => {
+  it('preserves text-like values and null values distinctly in row windows', async () => {
     const filePath = await writeFixture(
       'missing.csv',
-      ['name,note,score', 'Ada,,10', 'Grace,NULL,'].join('\n'),
+      ['name,note,score,identifier', 'Ada,,10,00123', 'Grace,NULL,,00042'].join('\n'),
     );
 
     const session = await service.openCsv(filePath);
     const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
 
-    expect(window.rows).toEqual([
-      { name: 'Ada', note: null, score: 10 },
-      { name: 'Grace', note: 'NULL', score: null },
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada', note: null, score: '10', identifier: '00123' },
+      { name: 'Grace', note: 'NULL', score: null, identifier: '00042' },
     ]);
+    expect(rowIds(window.rows)).toEqual(['1', '2']);
   });
 
   it('sorts rows by a structured column descriptor and clears sort by omitting descriptors', async () => {
@@ -174,6 +178,46 @@ describe('CsvDataService', () => {
 
     expect(sorted.rows.map((row) => row.name)).toEqual(['Linus', 'Grace', 'Ada']);
     expect(originalOrder.rows.map((row) => row.name)).toEqual(['Ada', 'Grace', 'Linus']);
+  });
+
+  it('keeps hidden row identifiers stable across sorting, filtering, search, and pagination', async () => {
+    const filePath = await writeFixture(
+      'stable-row-ids.csv',
+      [
+        'name,age,team',
+        'Ada,37,compiler',
+        'Grace,41,navy',
+        'Linus,54,kernel',
+        'Margaret,87,compiler',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const firstPage = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const sorted = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 4,
+      sort: [{ column: 'name', direction: 'desc' }],
+    });
+    const filtered = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 4,
+      filters: [{ column: 'team', kind: 'text', operator: 'contains', value: 'compiler' }],
+    });
+    const searched = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 4,
+      search: 'Grace',
+    });
+
+    expect(session.columns.map((column) => column.name)).not.toContain(csvInternalRowIdField);
+    expect(rowIds(firstPage.rows)).toEqual(['1', '2']);
+    expect(rowIds(sorted.rows)).toEqual(['4', '3', '2', '1']);
+    expect(rowIds(filtered.rows)).toEqual(['1', '4']);
+    expect(rowIds(searched.rows)).toEqual(['2']);
   });
 
   it('applies text, numeric, and combined filters with filtered row counts', async () => {
@@ -200,7 +244,7 @@ describe('CsvDataService', () => {
     });
 
     expect(window.filteredRowCount).toBe(1);
-    expect(window.rows).toEqual([{ name: 'Margaret', age: 87, team: 'compiler' }]);
+    expectVisibleRows(window.rows).toEqual([{ name: 'Margaret', age: '87', team: 'compiler' }]);
   });
 
   it('filters inferred date columns', async () => {
@@ -354,7 +398,12 @@ describe('CsvDataService', () => {
     expect(session.rowCount).toBe(5000);
     expect(firstWindow.rows).toHaveLength(100);
     expect(laterWindow.rows).toHaveLength(75);
-    expect(laterWindow.rows[0]).toEqual({ id: 4500, name: 'Person 4500', score: 0 });
+    expect(laterWindow.rows[0]).toEqual({
+      [csvInternalRowIdField]: '4501',
+      id: '4500',
+      name: 'Person 4500',
+      score: '0',
+    });
   });
 
   it('validates wide-file access without requiring all columns to be manually mapped', async () => {
@@ -367,8 +416,8 @@ describe('CsvDataService', () => {
 
     expect(session.columns).toHaveLength(120);
     expect(window.rows).toHaveLength(1);
-    expect(window.rows[0].metric_0).toBe(0);
-    expect(window.rows[0].metric_119).toBe(119);
+    expect(window.rows[0].metric_0).toBe('0');
+    expect(window.rows[0].metric_119).toBe('119');
   });
 
   it('returns a distinct error for unsupported files', async () => {
@@ -382,4 +431,12 @@ async function writeFixture(fileName: string, content: string): Promise<string> 
   const filePath = path.join(tempDir, fileName);
   await writeFile(filePath, content);
   return filePath;
+}
+
+function rowIds(rows: CsvRow[]): string[] {
+  return rows.map((row) => row[csvInternalRowIdField]);
+}
+
+function expectVisibleRows(rows: CsvRow[]) {
+  return expect(rows.map(({ [csvInternalRowIdField]: _rowId, ...visibleRow }) => visibleRow));
 }

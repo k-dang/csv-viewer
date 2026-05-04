@@ -20,6 +20,8 @@ export type CsvDialectOptions = {
   header?: boolean;
 };
 
+export const csvInternalRowIdField = '__csvViewerRowId' as const;
+
 export type CsvSessionMetadata = {
   sessionId: string;
   file: CsvFileMetadata;
@@ -32,9 +34,11 @@ export type RecentCsvFile = CsvFileMetadata & {
   lastOpenedAt: string;
 };
 
-export type CsvCellValue = string | number | boolean | null;
+export type CsvCellValue = string | null;
 
-export type CsvRow = Record<string, CsvCellValue>;
+export type CsvRow = Record<string, CsvCellValue> & {
+  [csvInternalRowIdField]: string;
+};
 
 export type CsvSortDescriptor = {
   column: string;

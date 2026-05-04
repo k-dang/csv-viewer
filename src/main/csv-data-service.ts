@@ -13,8 +13,9 @@ import type {
   CsvSortDescriptor,
   CsvSessionMetadata,
 } from '../shared/ipc';
+import { csvInternalRowIdField } from '../shared/ipc';
 
-const viewName = 'active_csv';
+const tableName = 'active_csv';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
 export class CsvDataService {
@@ -48,7 +49,9 @@ export class CsvDataService {
 
     try {
       await connection.run(
-        `CREATE VIEW ${quoteIdentifier(viewName)} AS SELECT * FROM read_csv_auto(${buildReadCsvArguments(
+        `CREATE TABLE ${quoteIdentifier(tableName)} AS SELECT CAST(row_number() OVER () AS VARCHAR) AS ${quoteIdentifier(
+          csvInternalRowIdField,
+        )}, * FROM read_csv_auto(${buildReadCsvArguments(
           filePath,
           dialect,
         )})`,
@@ -172,7 +175,7 @@ function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
 }
 
 function buildReadCsvArguments(filePath: string, dialect: CsvDialectOptions): string {
-  const args = [quoteLiteral(filePath)];
+  const args = [quoteLiteral(filePath), 'all_varchar = true'];
 
   if (dialect.delimiter) {
     args.push(`delim = ${quoteLiteral(dialect.delimiter)}`);
@@ -194,9 +197,17 @@ function validateWindowInteger(value: number, label: string): number {
 }
 
 function normalizeRow(row: Record<string, unknown>): CsvRow {
-  return Object.fromEntries(
+  const normalizedRow = Object.fromEntries(
     Object.entries(row).map(([key, value]) => [key, normalizeCellValue(value)]),
   );
+
+  const rowId = normalizedRow[csvInternalRowIdField];
+
+  if (typeof rowId !== 'string' || rowId.length === 0) {
+    throw new Error('CSV row is missing its internal row identifier.');
+  }
+
+  return normalizedRow as CsvRow;
 }
 
 function normalizeCellValue(value: unknown): CsvCellValue {
@@ -204,15 +215,11 @@ function normalizeCellValue(value: unknown): CsvCellValue {
     return null;
   }
 
-  if (typeof value === 'bigint') {
-    return Number(value);
-  }
-
   if (value instanceof Date) {
     return value.toISOString();
   }
 
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+  if (typeof value === 'string') {
     return value;
   }
 
@@ -252,11 +259,15 @@ function buildRowsQuery({
   const whereSql = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
   const orderSql = orderClauses.length > 0 ? ` ORDER BY ${orderClauses.join(', ')}` : '';
-  const fromSql = ` FROM ${quoteIdentifier(viewName)}${whereSql}`;
+  const fromSql = ` FROM ${quoteIdentifier(tableName)}${whereSql}`;
+  const rowProjectionSql = [
+    quoteIdentifier(csvInternalRowIdField),
+    ...columns.map((column) => quoteIdentifier(column.name)),
+  ].join(', ');
 
   return {
     countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
-    rowsSql: `SELECT *${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
+    rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
     values,
   };
 }
@@ -353,28 +364,32 @@ function buildScalarFilterClause(
   valueTo: string | number | undefined,
   values: Array<string | number | boolean | null>,
 ): string {
+  const textSql = castForText(columnSql);
+  const textValue = value === undefined ? null : String(value);
+  const textValueTo = valueTo === undefined ? null : String(valueTo);
+
   switch (operator) {
     case 'equals':
-      values.push(value ?? null);
-      return `${columnSql} = ?`;
+      values.push(textValue);
+      return `${textSql} = ?`;
     case 'notEqual':
-      values.push(value ?? null);
-      return `(${columnSql} IS NULL OR ${columnSql} <> ?)`;
+      values.push(textValue);
+      return `(${columnSql} IS NULL OR ${textSql} <> ?)`;
     case 'greaterThan':
-      values.push(value ?? null);
-      return `${columnSql} > ?`;
+      values.push(textValue);
+      return `${textSql} > ?`;
     case 'greaterThanOrEqual':
-      values.push(value ?? null);
-      return `${columnSql} >= ?`;
+      values.push(textValue);
+      return `${textSql} >= ?`;
     case 'lessThan':
-      values.push(value ?? null);
-      return `${columnSql} < ?`;
+      values.push(textValue);
+      return `${textSql} < ?`;
     case 'lessThanOrEqual':
-      values.push(value ?? null);
-      return `${columnSql} <= ?`;
+      values.push(textValue);
+      return `${textSql} <= ?`;
     case 'inRange':
-      values.push(value ?? null, valueTo ?? null);
-      return `${columnSql} BETWEEN ? AND ?`;
+      values.push(textValue, textValueTo);
+      return `${textSql} BETWEEN ? AND ?`;
     default:
       throw new Error(`Unsupported scalar filter operator: ${operator}`);
   }
@@ -411,16 +426,19 @@ function quoteLiteral(value: string): string {
 }
 
 async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
-  const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(viewName)}`);
-  return result.getRowObjectsJS().map((row) => ({
-    name: String(row.column_name),
-    type: String(row.column_type),
-  }));
+  const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`);
+  return result
+    .getRowObjectsJS()
+    .filter((row) => String(row.column_name) !== csvInternalRowIdField)
+    .map((row) => ({
+      name: String(row.column_name),
+      type: String(row.column_type),
+    }));
 }
 
 async function readRowCount(connection: DuckDBConnection): Promise<number> {
   const result = await connection.runAndReadAll(
-    `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(viewName)}`,
+    `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)}`,
   );
   const [row] = result.getRowObjectsJS();
   const value = row.row_count;
