@@ -8,6 +8,8 @@ import type {
   CsvCellValue,
   CsvColumn,
   CsvDialectOptions,
+  CsvEditState,
+  CsvEditStateRequest,
   CsvFilterDescriptor,
   CsvRow,
   CsvRowWindow,
@@ -20,12 +22,21 @@ import { csvInternalRowIdField } from '../shared/ipc';
 const tableName = 'active_csv';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
+type CsvEditCommand = {
+  type: 'cell-edit';
+  rowId: string;
+  column: string;
+  oldValue: CsvCellValue;
+  newValue: CsvCellValue;
+};
+
 export class CsvDataService {
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
   private session: CsvSessionMetadata | null = null;
   private openOperationId = 0;
-  private dirty = false;
+  private undoStack: CsvEditCommand[] = [];
+  private redoStack: CsvEditCommand[] = [];
 
   async openCsv(filePath: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
     const operationId = this.openOperationId + 1;
@@ -85,7 +96,7 @@ export class CsvDataService {
       this.instance = instance;
       this.connection = connection;
       this.session = session;
-      this.dirty = false;
+      this.clearEditJournal();
 
       return session;
     } catch (error) {
@@ -106,6 +117,11 @@ export class CsvDataService {
 
     const filePath = this.session.file.path;
     return this.openCsv(filePath, options);
+  }
+
+  getEditState(request: CsvEditStateRequest): CsvEditState {
+    this.assertActiveSession(request.sessionId);
+    return this.buildEditState();
   }
 
   async getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow> {
@@ -161,37 +177,54 @@ export class CsvDataService {
       throw new Error('CSV row identifier is required.');
     }
 
-    const result = await connection.runAndReadAll(
-      `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} = ?`,
-      [request.rowId],
-    );
-    const [row] = result.getRowObjectsJS();
+    const existingValue = await this.readCellValue(request.rowId, request.column);
 
-    if (normalizeCount(row.row_count) !== 1) {
-      throw new Error('CSV row no longer exists.');
-    }
-
-    await connection.run(
-      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(request.column)} = ? WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} = ?`,
-      [request.value, request.rowId],
-    );
-    this.dirty = true;
-
-    return {
-      sessionId: session.sessionId,
+    await this.applyCellValue(request.rowId, request.column, request.value);
+    this.undoStack.push({
+      type: 'cell-edit',
       rowId: request.rowId,
       column: request.column,
-      dirty: this.dirty,
+      oldValue: existingValue,
+      newValue: request.value,
+    });
+    this.redoStack = [];
+
+    return {
+      rowId: request.rowId,
+      column: request.column,
+      ...this.buildEditState(),
     };
+  }
+
+  async undoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
+    this.assertActiveSession(request.sessionId);
+    const command = this.undoStack.pop();
+
+    if (!command) {
+      throw new Error('No CSV edit is available to undo.');
+    }
+
+    await this.revertCommand(command);
+    this.redoStack.push(command);
+    return this.buildEditState();
+  }
+
+  async redoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
+    this.assertActiveSession(request.sessionId);
+    const command = this.redoStack.pop();
+
+    if (!command) {
+      throw new Error('No CSV edit is available to redo.');
+    }
+
+    await this.applyCommand(command);
+    this.undoStack.push(command);
+    return this.buildEditState();
   }
 
   async closeActiveSession(): Promise<void> {
     this.session = null;
-    this.dirty = false;
+    this.clearEditJournal();
 
     if (this.connection) {
       this.connection.closeSync();
@@ -202,6 +235,73 @@ export class CsvDataService {
       this.instance.closeSync();
       this.instance = null;
     }
+  }
+
+  private async readCellValue(rowId: string, column: string): Promise<CsvCellValue> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    const result = await connection.runAndReadAll(
+      `SELECT ${quoteIdentifier(column)} AS cell_value FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} = ?`,
+      [rowId],
+    );
+    const [row] = result.getRowObjectsJS();
+
+    if (!row) {
+      throw new Error('CSV row no longer exists.');
+    }
+
+    return normalizeCellValue(row.cell_value);
+  }
+
+  private async applyCellValue(rowId: string, column: string, value: CsvCellValue): Promise<void> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    await connection.run(
+      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(column)} = ? WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} = ?`,
+      [value, rowId],
+    );
+  }
+
+  private async applyCommand(command: CsvEditCommand): Promise<void> {
+    if (command.type === 'cell-edit') {
+      await this.applyCellValue(command.rowId, command.column, command.newValue);
+    }
+  }
+
+  private async revertCommand(command: CsvEditCommand): Promise<void> {
+    if (command.type === 'cell-edit') {
+      await this.applyCellValue(command.rowId, command.column, command.oldValue);
+    }
+  }
+
+  private buildEditState(): CsvEditState {
+    if (!this.session) {
+      throw new Error('No active CSV session.');
+    }
+
+    return {
+      sessionId: this.session.sessionId,
+      dirty: this.undoStack.length > 0,
+      canUndo: this.undoStack.length > 0,
+      canRedo: this.redoStack.length > 0,
+    };
+  }
+
+  private clearEditJournal(): void {
+    this.undoStack = [];
+    this.redoStack = [];
   }
 
   private assertActiveSession(sessionId: string): void {

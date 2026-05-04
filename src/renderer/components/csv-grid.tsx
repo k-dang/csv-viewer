@@ -18,10 +18,10 @@ import {
   type GridApi,
   type GridReadyEvent,
 } from 'ag-grid-community';
-import { Database, HardDrive, RotateCcw, Search, Table2 } from 'lucide-react';
+import { Database, HardDrive, Redo2, RotateCcw, Search, Table2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { CsvCellValue, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
+import type { CsvCellValue, CsvEditState, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
 import { csvInternalRowIdField } from '../../shared/ipc';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
@@ -70,6 +70,12 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
+  const [editState, setEditState] = useState<CsvEditState>({
+    sessionId: session.sessionId,
+    dirty: false,
+    canUndo: false,
+    canRedo: false,
+  });
   const [editError, setEditError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
@@ -100,6 +106,17 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   useEffect(() => {
     searchRef.current = search;
   }, [search]);
+
+  useEffect(() => {
+    setEditState({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: false,
+    });
+    setEditError(null);
+    void refreshEditState();
+  }, [session.sessionId]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
@@ -178,12 +195,13 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
 
     try {
       setEditError(null);
-      await window.csvViewer.editCsvCell({
+      const result = await window.csvViewer.editCsvCell({
         sessionId: session.sessionId,
         rowId,
         column,
         value: String(event.newValue ?? ''),
       });
+      setEditState(result);
       event.api.refreshInfiniteCache();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to edit cell.';
@@ -191,6 +209,32 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       revertingCellRef.current = true;
       event.node.setDataValue(column, event.oldValue as CsvCellValue);
       revertingCellRef.current = false;
+    }
+  }
+
+  async function refreshEditState() {
+    try {
+      setEditState(await window.csvViewer.getCsvEditState({ sessionId: session.sessionId }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to read edit state.';
+      setEditError(message);
+    }
+  }
+
+  async function runHistoryAction(action: 'undo' | 'redo') {
+    const api = gridApiRef.current;
+
+    try {
+      setEditError(null);
+      const nextEditState =
+        action === 'undo'
+          ? await window.csvViewer.undoCsvEdit({ sessionId: session.sessionId })
+          : await window.csvViewer.redoCsvEdit({ sessionId: session.sessionId });
+      setEditState(nextEditState);
+      api?.refreshInfiniteCache();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Unable to ${action} edit.`;
+      setEditError(message);
     }
   }
 
@@ -218,12 +262,41 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
                 <HardDrive className="size-3.5" aria-hidden="true" />
                 {formatFileSize(session.file.sizeBytes)}
               </span>
+              {editState.dirty ? (
+                <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+                  Unsaved changes
+                </span>
+              ) : null}
             </div>
             {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
           <QueryStatusBadge state={queryState} />
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void runHistoryAction('undo')}
+              disabled={!editState.canUndo}
+              title="Undo edit"
+              aria-label="Undo edit"
+            >
+              <Undo2 />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void runHistoryAction('redo')}
+              disabled={!editState.canRedo}
+              title="Redo edit"
+              aria-label="Redo edit"
+            >
+              <Redo2 />
+            </Button>
+          </div>
           <label className="sr-only" htmlFor="global-search">
             Global search
           </label>

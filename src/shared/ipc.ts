@@ -123,6 +123,19 @@ export type CsvCellEditResult = {
   rowId: string;
   column: string;
   dirty: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
+export type CsvEditStateRequest = {
+  sessionId: string;
+};
+
+export type CsvEditState = {
+  sessionId: string;
+  dirty: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
 };
 
 export type OpenCsvResult =
@@ -137,6 +150,9 @@ export type CsvViewerApi = {
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
   editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
+  getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
+  undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
+  redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   onOpenCsvRequest: (callback: () => void) => () => void;
   onReopenCsvRequest: (callback: () => void) => () => void;
 };
@@ -149,6 +165,9 @@ export const ipcChannels = {
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
   editCsvCell: 'csv:edit-cell',
+  getCsvEditState: 'csv:get-edit-state',
+  undoCsvEdit: 'csv:undo-edit',
+  redoCsvEdit: 'csv:redo-edit',
   menuOpenCsv: 'menu:open-csv',
   menuReopenCsv: 'menu:reopen-csv',
 } as const;

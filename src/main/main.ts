@@ -16,6 +16,8 @@ import {
   type CsvCellEditRequest,
   type CsvCellEditResult,
   type CsvDialectOptions,
+  type CsvEditState,
+  type CsvEditStateRequest,
   type CsvFileMetadata,
   type RecentCsvFile,
   type CsvRowWindow,
@@ -219,6 +221,27 @@ function registerIpcHandlers() {
     ipcChannels.editCsvCell,
     async (_event, request: CsvCellEditRequest): Promise<CsvCellEditResult> => {
       return csvDataService.editCell(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.getCsvEditState,
+    (_event, request: CsvEditStateRequest): CsvEditState => {
+      return csvDataService.getEditState(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.undoCsvEdit,
+    async (_event, request: CsvEditStateRequest): Promise<CsvEditState> => {
+      return csvDataService.undoEdit(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.redoCsvEdit,
+    async (_event, request: CsvEditStateRequest): Promise<CsvEditState> => {
+      return csvDataService.redoEdit(request);
     },
   );
 }

@@ -379,6 +379,8 @@ describe('CsvDataService', () => {
       rowId: '2',
       column: 'code',
       dirty: true,
+      canUndo: true,
+      canRedo: false,
     });
     expectVisibleRows(editedWindow.rows).toEqual([
       { name: 'Ada', code: '001' },
@@ -449,6 +451,71 @@ describe('CsvDataService', () => {
     expect(rowIds(filtered.rows)).toEqual(['1', '2']);
     expect(searchedAgain.filteredRowCount).toBe(0);
     expect(searchedAgain.rows).toEqual([]);
+  });
+
+  it('undoes and redoes the most recent cell edit while updating dirty state', async () => {
+    const filePath = await writeFixture('edit-history.csv', ['name,code', 'Ada,001'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const firstWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+    const rowId = firstWindow.rows[0][csvInternalRowIdField];
+
+    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: false,
+    });
+
+    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '007' });
+    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+
+    const undone = await service.undoEdit({ sessionId: session.sessionId });
+    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+
+    expect(undone).toEqual({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: true,
+    });
+    expect(afterUndo.rows[0].code).toBe('001');
+
+    const redone = await service.redoEdit({ sessionId: session.sessionId });
+    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+
+    expect(redone).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    expect(afterRedo.rows[0].code).toBe('007');
+  });
+
+  it('clears redo history when a new cell edit is made after undo', async () => {
+    const filePath = await writeFixture('edit-redo-clear.csv', ['name,code', 'Ada,001'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const firstWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+    const rowId = firstWindow.rows[0][csvInternalRowIdField];
+
+    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '002' });
+    await service.undoEdit({ sessionId: session.sessionId });
+    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '003' });
+
+    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    await expect(service.redoEdit({ sessionId: session.sessionId })).rejects.toThrow('No CSV edit is available to redo');
   });
 
   it('rejects stale sessions and oversized row windows', async () => {
