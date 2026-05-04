@@ -518,6 +518,150 @@ describe('CsvDataService', () => {
     await expect(service.redoEdit({ sessionId: session.sessionId })).rejects.toThrow('No CSV edit is available to redo');
   });
 
+  it('deletes one selected source row and excludes it from row windows and counts', async () => {
+    const filePath = await writeFixture(
+      'delete-one.csv',
+      ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const firstWindow = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const result = await service.deleteRows({
+      sessionId: session.sessionId,
+      rowIds: [firstWindow.rows[1][csvInternalRowIdField]],
+    });
+    const afterDelete = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+
+    expect(result).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    expect(afterDelete.filteredRowCount).toBe(2);
+    expect(rowIds(afterDelete.rows)).toEqual(['1', '3']);
+    expectVisibleRows(afterDelete.rows).toEqual([
+      { name: 'Ada', team: 'compiler' },
+      { name: 'Linus', team: 'kernel' },
+    ]);
+  });
+
+  it('deletes multiple selected source rows from a sorted window', async () => {
+    const filePath = await writeFixture(
+      'delete-many-sorted.csv',
+      ['name,score', 'Ada,10', 'Grace,30', 'Linus,20', 'Margaret,40'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const sorted = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 4,
+      sort: [{ column: 'score', direction: 'desc' }],
+    });
+
+    await service.deleteRows({
+      sessionId: session.sessionId,
+      rowIds: [
+        sorted.rows[0][csvInternalRowIdField],
+        sorted.rows[2][csvInternalRowIdField],
+      ],
+    });
+    const sourceOrder = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 4 });
+
+    expect(rowIds(sorted.rows)).toEqual(['4', '2', '3', '1']);
+    expect(sourceOrder.filteredRowCount).toBe(2);
+    expect(rowIds(sourceOrder.rows)).toEqual(['1', '2']);
+    expect(sourceOrder.rows.map((row) => row.name)).toEqual(['Ada', 'Grace']);
+  });
+
+  it('updates filtered and searched row windows after deleting selected rows', async () => {
+    const filePath = await writeFixture(
+      'delete-query.csv',
+      [
+        'name,team',
+        'Ada,compiler',
+        'Grace,navy',
+        'Linus,kernel',
+        'Margaret,compiler',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const filtered = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+
+    await service.deleteRows({
+      sessionId: session.sessionId,
+      rowIds: [filtered.rows[0][csvInternalRowIdField]],
+    });
+    const filteredAgain = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+    const searched = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      search: 'Ada',
+    });
+
+    expect(rowIds(filtered.rows)).toEqual(['1', '4']);
+    expect(filteredAgain.filteredRowCount).toBe(1);
+    expect(rowIds(filteredAgain.rows)).toEqual(['4']);
+    expect(searched.filteredRowCount).toBe(0);
+    expect(searched.rows).toEqual([]);
+  });
+
+  it('undoes and redoes row deletion', async () => {
+    const filePath = await writeFixture(
+      'delete-history.csv',
+      ['name,code', 'Ada,001', 'Grace,002', 'Linus,003'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['1', '3'] });
+
+    const undone = await service.undoEdit({ sessionId: session.sessionId });
+    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const redone = await service.redoEdit({ sessionId: session.sessionId });
+    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+
+    expect(undone).toEqual({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: true,
+    });
+    expect(rowIds(afterUndo.rows)).toEqual(['1', '2', '3']);
+    expect(redone).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    expect(rowIds(afterRedo.rows)).toEqual(['2']);
+  });
+
+  it('rejects row deletion when no valid selected row identifiers are provided', async () => {
+    const filePath = await writeFixture('delete-invalid.csv', ['name', 'Ada'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+
+    await expect(service.deleteRows({ sessionId: session.sessionId, rowIds: [] })).rejects.toThrow(
+      'At least one CSV row must be selected for deletion',
+    );
+    await expect(service.deleteRows({ sessionId: session.sessionId, rowIds: ['missing'] })).rejects.toThrow(
+      'CSV row no longer exists: missing',
+    );
+  });
+
   it('rejects stale sessions and oversized row windows', async () => {
     const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));

@@ -127,6 +127,11 @@ export type CsvCellEditResult = {
   canRedo: boolean;
 };
 
+export type CsvDeleteRowsRequest = {
+  sessionId: string;
+  rowIds: string[];
+};
+
 export type CsvEditStateRequest = {
   sessionId: string;
 };
@@ -150,6 +155,7 @@ export type CsvViewerApi = {
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
   editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
+  deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
   getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
@@ -165,6 +171,7 @@ export const ipcChannels = {
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
   editCsvCell: 'csv:edit-cell',
+  deleteCsvRows: 'csv:delete-rows',
   getCsvEditState: 'csv:get-edit-state',
   undoCsvEdit: 'csv:undo-edit',
   redoCsvEdit: 'csv:redo-edit',

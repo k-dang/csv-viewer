@@ -15,6 +15,7 @@ import {
   ipcChannels,
   type CsvCellEditRequest,
   type CsvCellEditResult,
+  type CsvDeleteRowsRequest,
   type CsvDialectOptions,
   type CsvEditState,
   type CsvEditStateRequest,
@@ -221,6 +222,13 @@ function registerIpcHandlers() {
     ipcChannels.editCsvCell,
     async (_event, request: CsvCellEditRequest): Promise<CsvCellEditResult> => {
       return csvDataService.editCell(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.deleteCsvRows,
+    async (_event, request: CsvDeleteRowsRequest): Promise<CsvEditState> => {
+      return csvDataService.deleteRows(request);
     },
   );
 

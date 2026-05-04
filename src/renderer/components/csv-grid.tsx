@@ -17,8 +17,9 @@ import {
   type ColDef,
   type GridApi,
   type GridReadyEvent,
+  type SelectionChangedEvent,
 } from 'ag-grid-community';
-import { Database, HardDrive, Redo2, RotateCcw, Search, Table2, Undo2 } from 'lucide-react';
+import { Database, HardDrive, Redo2, RotateCcw, Search, Table2, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvEditState, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
@@ -77,6 +78,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     canRedo: false,
   });
   const [editError, setEditError] = useState<string | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
   const requestStateRef = useRef({ latestRequestId: 0 });
@@ -115,6 +117,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       canRedo: false,
     });
     setEditError(null);
+    setSelectedRowIds([]);
     void refreshEditState();
   }, [session.sessionId]);
 
@@ -203,6 +206,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       });
       setEditState(result);
       event.api.refreshInfiniteCache();
+      setSelectedRowIds([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to edit cell.';
       setEditError(message);
@@ -232,10 +236,44 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           : await window.csvViewer.redoCsvEdit({ sessionId: session.sessionId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
+      setSelectedRowIds([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Unable to ${action} edit.`;
       setEditError(message);
     }
+  }
+
+  async function deleteSelectedRows() {
+    const api = gridApiRef.current;
+
+    if (selectedRowIds.length === 0) {
+      return;
+    }
+
+    try {
+      setEditError(null);
+      setEditState(
+        await window.csvViewer.deleteCsvRows({
+          sessionId: session.sessionId,
+          rowIds: selectedRowIds,
+        }),
+      );
+      api?.deselectAll();
+      setSelectedRowIds([]);
+      api?.refreshInfiniteCache();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to delete selected rows.';
+      setEditError(message);
+    }
+  }
+
+  function onSelectionChanged(event: SelectionChangedEvent<CsvRow>) {
+    setSelectedRowIds(
+      event.api
+        .getSelectedRows()
+        .map((row) => row[csvInternalRowIdField])
+        .filter((rowId) => rowId.length > 0),
+    );
   }
 
   const hasSearch = search.trim().length > 0;
@@ -274,6 +312,17 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
           <QueryStatusBadge state={queryState} />
           <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void deleteSelectedRows()}
+              disabled={selectedRowIds.length === 0}
+              title="Delete selected rows"
+              aria-label="Delete selected rows"
+            >
+              <Trash2 />
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -339,6 +388,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
           maintainColumnOrder
           onGridReady={onGridReady}
           onCellValueChanged={onCellValueChanged}
+          onSelectionChanged={onSelectionChanged}
           onSortChanged={refreshQuery}
           onFilterChanged={refreshQuery}
           overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"

@@ -7,6 +7,7 @@ import type {
   CsvCellEditResult,
   CsvCellValue,
   CsvColumn,
+  CsvDeleteRowsRequest,
   CsvDialectOptions,
   CsvEditState,
   CsvEditStateRequest,
@@ -20,15 +21,21 @@ import type {
 import { csvInternalRowIdField } from '../shared/ipc';
 
 const tableName = 'active_csv';
+const csvDeletedField = '__csvViewerDeleted';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
-type CsvEditCommand = {
-  type: 'cell-edit';
-  rowId: string;
-  column: string;
-  oldValue: CsvCellValue;
-  newValue: CsvCellValue;
-};
+type CsvEditCommand =
+  | {
+      type: 'cell-edit';
+      rowId: string;
+      column: string;
+      oldValue: CsvCellValue;
+      newValue: CsvCellValue;
+    }
+  | {
+      type: 'delete-rows';
+      rowIds: string[];
+    };
 
 export class CsvDataService {
   private instance: DuckDBInstance | null = null;
@@ -65,7 +72,7 @@ export class CsvDataService {
       await connection.run(
         `CREATE TABLE ${quoteIdentifier(tableName)} AS SELECT CAST(row_number() OVER () AS VARCHAR) AS ${quoteIdentifier(
           csvInternalRowIdField,
-        )}, * FROM read_csv_auto(${buildReadCsvArguments(
+        )}, false AS ${quoteIdentifier(csvDeletedField)}, * FROM read_csv_auto(${buildReadCsvArguments(
           filePath,
           dialect,
         )})`,
@@ -196,6 +203,23 @@ export class CsvDataService {
     };
   }
 
+  async deleteRows(request: CsvDeleteRowsRequest): Promise<CsvEditState> {
+    this.assertActiveSession(request.sessionId);
+
+    const rowIds = normalizeRowIds(request.rowIds);
+
+    if (rowIds.length === 0) {
+      throw new Error('At least one CSV row must be selected for deletion.');
+    }
+
+    await this.assertRowsExist(rowIds);
+    await this.applyRowDeletion(rowIds, true);
+    this.undoStack.push({ type: 'delete-rows', rowIds });
+    this.redoStack = [];
+
+    return this.buildEditState();
+  }
+
   async undoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
     this.assertActiveSession(request.sessionId);
     const command = this.undoStack.pop();
@@ -247,7 +271,7 @@ export class CsvDataService {
     const result = await connection.runAndReadAll(
       `SELECT ${quoteIdentifier(column)} AS cell_value FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
         csvInternalRowIdField,
-      )} = ?`,
+      )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
       [rowId],
     );
     const [row] = result.getRowObjectsJS();
@@ -277,13 +301,59 @@ export class CsvDataService {
   private async applyCommand(command: CsvEditCommand): Promise<void> {
     if (command.type === 'cell-edit') {
       await this.applyCellValue(command.rowId, command.column, command.newValue);
+      return;
+    }
+
+    if (command.type === 'delete-rows') {
+      await this.applyRowDeletion(command.rowIds, true);
     }
   }
 
   private async revertCommand(command: CsvEditCommand): Promise<void> {
     if (command.type === 'cell-edit') {
       await this.applyCellValue(command.rowId, command.column, command.oldValue);
+      return;
     }
+
+    if (command.type === 'delete-rows') {
+      await this.applyRowDeletion(command.rowIds, false);
+    }
+  }
+
+  private async assertRowsExist(rowIds: string[]): Promise<void> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    const result = await connection.runAndReadAll(
+      `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} IN (${buildPlaceholders(rowIds.length)}) AND ${quoteIdentifier(csvDeletedField)} = false`,
+      rowIds,
+    );
+    const foundRowIds = new Set(result.getRowObjectsJS().map((row) => String(row.row_id)));
+    const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
+
+    if (missingRowId) {
+      throw new Error(`CSV row no longer exists: ${missingRowId}`);
+    }
+  }
+
+  private async applyRowDeletion(rowIds: string[], deleted: boolean): Promise<void> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    await connection.run(
+      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} IN (${buildPlaceholders(rowIds.length)})`,
+      [deleted, ...rowIds],
+    );
   }
 
   private buildEditState(): CsvEditState {
@@ -409,6 +479,7 @@ function buildRowsQuery({
   const knownColumns = new Set(columns.map((column) => column.name));
   const values: Array<string | number | boolean | null> = [];
   const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));
+  whereClauses.push(`${quoteIdentifier(csvDeletedField)} = false`);
   const searchClause = buildSearchClause(columns, search, values);
 
   if (searchClause) {
@@ -588,7 +659,7 @@ async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
   const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`);
   return result
     .getRowObjectsJS()
-    .filter((row) => String(row.column_name) !== csvInternalRowIdField)
+    .filter((row) => !new Set([csvInternalRowIdField, csvDeletedField]).has(String(row.column_name)))
     .map((row) => ({
       name: String(row.column_name),
       type: String(row.column_type),
@@ -597,7 +668,7 @@ async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
 
 async function readRowCount(connection: DuckDBConnection): Promise<number> {
   const result = await connection.runAndReadAll(
-    `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)}`,
+    `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false`,
   );
   const [row] = result.getRowObjectsJS();
   const value = row.row_count;
@@ -617,6 +688,15 @@ class CsvOpenError extends Error {
     super(message);
     this.name = 'CsvOpenError';
   }
+}
+
+function normalizeRowIds(rowIds: string[]): string[] {
+  const normalizedRowIds = rowIds.map((rowId) => rowId.trim()).filter((rowId) => rowId.length > 0);
+  return [...new Set(normalizedRowIds)];
+}
+
+function buildPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ');
 }
 
 function normalizeOpenError(error: unknown): Error {
