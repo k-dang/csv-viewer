@@ -145,6 +145,10 @@ export type CsvEditStateRequest = {
   sessionId: string;
 };
 
+export type CsvSaveAsRequest = {
+  sessionId: string;
+};
+
 export type CsvEditState = {
   sessionId: string;
   dirty: boolean;
@@ -167,6 +171,7 @@ export type CsvViewerApi = {
   deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
   insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
   getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
+  saveCsvAs: (request: CsvSaveAsRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   onOpenCsvRequest: (callback: () => void) => () => void;
@@ -184,6 +189,7 @@ export const ipcChannels = {
   deleteCsvRows: 'csv:delete-rows',
   insertCsvRow: 'csv:insert-row',
   getCsvEditState: 'csv:get-edit-state',
+  saveCsvAs: 'csv:save-as',
   undoCsvEdit: 'csv:undo-edit',
   redoCsvEdit: 'csv:redo-edit',
   menuOpenCsv: 'menu:open-csv',

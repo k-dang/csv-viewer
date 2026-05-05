@@ -19,7 +19,7 @@ import {
   type GridReadyEvent,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
-import { ArrowDown, ArrowUp, Database, HardDrive, Plus, Redo2, RotateCcw, Search, Table2, Trash2, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Database, HardDrive, Plus, Redo2, RotateCcw, Save, Search, Table2, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvEditState, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
@@ -289,6 +289,22 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     }
   }
 
+  async function saveAs() {
+    try {
+      setEditError(null);
+      const result = await window.csvViewer.saveCsvAs({ sessionId: session.sessionId });
+
+      if (isCancelledSaveResult(result)) {
+        return;
+      }
+
+      setEditState(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save CSV.';
+      setEditError(message);
+    }
+  }
+
   function onSelectionChanged(event: SelectionChangedEvent<CsvRow>) {
     setSelectedRowIds(
       event.api
@@ -384,6 +400,17 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
               type="button"
               variant="outline"
               size="icon"
+              onClick={() => void saveAs()}
+              disabled={!editState.dirty}
+              title="Save CSV as"
+              aria-label="Save CSV as"
+            >
+              <Save />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
               onClick={() => void runHistoryAction('undo')}
               disabled={!editState.canUndo}
               title="Undo edit"
@@ -453,6 +480,12 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       </div>
     </div>
   );
+}
+
+function isCancelledSaveResult(
+  result: CsvEditState | { status: 'cancelled' },
+): result is { status: 'cancelled' } {
+  return 'status' in result && result.status === 'cancelled';
 }
 
 function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {

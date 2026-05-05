@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -797,6 +797,49 @@ describe('CsvDataService', () => {
       canRedo: false,
     });
     expect(rowIds(afterRedo.rows)).toEqual(['1', '3', '2']);
+  });
+
+  it('saves edited, inserted, and non-deleted rows without internal row identifiers', async () => {
+    const filePath = await writeFixture(
+      'save-as.csv',
+      ['name,code,note', 'Ada,001,first', 'Grace,002,second', 'Linus,003,third'].join('\n'),
+    );
+    const outputPath = path.join(tempDir, 'saved.csv');
+
+    const session = await service.openCsv(filePath);
+    await service.editCell({ sessionId: session.sessionId, rowId: '2', column: 'code', value: '00042' });
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'below',
+      rowIds: ['1'],
+      hasActiveQuery: false,
+    });
+    await service.editCell({ sessionId: session.sessionId, rowId: '4', column: 'name', value: 'New, Person' });
+    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['3'] });
+
+    const state = await service.saveAs({ sessionId: session.sessionId }, outputPath);
+    const saved = await readFile(outputPath, 'utf8');
+
+    expect(saved).toBe(['name,code,note', 'Ada,001,first', '"New, Person",,', 'Grace,00042,second', ''].join('\n'));
+    expect(saved).not.toContain(csvInternalRowIdField);
+    expect(state).toEqual({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: false,
+    });
+    expect(service.hasUnsavedChanges()).toBe(false);
+  });
+
+  it('saves delimiter and header settings from the active dialect', async () => {
+    const filePath = await writeFixture('save-no-header.txt', ['Ada|37', 'Grace|41'].join('\n'));
+    const outputPath = path.join(tempDir, 'saved-no-header.txt');
+
+    const session = await service.openCsv(filePath, { delimiter: '|', header: false });
+    await service.editCell({ sessionId: session.sessionId, rowId: '1', column: 'column1', value: '38' });
+    await service.saveAs({ sessionId: session.sessionId }, outputPath);
+
+    await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });
 
   it('rejects stale sessions and oversized row windows', async () => {

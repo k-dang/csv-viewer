@@ -6,7 +6,9 @@ import {
   Menu,
   session,
   type BrowserWindowConstructorOptions,
+  type MessageBoxOptions,
   type MenuItemConstructorOptions,
+  type SaveDialogOptions,
 } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -24,6 +26,7 @@ import {
   type RecentCsvFile,
   type CsvRowWindow,
   type CsvRowWindowRequest,
+  type CsvSaveAsRequest,
   type HealthStatus,
   type OpenCsvResult,
 } from '../shared/ipc';
@@ -74,6 +77,23 @@ function createWindow() {
   };
 
   const mainWindow = new BrowserWindow(windowOptions);
+  let closeAllowed = false;
+
+  mainWindow.on('close', (event) => {
+    if (closeAllowed || !csvDataService.hasUnsavedChanges()) {
+      return;
+    }
+
+    event.preventDefault();
+    void (async () => {
+      const canClose = await resolveUnsavedChanges(mainWindow);
+
+      if (canClose) {
+        closeAllowed = true;
+        mainWindow.close();
+      }
+    })();
+  });
 
   if (isDevelopment) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL as string);
@@ -175,6 +195,13 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle(ipcChannels.openCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+    const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const canContinue = await resolveUnsavedChanges(ownerWindow);
+
+    if (!canContinue) {
+      return { status: 'cancelled' };
+    }
+
     const result = await dialog.showOpenDialog({
       title: 'Open CSV',
       properties: ['openFile'],
@@ -196,6 +223,13 @@ function registerIpcHandlers() {
   ipcMain.handle(
     ipcChannels.openRecentCsv,
     async (_event, filePath: string, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const canContinue = await resolveUnsavedChanges(ownerWindow);
+
+      if (!canContinue) {
+        return { status: 'cancelled' };
+      }
+
       const session = await csvDataService.openCsv(filePath, options);
       await recordRecentFile(session.file);
       return { status: 'opened', session };
@@ -203,6 +237,13 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle(ipcChannels.reopenCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+    const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const canContinue = await resolveUnsavedChanges(ownerWindow);
+
+    if (!canContinue) {
+      return { status: 'cancelled' };
+    }
+
     const session = await csvDataService.reopenActiveCsv(options);
     await recordRecentFile(session.file);
     return { status: 'opened', session };
@@ -248,6 +289,15 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    ipcChannels.saveCsvAs,
+    async (_event, request: CsvSaveAsRequest): Promise<CsvEditState | { status: 'cancelled' }> => {
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const saved = await saveActiveCsvAs(ownerWindow, request);
+      return saved ?? { status: 'cancelled' };
+    },
+  );
+
+  ipcMain.handle(
     ipcChannels.undoCsvEdit,
     async (_event, request: CsvEditStateRequest): Promise<CsvEditState> => {
       return csvDataService.undoEdit(request);
@@ -260,6 +310,89 @@ function registerIpcHandlers() {
       return csvDataService.redoEdit(request);
     },
   );
+}
+
+async function resolveUnsavedChanges(ownerWindow?: BrowserWindow): Promise<boolean> {
+  if (!csvDataService.hasUnsavedChanges()) {
+    return true;
+  }
+
+  const messageOptions: MessageBoxOptions = {
+    type: 'warning',
+    title: 'Unsaved CSV changes',
+    message: 'Save changes before continuing?',
+    detail: 'Your edits have not been saved. Save As writes a new CSV file and leaves the original unchanged.',
+    buttons: ['Save As...', 'Discard', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  };
+  const result = ownerWindow
+    ? await dialog.showMessageBox(ownerWindow, messageOptions)
+    : await dialog.showMessageBox(messageOptions);
+
+  if (result.response === 2) {
+    return false;
+  }
+
+  if (result.response === 1) {
+    return true;
+  }
+
+  try {
+    return Boolean(await saveActiveCsvAs(ownerWindow));
+  } catch (error: unknown) {
+    showSaveError(ownerWindow, error);
+    return false;
+  }
+}
+
+async function saveActiveCsvAs(
+  ownerWindow?: BrowserWindow,
+  request?: CsvSaveAsRequest,
+): Promise<CsvEditState | null> {
+  const activeSession = csvDataService.getActiveSession();
+
+  if (!activeSession) {
+    return null;
+  }
+
+  const saveOptions: SaveDialogOptions = {
+    title: 'Save CSV As',
+    defaultPath: buildDefaultSaveAsPath(activeSession.file.path),
+    filters: [
+      { name: 'CSV files', extensions: ['csv'] },
+      { name: 'Text files', extensions: ['txt', 'tsv'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  };
+  const result = ownerWindow
+    ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+    : await dialog.showSaveDialog(saveOptions);
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  return csvDataService.saveAs(request ?? { sessionId: activeSession.sessionId }, result.filePath);
+}
+
+function buildDefaultSaveAsPath(filePath: string): string {
+  const parsed = path.parse(filePath);
+  return path.join(parsed.dir, `${parsed.name}-edited${parsed.ext || '.csv'}`);
+}
+
+function showSaveError(ownerWindow: BrowserWindow | undefined, error: unknown): void {
+  const messageOptions: MessageBoxOptions = {
+    type: 'error',
+    title: 'Unable to save CSV',
+    message: 'Unable to save the edited CSV.',
+    detail: error instanceof Error ? error.message : 'The save operation failed.',
+  } as const;
+
+  void (ownerWindow
+    ? dialog.showMessageBox(ownerWindow, messageOptions)
+    : dialog.showMessageBox(messageOptions));
 }
 
 function getRecentFilesPath(): string {

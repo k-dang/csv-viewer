@@ -1,6 +1,6 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   CsvCellEditRequest,
@@ -274,6 +274,47 @@ export class CsvDataService {
     await this.applyCommand(command);
     this.undoStack.push(command);
     return this.buildEditState();
+  }
+
+  async saveAs(request: CsvEditStateRequest, filePath: string): Promise<CsvEditState> {
+    this.assertActiveSession(request.sessionId);
+    const connection = this.connection;
+    const session = this.session;
+
+    if (!connection || !session) {
+      throw new Error('No active CSV session.');
+    }
+
+    const rowProjectionSql = session.columns.map((column) => quoteIdentifier(column.name)).join(', ');
+    const rowsResult = await connection.runAndReadAll(
+      `SELECT ${rowProjectionSql} FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+        csvDeletedField,
+      )} = false ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`,
+    );
+    const rows = rowsResult.getRowObjectsJS();
+    const delimiter = resolveOutputDelimiter(session);
+    const lines: string[] = [];
+
+    if (session.dialect.header !== false) {
+      lines.push(session.columns.map((column) => serializeCsvField(column.name, delimiter)).join(delimiter));
+    }
+
+    for (const row of rows) {
+      lines.push(
+        session.columns
+          .map((column) => serializeCsvField(normalizeCellValue(row[column.name]) ?? '', delimiter))
+          .join(delimiter),
+      );
+    }
+
+    await writeFile(filePath, `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`, 'utf8');
+    this.clearEditJournal();
+
+    return this.buildEditState();
+  }
+
+  hasUnsavedChanges(): boolean {
+    return Boolean(this.session && this.undoStack.length > 0);
   }
 
   async closeActiveSession(): Promise<void> {
@@ -832,6 +873,22 @@ function normalizeRowIds(rowIds: string[]): string[] {
 
 function buildPlaceholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
+}
+
+function resolveOutputDelimiter(session: CsvSessionMetadata): string {
+  if (session.dialect.delimiter) {
+    return session.dialect.delimiter;
+  }
+
+  return path.extname(session.file.path).toLowerCase() === '.tsv' ? '\t' : ',';
+}
+
+function serializeCsvField(value: string, delimiter: string): string {
+  if (value.includes('"') || value.includes('\n') || value.includes('\r') || value.includes(delimiter)) {
+    return `"${value.replaceAll('"', '""')}"`;
+  }
+
+  return value;
 }
 
 function normalizeOpenError(error: unknown): Error {
