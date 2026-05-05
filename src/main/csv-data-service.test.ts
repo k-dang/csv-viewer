@@ -662,6 +662,143 @@ describe('CsvDataService', () => {
     );
   });
 
+  it('inserts empty rows above and below one selected source row', async () => {
+    const filePath = await writeFixture(
+      'insert-relative.csv',
+      ['name,code', 'Ada,001', 'Grace,002', 'Linus,003'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'above',
+      rowIds: ['2'],
+      hasActiveQuery: false,
+    });
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'below',
+      rowIds: ['2'],
+      hasActiveQuery: false,
+    });
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 5 });
+
+    expect(window.filteredRowCount).toBe(5);
+    expect(rowIds(window.rows)).toEqual(['1', '4', '2', '5', '3']);
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada', code: '001' },
+      { name: '', code: '' },
+      { name: 'Grace', code: '002' },
+      { name: '', code: '' },
+      { name: 'Linus', code: '003' },
+    ]);
+    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+  });
+
+  it('appends an empty row when no row is selected', async () => {
+    const filePath = await writeFixture('insert-append.csv', ['name,code', 'Ada,001'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const result = await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'append',
+      rowIds: [],
+      hasActiveQuery: false,
+    });
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+
+    expect(result).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    expect(rowIds(window.rows)).toEqual(['1', '2']);
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada', code: '001' },
+      { name: '', code: '' },
+    ]);
+  });
+
+  it('rejects ambiguous insert requests below the UI boundary', async () => {
+    const filePath = await writeFixture('insert-invalid.csv', ['name', 'Ada', 'Grace'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+
+    await expect(
+      service.insertRow({
+        sessionId: session.sessionId,
+        placement: 'above',
+        rowIds: ['1'],
+        hasActiveQuery: true,
+      }),
+    ).rejects.toThrow('cannot be inserted while sort, filter, or search is active');
+    await expect(
+      service.insertRow({
+        sessionId: session.sessionId,
+        placement: 'below',
+        rowIds: ['1', '2'],
+        hasActiveQuery: false,
+      }),
+    ).rejects.toThrow('requires exactly one selected CSV row');
+    await expect(
+      service.insertRow({
+        sessionId: session.sessionId,
+        placement: 'append',
+        rowIds: ['1'],
+        hasActiveQuery: false,
+      }),
+    ).rejects.toThrow('Append row requires no selected CSV rows');
+    await expect(
+      service.insertRow({
+        sessionId: session.sessionId,
+        placement: 'above',
+        rowIds: ['missing'],
+        hasActiveQuery: false,
+      }),
+    ).rejects.toThrow('CSV row no longer exists: missing');
+  });
+
+  it('undoes and redoes row insertion', async () => {
+    const filePath = await writeFixture('insert-history.csv', ['name', 'Ada', 'Grace'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'below',
+      rowIds: ['1'],
+      hasActiveQuery: false,
+    });
+
+    const afterInsert = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const undone = await service.undoEdit({ sessionId: session.sessionId });
+    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const redone = await service.redoEdit({ sessionId: session.sessionId });
+    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+
+    expect(rowIds(afterInsert.rows)).toEqual(['1', '3', '2']);
+    expect(undone).toEqual({
+      sessionId: session.sessionId,
+      dirty: false,
+      canUndo: false,
+      canRedo: true,
+    });
+    expect(rowIds(afterUndo.rows)).toEqual(['1', '2']);
+    expect(redone).toEqual({
+      sessionId: session.sessionId,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+    expect(rowIds(afterRedo.rows)).toEqual(['1', '3', '2']);
+  });
+
   it('rejects stale sessions and oversized row windows', async () => {
     const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));

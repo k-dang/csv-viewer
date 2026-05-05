@@ -12,6 +12,7 @@ import type {
   CsvEditState,
   CsvEditStateRequest,
   CsvFilterDescriptor,
+  CsvInsertRowRequest,
   CsvRow,
   CsvRowWindow,
   CsvRowWindowRequest,
@@ -22,6 +23,7 @@ import { csvInternalRowIdField } from '../shared/ipc';
 
 const tableName = 'active_csv';
 const csvDeletedField = '__csvViewerDeleted';
+const csvSourceOrderField = '__csvViewerSourceOrder';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
 type CsvEditCommand =
@@ -35,6 +37,10 @@ type CsvEditCommand =
   | {
       type: 'delete-rows';
       rowIds: string[];
+    }
+  | {
+      type: 'insert-row';
+      rowId: string;
     };
 
 export class CsvDataService {
@@ -72,7 +78,7 @@ export class CsvDataService {
       await connection.run(
         `CREATE TABLE ${quoteIdentifier(tableName)} AS SELECT CAST(row_number() OVER () AS VARCHAR) AS ${quoteIdentifier(
           csvInternalRowIdField,
-        )}, false AS ${quoteIdentifier(csvDeletedField)}, * FROM read_csv_auto(${buildReadCsvArguments(
+        )}, row_number() OVER () AS ${quoteIdentifier(csvSourceOrderField)}, false AS ${quoteIdentifier(csvDeletedField)}, * FROM read_csv_auto(${buildReadCsvArguments(
           filePath,
           dialect,
         )})`,
@@ -220,6 +226,30 @@ export class CsvDataService {
     return this.buildEditState();
   }
 
+  async insertRow(request: CsvInsertRowRequest): Promise<CsvEditState> {
+    this.assertActiveSession(request.sessionId);
+
+    if (request.hasActiveQuery) {
+      throw new Error('CSV rows cannot be inserted while sort, filter, or search is active.');
+    }
+
+    const rowIds = normalizeRowIds(request.rowIds);
+
+    if (request.placement === 'append') {
+      if (rowIds.length !== 0) {
+        throw new Error('Append row requires no selected CSV rows.');
+      }
+    } else if (rowIds.length !== 1) {
+      throw new Error('Insert above or below requires exactly one selected CSV row.');
+    }
+
+    const insertedRowId = await this.insertEmptyRow(request.placement, rowIds[0]);
+    this.undoStack.push({ type: 'insert-row', rowId: insertedRowId });
+    this.redoStack = [];
+
+    return this.buildEditState();
+  }
+
   async undoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
     this.assertActiveSession(request.sessionId);
     const command = this.undoStack.pop();
@@ -306,6 +336,11 @@ export class CsvDataService {
 
     if (command.type === 'delete-rows') {
       await this.applyRowDeletion(command.rowIds, true);
+      return;
+    }
+
+    if (command.type === 'insert-row') {
+      await this.applyRowDeletion([command.rowId], false);
     }
   }
 
@@ -317,7 +352,104 @@ export class CsvDataService {
 
     if (command.type === 'delete-rows') {
       await this.applyRowDeletion(command.rowIds, false);
+      return;
     }
+
+    if (command.type === 'insert-row') {
+      await this.applyRowDeletion([command.rowId], true);
+    }
+  }
+
+  private async insertEmptyRow(
+    placement: CsvInsertRowRequest['placement'],
+    targetRowId: string | undefined,
+  ): Promise<string> {
+    const connection = this.connection;
+    const session = this.session;
+
+    if (!connection || !session) {
+      throw new Error('No active CSV session.');
+    }
+
+    const insertedRowId = await this.nextRowId();
+    const sourceOrder = await this.resolveInsertionOrder(placement, targetRowId);
+
+    if (placement !== 'append') {
+      await connection.run(
+        `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvSourceOrderField)} = ${quoteIdentifier(
+          csvSourceOrderField,
+        )} + 1 WHERE ${quoteIdentifier(csvSourceOrderField)} >= ?`,
+        [sourceOrder],
+      );
+    }
+
+    const insertColumns = [
+      csvInternalRowIdField,
+      csvSourceOrderField,
+      csvDeletedField,
+      ...session.columns.map((column) => column.name),
+    ];
+    const values = [insertedRowId, sourceOrder, false, ...session.columns.map(() => '')];
+
+    await connection.run(
+      `INSERT INTO ${quoteIdentifier(tableName)} (${insertColumns
+        .map((column) => quoteIdentifier(column))
+        .join(', ')}) VALUES (${buildPlaceholders(insertColumns.length)})`,
+      values,
+    );
+
+    return insertedRowId;
+  }
+
+  private async nextRowId(): Promise<string> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    const result = await connection.runAndReadAll(
+      `SELECT coalesce(max(CAST(${quoteIdentifier(csvInternalRowIdField)} AS BIGINT)), 0)::BIGINT + 1 AS next_row_id FROM ${quoteIdentifier(tableName)}`,
+    );
+    const [row] = result.getRowObjectsJS();
+    return String(row.next_row_id);
+  }
+
+  private async resolveInsertionOrder(
+    placement: CsvInsertRowRequest['placement'],
+    targetRowId: string | undefined,
+  ): Promise<number> {
+    const connection = this.connection;
+
+    if (!connection) {
+      throw new Error('No active CSV session.');
+    }
+
+    if (placement === 'append') {
+      const result = await connection.runAndReadAll(
+        `SELECT coalesce(max(${quoteIdentifier(csvSourceOrderField)}), 0)::BIGINT + 1 AS source_order FROM ${quoteIdentifier(tableName)}`,
+      );
+      const [row] = result.getRowObjectsJS();
+      return Number(row.source_order);
+    }
+
+    if (!targetRowId) {
+      throw new Error('CSV row identifier is required for insertion.');
+    }
+
+    const result = await connection.runAndReadAll(
+      `SELECT ${quoteIdentifier(csvSourceOrderField)} AS source_order FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+        csvInternalRowIdField,
+      )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
+      [targetRowId],
+    );
+    const [row] = result.getRowObjectsJS();
+
+    if (!row) {
+      throw new Error(`CSV row no longer exists: ${targetRowId}`);
+    }
+
+    return Number(row.source_order) + (placement === 'below' ? 1 : 0);
   }
 
   private async assertRowsExist(rowIds: string[]): Promise<void> {
@@ -488,7 +620,10 @@ function buildRowsQuery({
 
   const whereSql = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
-  const orderSql = orderClauses.length > 0 ? ` ORDER BY ${orderClauses.join(', ')}` : '';
+  const orderSql =
+    orderClauses.length > 0
+      ? ` ORDER BY ${orderClauses.join(', ')}`
+      : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
   const fromSql = ` FROM ${quoteIdentifier(tableName)}${whereSql}`;
   const rowProjectionSql = [
     quoteIdentifier(csvInternalRowIdField),
@@ -659,7 +794,7 @@ async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
   const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`);
   return result
     .getRowObjectsJS()
-    .filter((row) => !new Set([csvInternalRowIdField, csvDeletedField]).has(String(row.column_name)))
+    .filter((row) => !new Set([csvInternalRowIdField, csvSourceOrderField, csvDeletedField]).has(String(row.column_name)))
     .map((row) => ({
       name: String(row.column_name),
       type: String(row.column_type),

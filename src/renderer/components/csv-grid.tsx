@@ -19,7 +19,7 @@ import {
   type GridReadyEvent,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
-import { Database, HardDrive, Redo2, RotateCcw, Search, Table2, Trash2, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Database, HardDrive, Plus, Redo2, RotateCcw, Search, Table2, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvCellValue, CsvEditState, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
@@ -267,6 +267,28 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     }
   }
 
+  async function insertRow(placement: 'above' | 'below' | 'append') {
+    const api = gridApiRef.current;
+
+    try {
+      setEditError(null);
+      setEditState(
+        await window.csvViewer.insertCsvRow({
+          sessionId: session.sessionId,
+          placement,
+          rowIds: selectedRowIds,
+          hasActiveQuery,
+        }),
+      );
+      api?.deselectAll();
+      setSelectedRowIds([]);
+      api?.refreshInfiniteCache();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to insert row.';
+      setEditError(message);
+    }
+  }
+
   function onSelectionChanged(event: SelectionChangedEvent<CsvRow>) {
     setSelectedRowIds(
       event.api
@@ -278,6 +300,8 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
 
   const hasSearch = search.trim().length > 0;
   const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== session.rowCount;
+  const canInsertRelative = !hasActiveQuery && selectedRowIds.length === 1;
+  const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
 
   return (
     <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card shadow-sm">
@@ -312,6 +336,39 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
         <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
           <QueryStatusBadge state={queryState} />
           <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void insertRow('above')}
+              disabled={!canInsertRelative}
+              title="Insert row above"
+              aria-label="Insert row above"
+            >
+              <ArrowUp />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void insertRow('below')}
+              disabled={!canInsertRelative}
+              title="Insert row below"
+              aria-label="Insert row below"
+            >
+              <ArrowDown />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void insertRow('append')}
+              disabled={!canAppendRow}
+              title="Append row"
+              aria-label="Append row"
+            >
+              <Plus />
+            </Button>
             <Button
               type="button"
               variant="outline"

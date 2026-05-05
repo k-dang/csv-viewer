@@ -20,6 +20,7 @@ import {
   type CsvEditState,
   type CsvEditStateRequest,
   type CsvFileMetadata,
+  type CsvInsertRowRequest,
   type RecentCsvFile,
   type CsvRowWindow,
   type CsvRowWindowRequest,
@@ -229,6 +230,13 @@ function registerIpcHandlers() {
     ipcChannels.deleteCsvRows,
     async (_event, request: CsvDeleteRowsRequest): Promise<CsvEditState> => {
       return csvDataService.deleteRows(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.insertCsvRow,
+    async (_event, request: CsvInsertRowRequest): Promise<CsvEditState> => {
+      return csvDataService.insertRow(request);
     },
   );
 

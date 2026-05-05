@@ -10,6 +10,7 @@ const api: CsvViewerApi = {
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
   editCsvCell: (request) => ipcRenderer.invoke(ipcChannels.editCsvCell, request),
   deleteCsvRows: (request) => ipcRenderer.invoke(ipcChannels.deleteCsvRows, request),
+  insertCsvRow: (request) => ipcRenderer.invoke(ipcChannels.insertCsvRow, request),
   getCsvEditState: (request) => ipcRenderer.invoke(ipcChannels.getCsvEditState, request),
   undoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.undoCsvEdit, request),
   redoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.redoCsvEdit, request),

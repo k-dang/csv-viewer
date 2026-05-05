@@ -132,6 +132,15 @@ export type CsvDeleteRowsRequest = {
   rowIds: string[];
 };
 
+export type CsvInsertRowPlacement = 'above' | 'below' | 'append';
+
+export type CsvInsertRowRequest = {
+  sessionId: string;
+  placement: CsvInsertRowPlacement;
+  rowIds: string[];
+  hasActiveQuery: boolean;
+};
+
 export type CsvEditStateRequest = {
   sessionId: string;
 };
@@ -156,6 +165,7 @@ export type CsvViewerApi = {
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
   editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
   deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
+  insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
   getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
@@ -172,6 +182,7 @@ export const ipcChannels = {
   getCsvRows: 'csv:get-rows',
   editCsvCell: 'csv:edit-cell',
   deleteCsvRows: 'csv:delete-rows',
+  insertCsvRow: 'csv:insert-row',
   getCsvEditState: 'csv:get-edit-state',
   undoCsvEdit: 'csv:undo-edit',
   redoCsvEdit: 'csv:redo-edit',
