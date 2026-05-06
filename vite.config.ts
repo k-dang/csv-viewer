@@ -15,4 +15,9 @@ export default defineConfig({
     outDir: 'dist-renderer',
     emptyOutDir: true,
   },
+  server: {
+    watch: {
+      ignored: ['**/fixtures/**', '**/*.csv', '**/*.tsv', '**/*.txt'],
+    },
+  },
 });
