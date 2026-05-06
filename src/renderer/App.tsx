@@ -89,6 +89,7 @@ export function App() {
     setDialectError(null);
     const requestId = openRequestRef.current + 1;
     openRequestRef.current = requestId;
+    const previousOpenState = openState;
     setOpenState({ status: 'opening' });
 
     try {
@@ -99,7 +100,7 @@ export function App() {
       }
 
       if (result.status === 'cancelled') {
-        setOpenState((current) => (current.status === 'opening' ? { status: 'idle' } : current));
+        setOpenState((current) => (current.status === 'opening' ? previousOpenState : current));
         return;
       }
 
@@ -128,6 +129,7 @@ export function App() {
     setDialectError(null);
     const requestId = openRequestRef.current + 1;
     openRequestRef.current = requestId;
+    const previousOpenState = openState;
     setOpenState({ status: 'opening' });
 
     try {
@@ -140,7 +142,10 @@ export function App() {
       if (result.status === 'opened') {
         setOpenState({ status: 'opened', session: result.session });
         await refreshRecentFiles();
+        return;
       }
+
+      setOpenState((current) => (current.status === 'opening' ? previousOpenState : current));
     } catch (error: unknown) {
       if (requestId !== openRequestRef.current) {
         return;
@@ -165,6 +170,7 @@ export function App() {
     setDialectError(null);
     const requestId = openRequestRef.current + 1;
     openRequestRef.current = requestId;
+    const previousOpenState = openState;
     setOpenState({ status: 'opening' });
 
     try {
@@ -177,7 +183,10 @@ export function App() {
       if (result.status === 'opened') {
         setOpenState({ status: 'opened', session: result.session });
         await refreshRecentFiles();
+        return;
       }
+
+      setOpenState((current) => (current.status === 'opening' ? previousOpenState : current));
     } catch (error: unknown) {
       if (requestId !== openRequestRef.current) {
         return;
