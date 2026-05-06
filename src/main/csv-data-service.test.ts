@@ -887,6 +887,34 @@ describe('CsvDataService', () => {
     });
   });
 
+  it('keeps edited large-file access bounded after edits, inserts, and deletes', async () => {
+    const rows = ['id,name,score'];
+
+    for (let index = 0; index < 5000; index += 1) {
+      rows.push(`${index},Person ${index},${index % 100}`);
+    }
+
+    const filePath = await writeFixture('large-edited.csv', rows.join('\n'));
+    const session = await service.openCsv(filePath);
+
+    await service.editCell({ sessionId: session.sessionId, rowId: '4901', column: 'name', value: 'Edited Person' });
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'below',
+      rowIds: ['4901'],
+      hasActiveQuery: false,
+    });
+    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['4902', '4903'] });
+
+    const window = await service.getRows({ sessionId: session.sessionId, offset: 4899, limit: 5 });
+
+    expect(window.filteredRowCount).toBe(4999);
+    expect(window.rows).toHaveLength(5);
+    expect(rowIds(window.rows)).toEqual(['4900', '4901', '5001', '4904', '4905']);
+    expect(window.rows[1].name).toBe('Edited Person');
+    expect(window.rows[2]).toMatchObject({ id: '', name: '', score: '' });
+  });
+
   it('validates wide-file access without requiring all columns to be manually mapped', async () => {
     const headers = Array.from({ length: 120 }, (_value, index) => `metric_${index}`);
     const row = headers.map((_header, index) => String(index));

@@ -69,7 +69,9 @@ const filterDebounceMs = 1500;
 export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
+  const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(session.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
+  const hasActiveQueryRef = useRef(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
   const [editState, setEditState] = useState<CsvEditState>({
     sessionId: session.sessionId,
@@ -116,6 +118,10 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       canUndo: false,
       canRedo: false,
     });
+    setFilteredRowCount(session.rowCount);
+    setDisplayedTotalRowCount(session.rowCount);
+    setHasActiveQuery(false);
+    hasActiveQueryRef.current = false;
     setEditError(null);
     setSelectedRowIds([]);
     void refreshEditState();
@@ -126,7 +132,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
     const datasource = createCsvGridDataSource(
       session,
       window.csvViewer,
-      setFilteredRowCount,
+      handleFilteredRowCount,
       searchRef.current,
       requestStateRef.current,
       setQueryState,
@@ -141,11 +147,11 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       return;
     }
 
-    setHasActiveQuery(hasGridSortOrFilters(api) || search.trim().length > 0);
+    updateActiveQueryState(hasGridSortOrFilters(api) || search.trim().length > 0);
     const datasource = createCsvGridDataSource(
       session,
       window.csvViewer,
-      setFilteredRowCount,
+      handleFilteredRowCount,
       search,
       requestStateRef.current,
       setQueryState,
@@ -166,12 +172,12 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       defaultState: { sort: null },
     });
     api.setFilterModel(null);
-    setFilteredRowCount(session.rowCount);
-    setHasActiveQuery(false);
+    setFilteredRowCount(displayedTotalRowCount);
+    updateActiveQueryState(false);
     const datasource = createCsvGridDataSource(
       session,
       window.csvViewer,
-      setFilteredRowCount,
+      handleFilteredRowCount,
       '',
       requestStateRef.current,
       setQueryState,
@@ -180,8 +186,21 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
   }
 
   function refreshQuery(event: { api: GridApi<CsvRow> }) {
-    setHasActiveQuery(hasGridSortOrFilters(event.api) || searchRef.current.trim().length > 0);
+    updateActiveQueryState(hasGridSortOrFilters(event.api) || searchRef.current.trim().length > 0);
     event.api.refreshInfiniteCache();
+  }
+
+  function updateActiveQueryState(nextHasActiveQuery: boolean) {
+    hasActiveQueryRef.current = nextHasActiveQuery;
+    setHasActiveQuery(nextHasActiveQuery);
+  }
+
+  function handleFilteredRowCount(rowCount: number) {
+    setFilteredRowCount(rowCount);
+
+    if (!hasActiveQueryRef.current) {
+      setDisplayedTotalRowCount(rowCount);
+    }
   }
 
   async function onCellValueChanged(event: CellValueChangedEvent<CsvRow>) {
@@ -331,7 +350,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
               {session.file.name}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-              <span>{formatNumber(filteredRowCount)} visible of {formatNumber(session.rowCount)} rows</span>
+              <span>{formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)} rows</span>
               <span className="inline-flex items-center gap-1.5">
                 <Table2 className="size-3.5" aria-hidden="true" />
                 {formatNumber(session.columns.length)} columns
