@@ -31,6 +31,7 @@ fs.writeFileSync(
 
 execFileSync('npm', ['install', '--omit=dev', '--package-lock=false'], {
   cwd: stagingDir,
+  shell: process.platform === 'win32',
   stdio: 'inherit',
 });
 
