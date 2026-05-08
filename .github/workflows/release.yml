@@ -35,6 +35,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -52,6 +54,30 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Resolve package version
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = $package.version
+
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
+            throw "Invalid package version '$version'. Use a semver tag like v1.2.3."
+          }
+
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Stamp package version
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $package.version = $env:PACKAGE_VERSION
+          $package | ConvertTo-Json -Depth 100 | Set-Content package.json
+          Write-Host "Packaging version $env:PACKAGE_VERSION"
 
       - name: Package Electron app
         run: pnpm package
