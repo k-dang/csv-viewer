@@ -6,7 +6,7 @@ CSV files are opened from disk by the Electron main process, queried through Duc
 
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js 24 or newer
 - pnpm 10.19.0 or newer
 
 ## Scripts
@@ -24,7 +24,7 @@ pnpm run package
 - `typecheck` checks renderer, shared, main, and preload TypeScript.
 - `test` runs the Vitest suite for data access and grid request behavior.
 - `build` creates `dist-renderer/` and `dist-electron/`.
-- `package` builds the app and creates a local desktop package under `release/`.
+- `package` builds the app and creates platform installers under `release/`.
 
 ## MVP Validation
 
@@ -80,7 +80,7 @@ Manual validation should cover:
 
 ## Packaging Notes
 
-`pnpm run package` uses `@electron/packager` to produce a local Electron build in `release/`. The packaged app loads the built renderer from disk instead of the Vite dev server. ASAR packaging is intentionally disabled for the MVP so DuckDB's native binding loads from a normal filesystem path.
+`pnpm run package` uses `electron-builder` to produce platform-specific release artifacts in `release/`. On Windows this creates an NSIS installer and a portable executable; the GitHub Actions release workflow also builds a macOS DMG and Linux AppImage on their native runners.
 
 Recent files are stored in Electron's per-user `userData` directory as `recent-files.json`. The source CSV files are never modified.
 

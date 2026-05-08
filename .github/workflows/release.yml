@@ -56,25 +56,26 @@ jobs:
       - name: Package Electron app
         run: pnpm package
 
-      - name: Archive packaged app
+      - name: Collect release files
         shell: pwsh
         run: |
-          $packageDir = Get-ChildItem -Path release -Directory |
-            Where-Object { $_.Name -ne 'staging' } |
-            Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $releaseFiles = Get-ChildItem -Path release -File |
+            Where-Object { $_.Extension -in '.exe', '.dmg', '.AppImage' }
 
-          if (-not $packageDir) {
-            throw "No packaged app directory found in release/"
+          if (-not $releaseFiles) {
+            throw "No release files found in release/"
           }
 
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Compress-Archive -Path "$($packageDir.FullName)/*" -DestinationPath "artifacts/${{ matrix.platform.artifact }}.zip" -Force
+          $releaseFiles | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination artifacts
+          }
 
       - name: Upload packaged app artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact }}
-          path: artifacts/*.zip
+          path: artifacts/*
           if-no-files-found: error
 
   release:
@@ -94,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG_NAME" artifacts/**/*.zip \
+          gh release create "$TAG_NAME" artifacts/**/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG_NAME" \
             --generate-notes
