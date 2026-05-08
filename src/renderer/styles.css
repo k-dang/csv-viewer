@@ -207,6 +207,14 @@
   align-items: center;
   display: flex;
   line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.csv-grid-frame .ag-cell-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .csv-grid-frame .ag-overlay-loading-center {
