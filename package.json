@@ -1,6 +1,6 @@
 {
   "name": "csv-viewer",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A desktop CSV viewer built with Electron, React, TypeScript, AG Grid, and DuckDB.",
   "productName": "CSV Viewer",
   "main": "dist-electron/main/main.js",
@@ -56,16 +56,20 @@
     "appId": "com.kdang.csvviewer",
     "productName": "CSV Viewer",
     "directories": {
+      "buildResources": "assets",
       "output": "release"
     },
     "files": [
+      "assets/**/*",
       "dist-electron/**/*",
       "dist-renderer/**/*",
       "package.json"
     ],
+    "icon": "icon",
     "asar": true,
     "npmRebuild": true,
     "win": {
+      "icon": "icon.ico",
       "target": [
         "nsis",
         "portable"
@@ -74,6 +78,8 @@
     },
     "nsis": {
       "artifactName": "CSV.Viewer-${version}-Setup-${arch}.${ext}",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
@@ -81,6 +87,7 @@
       "artifactName": "CSV.Viewer-${version}-Portable-${arch}.${ext}"
     },
     "mac": {
+      "icon": "icon.icns",
       "target": [
         "dmg"
       ],
@@ -88,6 +95,7 @@
       "category": "public.app-category.productivity"
     },
     "linux": {
+      "icon": "icon.png",
       "target": [
         "AppImage"
       ],
