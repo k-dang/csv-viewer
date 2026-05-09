@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, RefreshCw, Table2 } from 'lucide-react';
+import { FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { buildDialectOptions, type CsvHeaderMode } from '@/components/csv-dialect';
 import { CsvMetadataView } from '@/components/csv-metadata-view';
@@ -14,6 +14,20 @@ type OpenState =
   | { status: 'opened'; session: CsvSessionMetadata }
   | { status: 'failed'; message: string };
 
+type ThemeMode = 'light' | 'dark';
+
+const themeStorageKey = 'csv-viewer-theme';
+
+function getInitialTheme(): ThemeMode {
+  const storedTheme = window.localStorage.getItem(themeStorageKey);
+
+  if (storedTheme === 'light' || storedTheme === 'dark') {
+    return storedTheme;
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 export function App() {
   const [health, setHealth] = useState<HealthState>({ status: 'checking' });
   const [openState, setOpenState] = useState<OpenState>({ status: 'idle' });
@@ -21,7 +35,14 @@ export function App() {
   const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentCsvFile[]>([]);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
   const openRequestRef = useRef(0);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', themeMode === 'dark');
+    document.documentElement.style.colorScheme = themeMode;
+    window.localStorage.setItem(themeStorageKey, themeMode);
+  }, [themeMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -200,6 +221,7 @@ export function App() {
   }
 
   const isOpening = openState.status === 'opening';
+  const isDarkMode = themeMode === 'dark';
 
   return (
     <main className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
@@ -230,12 +252,22 @@ export function App() {
               Reopen
             </Button>
           ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => setThemeMode(isDarkMode ? 'light' : 'dark')}
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDarkMode ? <Sun /> : <Moon />}
+          </Button>
           <HealthBadge health={health} />
         </div>
       </header>
 
       {openState.status === 'opened' ? (
-        <CsvMetadataView session={openState.session} dialectError={dialectError} />
+        <CsvMetadataView session={openState.session} dialectError={dialectError} themeMode={themeMode} />
       ) : (
         <EmptyCsvState
           isOpening={isOpening}

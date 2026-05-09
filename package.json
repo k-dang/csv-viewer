@@ -1,6 +1,6 @@
 {
   "name": "csv-viewer",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A desktop CSV viewer built with Electron, React, TypeScript, AG Grid, and DuckDB.",
   "productName": "CSV Viewer",
   "main": "dist-electron/main/main.js",

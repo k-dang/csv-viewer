@@ -6,9 +6,11 @@ import { CsvGrid } from './csv-grid';
 export function CsvMetadataView({
   session,
   dialectError,
+  themeMode,
 }: {
   session: CsvSessionMetadata;
   dialectError: string | null;
+  themeMode: 'light' | 'dark';
 }) {
   return (
     <section
@@ -24,7 +26,7 @@ export function CsvMetadataView({
         </FieldError>
       ) : null}
 
-      <CsvGrid session={session} />
+      <CsvGrid session={session} themeMode={themeMode} />
     </section>
   );
 }

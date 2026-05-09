@@ -41,7 +41,7 @@ ModuleRegistry.registerModules([
   TextFilterModule,
 ]);
 
-const csvGridTheme = themeQuartz.withParams({
+const csvGridLightTheme = themeQuartz.withParams({
   accentColor: '#0f766e',
   backgroundColor: '#ffffff',
   borderColor: '#d7dee8',
@@ -64,9 +64,32 @@ const csvGridTheme = themeQuartz.withParams({
   wrapperBorderRadius: 8,
 });
 
+const csvGridDarkTheme = themeQuartz.withParams({
+  accentColor: '#5eead4',
+  backgroundColor: '#171717',
+  borderColor: '#3f3f46',
+  browserColorScheme: 'dark',
+  cellFontSize: 13,
+  chromeBackgroundColor: '#202020',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontSize: 13,
+  foregroundColor: '#f5f5f5',
+  headerBackgroundColor: '#262626',
+  headerFontSize: 13,
+  headerFontWeight: 700,
+  headerTextColor: '#fafafa',
+  iconSize: 15,
+  oddRowBackgroundColor: '#1f1f1f',
+  rowHeight: 38,
+  selectedRowBackgroundColor: 'rgba(94, 234, 212, 0.16)',
+  spacing: 7,
+  wrapperBorder: false,
+  wrapperBorderRadius: 8,
+});
+
 const filterDebounceMs = 1500;
 
-export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
+export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; themeMode: 'light' | 'dark' }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(session.rowCount);
@@ -472,7 +495,7 @@ export function CsvGrid({ session }: { session: CsvSessionMetadata }) {
       <div className="csv-grid-frame min-h-0 w-full" aria-label="CSV row grid">
         <AgGridReact<CsvRow>
           key={session.sessionId}
-          theme={csvGridTheme}
+          theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
           columnDefs={columnDefs}
           defaultColDef={{
             editable: true,
