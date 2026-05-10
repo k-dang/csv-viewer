@@ -1,6 +1,26 @@
 # CSV Viewer
 
-A local desktop CSV viewer built with Electron, React, TypeScript, AG Grid Community, and DuckDB.
+A fast local desktop app for opening, inspecting, filtering, and cleaning CSV files without uploading them anywhere.
+
+<p align="center">
+  <img src="images/app.png" alt="CSV Viewer showing a large CSV file with metadata, delimiter controls, filtering, and an editable data grid" width="900">
+</p>
+
+CSV Viewer is built for practical CSV work: open files from disk, browse large datasets smoothly, adjust parsing options, search and filter rows, make focused cleanup edits, then export a separate CSV with Save As.
+
+## Highlights
+
+- **Local-first desktop workflow.** CSV files are opened by the Electron app from your filesystem; source files are never uploaded or overwritten implicitly.
+- **Large-file friendly browsing.** DuckDB handles CSV querying while the renderer requests bounded row windows instead of loading the full dataset into React state.
+- **Rich table interaction.** AG Grid provides sorting, filtering, column resizing, horizontal scrolling, and focused row inspection for wide or messy files.
+- **CSV-aware controls.** Delimiter, header, quoting, and escape handling can be adjusted when a file needs explicit parsing settings.
+- **Safe cleanup edits.** Edit cells, insert or append rows, delete rows, undo/redo changes, and write the result with Save As.
+
+## Stack
+
+Electron, React, TypeScript, AG Grid Community, DuckDB, Vite, Vitest, and pnpm.
+
+## How It Works
 
 CSV files are opened from disk by the Electron main process, queried through DuckDB, and displayed in the renderer through paged row-window requests so the full dataset is not held in React state. The active CSV can be edited in memory and written with Save As; the original file is not overwritten.
 
@@ -26,25 +46,6 @@ pnpm run package
 - `build` creates `dist-renderer/` and `dist-electron/`.
 - `package` builds the app and creates platform installers under `release/`.
 
-## MVP Validation
-
-Generate the CSV validation fixtures before manual checks:
-
-```powershell
-pnpm run fixtures:validation
-```
-
-Then run the app with `pnpm run dev` or package it with `pnpm run package`.
-
-Manual MVP scenarios:
-
-- Open `fixtures/validation/large-rows.csv` and scroll vertically.
-- Open `fixtures/validation/wide-columns.csv` and inspect columns horizontally.
-- Open `fixtures/validation/quoted-fields.csv` and verify quoted delimiters remain intact.
-- Open `fixtures/validation/unusual-columns.csv` and verify sorting, filtering, and search still work with unusual column names.
-- Open `fixtures/validation/malformed.csv` and verify the app surfaces a clear error instead of crashing.
-- Reopen a CSV from the recent files list after closing and relaunching the app.
-
 ## CSV Editing
 
 The grid supports focused CSV cleanup workflows:
@@ -58,25 +59,9 @@ The grid supports focused CSV cleanup workflows:
 
 Editing controls are intentionally disabled when the requested operation would be ambiguous. Row insertion is blocked under active sort, filter, or search because the visible order is derived from a query, but cell edits and deletes still target stable source row identifiers in those views.
 
-## Editing Validation
+## Development
 
-Before shipping editing changes, run:
-
-```powershell
-pnpm run test
-pnpm run typecheck
-pnpm run build
-```
-
-Manual validation should cover:
-
-- Normal CSV open, edit, undo, redo, delete, insert, append, and Save As.
-- `fixtures/validation/quoted-fields.csv`, confirming quoted delimiters remain data after editing and Save As.
-- A CSV with leading-zero identifiers, confirming edited and untouched identifiers stay as text.
-- Filtered and searched edits, confirming rows refresh when an edited value enters or leaves the active query.
-- Sorted edits and multi-row delete, confirming operations target selected source rows rather than visible indexes.
-- Opening another file, reopening the active file, and closing the app with unsaved changes, confirming Save As, Discard, and Cancel decisions.
-- `fixtures/validation/large-rows.csv`, confirming scrolling still requests bounded row windows after edits.
+Before shipping changes, run `pnpm run test`, `pnpm run typecheck`, and `pnpm run build`. See [docs/validation.md](docs/validation.md) for manual release and editing validation scenarios.
 
 ## Packaging Notes
 
