@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellApiModule,
+  type CellFocusedEvent,
   CellStyleModule,
   ColumnApiModule,
   DateFilterModule,
@@ -19,14 +20,16 @@ import {
   type GridReadyEvent,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
-import { ArrowDown, ArrowUp, Database, HardDrive, Plus, Redo2, RotateCcw, Save, Search, Table2, Trash2, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, Database, HardDrive, Plus, Redo2, RotateCcw, Save, Search, Table2, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { CsvCellValue, CsvEditState, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
+import type { CsvCellValue, CsvEditState, CsvFilterDescriptor, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
 import { csvInternalRowIdField } from '../../shared/ipc';
-import { createCsvGridDataSource } from './csv-grid-data-source';
+import { createCsvGridDataSource, toCsvFilterDescriptors, type AgFilterModel } from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
+import { CsvStatsPanel } from './csv-stats-panel';
+import { resolveStatsColumnOnOpen } from './csv-stats-state';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -106,6 +109,11 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
+  const [statsPanelOpen, setStatsPanelOpen] = useState(false);
+  const [statsColumn, setStatsColumn] = useState(session.columns[0]?.name ?? '');
+  const [focusedColumn, setFocusedColumn] = useState<string | null>(null);
+  const [statsFilters, setStatsFilters] = useState<CsvFilterDescriptor[]>([]);
+  const [statsRefreshKey, setStatsRefreshKey] = useState(0);
   const requestStateRef = useRef({ latestRequestId: 0 });
   const revertingCellRef = useRef(false);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
@@ -147,6 +155,11 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
     hasActiveQueryRef.current = false;
     setEditError(null);
     setSelectedRowIds([]);
+    setStatsPanelOpen(false);
+    setStatsColumn(session.columns[0]?.name ?? '');
+    setFocusedColumn(null);
+    setStatsFilters([]);
+    setStatsRefreshKey((current) => current + 1);
     void refreshEditState();
   }, [session.sessionId]);
 
@@ -171,6 +184,8 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
     }
 
     updateActiveQueryState(hasGridSortOrFilters(api) || search.trim().length > 0);
+    setStatsFilters(getCsvFilters(api));
+    setStatsRefreshKey((current) => current + 1);
     const datasource = createCsvGridDataSource(
       session,
       window.csvViewer,
@@ -195,6 +210,8 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
       defaultState: { sort: null },
     });
     api.setFilterModel(null);
+    setStatsFilters([]);
+    setStatsRefreshKey((current) => current + 1);
     setFilteredRowCount(displayedTotalRowCount);
     updateActiveQueryState(false);
     const datasource = createCsvGridDataSource(
@@ -210,6 +227,8 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
 
   function refreshQuery(event: { api: GridApi<CsvRow> }) {
     updateActiveQueryState(hasGridSortOrFilters(event.api) || searchRef.current.trim().length > 0);
+    setStatsFilters(getCsvFilters(event.api));
+    setStatsRefreshKey((current) => current + 1);
     event.api.refreshInfiniteCache();
   }
 
@@ -248,6 +267,7 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
       });
       setEditState(result);
       event.api.refreshInfiniteCache();
+      setStatsRefreshKey((current) => current + 1);
       setSelectedRowIds([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to edit cell.';
@@ -278,6 +298,7 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
           : await window.csvViewer.redoCsvEdit({ sessionId: session.sessionId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
+      setStatsRefreshKey((current) => current + 1);
       setSelectedRowIds([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Unable to ${action} edit.`;
@@ -303,6 +324,7 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
       api?.deselectAll();
       setSelectedRowIds([]);
       api?.refreshInfiniteCache();
+      setStatsRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to delete selected rows.';
       setEditError(message);
@@ -325,6 +347,7 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
       api?.deselectAll();
       setSelectedRowIds([]);
       api?.refreshInfiniteCache();
+      setStatsRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to insert row.';
       setEditError(message);
@@ -354,6 +377,32 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
         .map((row) => row[csvInternalRowIdField])
         .filter((rowId) => rowId.length > 0),
     );
+  }
+
+  function onCellFocused(event: CellFocusedEvent<CsvRow>) {
+    const column = typeof event.column === 'string' ? event.column : event.column?.getColId();
+
+    if (column) {
+      setFocusedColumn(column);
+    }
+  }
+
+  function toggleStatsPanel() {
+    setStatsPanelOpen((open) => {
+      const nextOpen = !open;
+
+      if (nextOpen) {
+        setStatsColumn((currentColumn) => {
+          return resolveStatsColumnOnOpen({
+            columns: session.columns,
+            currentColumn,
+            focusedColumn,
+          });
+        });
+      }
+
+      return nextOpen;
+    });
   }
 
   const hasSearch = search.trim().length > 0;
@@ -471,6 +520,16 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
             >
               <Redo2 />
             </Button>
+            <Button
+              type="button"
+              variant={statsPanelOpen ? 'default' : 'outline'}
+              size="icon"
+              onClick={toggleStatsPanel}
+              title={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
+              aria-label={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
+            >
+              <BarChart3 />
+            </Button>
           </div>
           <label className="sr-only" htmlFor="global-search">
             Global search
@@ -492,33 +551,47 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
           </Button>
         </div>
       </div>
-      <div className="csv-grid-frame min-h-0 w-full" aria-label="CSV row grid">
-        <AgGridReact<CsvRow>
-          key={session.sessionId}
-          theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
-          columnDefs={columnDefs}
-          defaultColDef={{
-            editable: true,
-            cellEditor: 'agTextCellEditor',
-            minWidth: 120,
-          }}
-          getRowId={(params) => params.data[csvInternalRowIdField]}
-          rowModelType="infinite"
-          cacheBlockSize={100}
-          maxBlocksInCache={6}
-          rowBuffer={8}
-          rowSelection={{ mode: 'multiRow', enableClickSelection: true, checkboxes: false, headerCheckbox: false }}
-          enableCellTextSelection
-          ensureDomOrder
-          suppressDragLeaveHidesColumns
-          maintainColumnOrder
-          onGridReady={onGridReady}
-          onCellValueChanged={onCellValueChanged}
-          onSelectionChanged={onSelectionChanged}
-          onSortChanged={refreshQuery}
-          onFilterChanged={refreshQuery}
-          overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
-        />
+      <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
+          <AgGridReact<CsvRow>
+            key={session.sessionId}
+            theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
+            columnDefs={columnDefs}
+            defaultColDef={{
+              editable: true,
+              cellEditor: 'agTextCellEditor',
+              minWidth: 120,
+            }}
+            getRowId={(params) => params.data[csvInternalRowIdField]}
+            rowModelType="infinite"
+            cacheBlockSize={100}
+            maxBlocksInCache={6}
+            rowBuffer={8}
+            rowSelection={{ mode: 'multiRow', enableClickSelection: true, checkboxes: false, headerCheckbox: false }}
+            enableCellTextSelection
+            ensureDomOrder
+            suppressDragLeaveHidesColumns
+            maintainColumnOrder
+            onGridReady={onGridReady}
+            onCellValueChanged={onCellValueChanged}
+            onSelectionChanged={onSelectionChanged}
+            onCellFocused={onCellFocused}
+            onSortChanged={refreshQuery}
+            onFilterChanged={refreshQuery}
+            overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
+          />
+        </div>
+        {statsPanelOpen && statsColumn ? (
+          <CsvStatsPanel
+            session={session}
+            selectedColumn={statsColumn}
+            filters={statsFilters}
+            search={search.trim()}
+            refreshKey={statsRefreshKey}
+            onColumnChange={setStatsColumn}
+            onClose={() => setStatsPanelOpen(false)}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -534,6 +607,10 @@ function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {
   const hasSort = api.getColumnState().some((column) => Boolean(column.sort));
   const hasFilter = Object.keys(api.getFilterModel()).length > 0;
   return hasSort || hasFilter;
+}
+
+function getCsvFilters(api: GridApi<CsvRow>): CsvFilterDescriptor[] {
+  return toCsvFilterDescriptors(api.getFilterModel() as AgFilterModel);
 }
 
 function getColumnFilter(columnType: string): string {

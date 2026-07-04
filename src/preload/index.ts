@@ -8,6 +8,7 @@ const api: CsvViewerApi = {
   reopenCsv: (options) => ipcRenderer.invoke(ipcChannels.reopenCsv, options),
   getRecentFiles: () => ipcRenderer.invoke(ipcChannels.getRecentFiles),
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
+  getCsvColumnValueCounts: (request) => ipcRenderer.invoke(ipcChannels.getCsvColumnValueCounts, request),
   editCsvCell: (request) => ipcRenderer.invoke(ipcChannels.editCsvCell, request),
   deleteCsvRows: (request) => ipcRenderer.invoke(ipcChannels.deleteCsvRows, request),
   insertCsvRow: (request) => ipcRenderer.invoke(ipcChannels.insertCsvRow, request),

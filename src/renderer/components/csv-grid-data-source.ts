@@ -60,7 +60,7 @@ type AgSortModelItem = {
   sort: 'asc' | 'desc';
 };
 
-type AgFilterModel = Record<string, AgFilterCondition | AgCombinedFilter>;
+export type AgFilterModel = Record<string, AgFilterCondition | AgCombinedFilter>;
 
 type AgCombinedFilter = {
   operator?: 'AND' | 'OR';
@@ -76,14 +76,14 @@ type AgFilterCondition = {
   dateTo?: string | null;
 };
 
-function toCsvSortDescriptors(sortModel: AgSortModelItem[]): CsvSortDescriptor[] {
+export function toCsvSortDescriptors(sortModel: AgSortModelItem[]): CsvSortDescriptor[] {
   return sortModel.map((item) => ({
     column: item.colId,
     direction: item.sort,
   }));
 }
 
-function toCsvFilterDescriptors(filterModel: AgFilterModel): CsvFilterDescriptor[] {
+export function toCsvFilterDescriptors(filterModel: AgFilterModel): CsvFilterDescriptor[] {
   return Object.entries(filterModel).flatMap(([column, model]) => {
     if (isCombinedFilter(model)) {
       if (model.operator === 'OR') {

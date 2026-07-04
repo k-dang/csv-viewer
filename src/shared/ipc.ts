@@ -111,6 +111,26 @@ export type CsvRowWindow = {
   filteredRowCount: number;
 };
 
+export type CsvColumnValueCountsRequest = {
+  sessionId: string;
+  column: string;
+  filters?: CsvFilterDescriptor[];
+  search?: string;
+};
+
+export type CsvColumnValueCount = {
+  value: CsvCellValue;
+  count: number;
+  percentOfScope: number;
+};
+
+export type CsvColumnValueCounts = {
+  sessionId: string;
+  column: string;
+  scopeRowCount: number;
+  values: CsvColumnValueCount[];
+};
+
 export type CsvCellEditRequest = {
   sessionId: string;
   rowId: string;
@@ -167,6 +187,7 @@ export type CsvViewerApi = {
   reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
+  getCsvColumnValueCounts: (request: CsvColumnValueCountsRequest) => Promise<CsvColumnValueCounts>;
   editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
   deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
   insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
@@ -185,6 +206,7 @@ export const ipcChannels = {
   reopenCsv: 'csv:reopen',
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
+  getCsvColumnValueCounts: 'csv:get-column-value-counts',
   editCsvCell: 'csv:edit-cell',
   deleteCsvRows: 'csv:delete-rows',
   insertCsvRow: 'csv:insert-row',

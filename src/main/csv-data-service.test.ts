@@ -315,6 +315,186 @@ describe('CsvDataService', () => {
     expect(window.rows.map((row) => row.name)).toEqual(['Ada', 'Margaret']);
   });
 
+  it('returns top column value counts with percentages and deterministic ordering', async () => {
+    const filePath = await writeFixture(
+      'value-counts.csv',
+      [
+        'status,note',
+        'Open,one',
+        'open,two',
+        'Open,three',
+        'Closed,four',
+        'Closed,five',
+        'Pending,six',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const counts = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+    });
+
+    expect(counts).toEqual({
+      sessionId: session.sessionId,
+      column: 'status',
+      scopeRowCount: 6,
+      values: [
+        { value: 'Closed', count: 2, percentOfScope: expect.closeTo(33.333, 3) },
+        { value: 'Open', count: 2, percentOfScope: expect.closeTo(33.333, 3) },
+        { value: 'Pending', count: 1, percentOfScope: expect.closeTo(16.667, 3) },
+        { value: 'open', count: 1, percentOfScope: expect.closeTo(16.667, 3) },
+      ],
+    });
+  });
+
+  it('keeps blank strings and null cells as separate counted values', async () => {
+    const filePath = await writeFixture(
+      'value-counts-blanks.csv',
+      ['status,note', 'Open,one', ',edited empty', 'NULL,literal null', ',parsed null'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    await service.editCell({ sessionId: session.sessionId, rowId: '2', column: 'status', value: '' });
+    const counts = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+    });
+
+    expect(counts.scopeRowCount).toBe(4);
+    expect(counts.values).toEqual([
+      { value: null, count: 1, percentOfScope: 25 },
+      { value: '', count: 1, percentOfScope: 25 },
+      { value: 'NULL', count: 1, percentOfScope: 25 },
+      { value: 'Open', count: 1, percentOfScope: 25 },
+    ]);
+  });
+
+  it('limits column value counts to the top 50 values', async () => {
+    const rows = ['code'];
+
+    for (let index = 0; index < 55; index += 1) {
+      rows.push(`value-${String(index).padStart(2, '0')}`);
+    }
+
+    const filePath = await writeFixture('value-counts-top-50.csv', rows.join('\n'));
+    const session = await service.openCsv(filePath);
+    const counts = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'code',
+    });
+
+    expect(counts.scopeRowCount).toBe(55);
+    expect(counts.values).toHaveLength(50);
+    expect(counts.values[0].value).toBe('value-00');
+    expect(counts.values.at(-1)?.value).toBe('value-49');
+  });
+
+  it('applies count scope from filters and search while ignoring sort order', async () => {
+    const filePath = await writeFixture(
+      'value-counts-scope.csv',
+      [
+        'name,status,team,score',
+        'Ada,Open,compiler,10',
+        'Grace,Closed,navy,30',
+        'Linus,Open,kernel,20',
+        'Margaret,Open,compiler,40',
+        'Barbara,Closed,compiler,50',
+      ].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+    const counts = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+      search: 'a',
+    });
+    const sortedRows = await service.getRows({
+      sessionId: session.sessionId,
+      offset: 0,
+      limit: 10,
+      sort: [{ column: 'score', direction: 'desc' }],
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+      search: 'a',
+    });
+
+    expect(sortedRows.rows.map((row) => row.name)).toEqual(['Barbara', 'Margaret', 'Ada']);
+    expect(counts.scopeRowCount).toBe(3);
+    expect(counts.values).toEqual([
+      { value: 'Open', count: 2, percentOfScope: expect.closeTo(66.667, 3) },
+      { value: 'Closed', count: 1, percentOfScope: expect.closeTo(33.333, 3) },
+    ]);
+  });
+
+  it('returns an empty count list when count scope has no rows', async () => {
+    const filePath = await writeFixture('value-counts-empty-scope.csv', ['status', 'Open'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+    const counts = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+      search: 'missing',
+    });
+
+    expect(counts).toEqual({
+      sessionId: session.sessionId,
+      column: 'status',
+      scopeRowCount: 0,
+      values: [],
+    });
+  });
+
+  it('calculates column value counts from the working CSV after edits, inserts, deletes, undo, and redo', async () => {
+    const filePath = await writeFixture(
+      'value-counts-working.csv',
+      ['status,team', 'Open,compiler', 'Closed,compiler', 'Open,kernel'].join('\n'),
+    );
+
+    const session = await service.openCsv(filePath);
+
+    await service.editCell({ sessionId: session.sessionId, rowId: '2', column: 'status', value: 'Open' });
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'append',
+      rowIds: [],
+      hasActiveQuery: false,
+    });
+    await service.editCell({ sessionId: session.sessionId, rowId: '4', column: 'status', value: 'Pending' });
+    await service.editCell({ sessionId: session.sessionId, rowId: '4', column: 'team', value: 'compiler' });
+    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['1'] });
+
+    const afterChanges = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+
+    await service.undoEdit({ sessionId: session.sessionId });
+    const afterUndo = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+
+    await service.redoEdit({ sessionId: session.sessionId });
+    const afterRedo = await service.getColumnValueCounts({
+      sessionId: session.sessionId,
+      column: 'status',
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+    });
+
+    expect(afterChanges.values).toEqual([
+      { value: 'Open', count: 1, percentOfScope: 50 },
+      { value: 'Pending', count: 1, percentOfScope: 50 },
+    ]);
+    expect(afterUndo.values).toEqual([
+      { value: 'Open', count: 2, percentOfScope: expect.closeTo(66.667, 3) },
+      { value: 'Pending', count: 1, percentOfScope: expect.closeTo(33.333, 3) },
+    ]);
+    expect(afterRedo.values).toEqual(afterChanges.values);
+  });
+
   it('returns no rows for searches without matches and clears search when omitted', async () => {
     const filePath = await writeFixture('search-clear.csv', ['name,team', 'Ada,compiler', 'Grace,navy'].join('\n'));
 

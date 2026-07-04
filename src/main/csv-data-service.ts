@@ -7,6 +7,8 @@ import type {
   CsvCellEditResult,
   CsvCellValue,
   CsvColumn,
+  CsvColumnValueCounts,
+  CsvColumnValueCountsRequest,
   CsvDeleteRowsRequest,
   CsvDialectOptions,
   CsvEditState,
@@ -171,6 +173,40 @@ export class CsvDataService {
       offset,
       filteredRowCount: normalizeCount(countRow.filtered_row_count),
       rows: rowsResult.getRowObjectsJS().map(normalizeRow),
+    };
+  }
+
+  async getColumnValueCounts(request: CsvColumnValueCountsRequest): Promise<CsvColumnValueCounts> {
+    this.assertActiveSession(request.sessionId);
+    const connection = this.connection;
+    const session = this.session;
+
+    if (!connection || !session) {
+      throw new Error('No active CSV session.');
+    }
+
+    const knownColumns = new Set(session.columns.map((column) => column.name));
+    assertKnownColumn(request.column, knownColumns);
+
+    const query = buildColumnValueCountsQuery({
+      columns: session.columns,
+      column: request.column,
+      filters: request.filters ?? [],
+      search: request.search ?? '',
+    });
+    const countResult = await connection.runAndReadAll(query.sql, query.values);
+    const rows = countResult.getRowObjectsJS();
+    const scopeRowCount = rows.length > 0 ? normalizeCount(rows[0].scope_row_count) : 0;
+
+    return {
+      sessionId: session.sessionId,
+      column: request.column,
+      scopeRowCount,
+      values: rows.map((row) => ({
+        value: normalizeCellValue(row.counted_value),
+        count: normalizeCount(row.value_count),
+        percentOfScope: Number(row.percent_of_scope),
+      })),
     };
   }
 
@@ -634,6 +670,11 @@ type QueryParts = {
   values: Array<string | number | boolean | null>;
 };
 
+type ColumnValueCountsQuery = {
+  sql: string;
+  values: Array<string | number | boolean | null>;
+};
+
 function buildRowsQuery({
   columns,
   filters,
@@ -650,6 +691,81 @@ function buildRowsQuery({
   offset: number;
 }): QueryParts {
   const knownColumns = new Set(columns.map((column) => column.name));
+  const scope = buildCountScopeWhere({ columns, filters, search });
+  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
+  const orderSql =
+    orderClauses.length > 0
+      ? ` ORDER BY ${orderClauses.join(', ')}`
+      : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
+  const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
+  const rowProjectionSql = [
+    quoteIdentifier(csvInternalRowIdField),
+    ...columns.map((column) => quoteIdentifier(column.name)),
+  ].join(', ');
+
+  return {
+    countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
+    rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
+    values: scope.values,
+  };
+}
+
+function buildColumnValueCountsQuery({
+  columns,
+  column,
+  filters,
+  search,
+}: {
+  columns: CsvColumn[];
+  column: string;
+  filters: CsvFilterDescriptor[];
+  search: string;
+}): ColumnValueCountsQuery {
+  const scope = buildCountScopeWhere({ columns, filters, search });
+  const countedValueSql = quoteIdentifier(column);
+
+  return {
+    sql: `WITH scoped_rows AS (
+      SELECT ${countedValueSql} AS counted_value
+      FROM ${quoteIdentifier(tableName)}${scope.whereSql}
+    ),
+    counted_values AS (
+      SELECT counted_value, count(*)::BIGINT AS value_count
+      FROM scoped_rows
+      GROUP BY counted_value
+    ),
+    scoped_total AS (
+      SELECT count(*)::BIGINT AS scope_row_count
+      FROM scoped_rows
+    )
+    SELECT counted_values.counted_value,
+      counted_values.value_count,
+      scoped_total.scope_row_count,
+      CASE
+        WHEN scoped_total.scope_row_count = 0 THEN 0
+        ELSE (counted_values.value_count::DOUBLE / scoped_total.scope_row_count::DOUBLE) * 100
+      END AS percent_of_scope
+    FROM counted_values
+    CROSS JOIN scoped_total
+    ORDER BY counted_values.value_count DESC, counted_values.counted_value ASC NULLS FIRST
+    LIMIT 50`,
+    values: scope.values,
+  };
+}
+
+function buildCountScopeWhere({
+  columns,
+  filters,
+  search,
+}: {
+  columns: CsvColumn[];
+  filters: CsvFilterDescriptor[];
+  search: string;
+}): {
+  whereSql: string;
+  values: Array<string | number | boolean | null>;
+} {
+  const knownColumns = new Set(columns.map((column) => column.name));
   const values: Array<string | number | boolean | null> = [];
   const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));
   whereClauses.push(`${quoteIdentifier(csvDeletedField)} = false`);
@@ -659,21 +775,8 @@ function buildRowsQuery({
     whereClauses.push(searchClause);
   }
 
-  const whereSql = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
-  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
-  const orderSql =
-    orderClauses.length > 0
-      ? ` ORDER BY ${orderClauses.join(', ')}`
-      : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
-  const fromSql = ` FROM ${quoteIdentifier(tableName)}${whereSql}`;
-  const rowProjectionSql = [
-    quoteIdentifier(csvInternalRowIdField),
-    ...columns.map((column) => quoteIdentifier(column.name)),
-  ].join(', ');
-
   return {
-    countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
-    rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
+    whereSql: ` WHERE ${whereClauses.join(' AND ')}`,
     values,
   };
 }

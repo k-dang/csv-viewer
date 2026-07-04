@@ -17,6 +17,8 @@ import {
   ipcChannels,
   type CsvCellEditRequest,
   type CsvCellEditResult,
+  type CsvColumnValueCounts,
+  type CsvColumnValueCountsRequest,
   type CsvDeleteRowsRequest,
   type CsvDialectOptions,
   type CsvEditState,
@@ -257,6 +259,13 @@ function registerIpcHandlers() {
     ipcChannels.getCsvRows,
     async (_event, request: CsvRowWindowRequest): Promise<CsvRowWindow> => {
       return csvDataService.getRows(request);
+    },
+  );
+
+  ipcMain.handle(
+    ipcChannels.getCsvColumnValueCounts,
+    async (_event, request: CsvColumnValueCountsRequest): Promise<CsvColumnValueCounts> => {
+      return csvDataService.getColumnValueCounts(request);
     },
   );
 
