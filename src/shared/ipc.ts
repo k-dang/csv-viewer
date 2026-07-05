@@ -178,13 +178,17 @@ export type CsvEditState = {
 
 export type OpenCsvResult =
   | { status: 'opened'; session: CsvSessionMetadata }
+  | { status: 'already-open'; session: CsvSessionMetadata }
   | { status: 'cancelled' };
+
+export type CsvCloseResult = { status: 'closed' } | { status: 'cancelled' };
 
 export type CsvViewerApi = {
   healthCheck: () => Promise<HealthStatus>;
   openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   openRecentCsv: (path: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  reopenCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  reopenCsv: (sessionId: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  closeCsv: (sessionId: string) => Promise<CsvCloseResult>;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
   getCsvColumnValueCounts: (request: CsvColumnValueCountsRequest) => Promise<CsvColumnValueCounts>;
@@ -197,6 +201,7 @@ export type CsvViewerApi = {
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   onOpenCsvRequest: (callback: () => void) => () => void;
   onReopenCsvRequest: (callback: () => void) => () => void;
+  onCloseTabRequest: (callback: () => void) => () => void;
 };
 
 export const ipcChannels = {
@@ -204,6 +209,7 @@ export const ipcChannels = {
   openCsv: 'csv:open',
   openRecentCsv: 'csv:open-recent',
   reopenCsv: 'csv:reopen',
+  closeCsv: 'csv:close',
   getRecentFiles: 'csv:get-recent-files',
   getCsvRows: 'csv:get-rows',
   getCsvColumnValueCounts: 'csv:get-column-value-counts',
@@ -216,4 +222,5 @@ export const ipcChannels = {
   redoCsvEdit: 'csv:redo-edit',
   menuOpenCsv: 'menu:open-csv',
   menuReopenCsv: 'menu:reopen-csv',
+  menuCloseTab: 'menu:close-tab',
 } as const;

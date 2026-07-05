@@ -92,7 +92,15 @@ const csvGridDarkTheme = themeQuartz.withParams({
 
 const filterDebounceMs = 1500;
 
-export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; themeMode: 'light' | 'dark' }) {
+export function CsvGrid({
+  session,
+  themeMode,
+  onDirtyChange,
+}: {
+  session: CsvSessionMetadata;
+  themeMode: 'light' | 'dark';
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
   const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(session.rowCount);
@@ -141,6 +149,10 @@ export function CsvGrid({ session, themeMode }: { session: CsvSessionMetadata; t
   useEffect(() => {
     searchRef.current = search;
   }, [search]);
+
+  useEffect(() => {
+    onDirtyChange?.(editState.dirty);
+  }, [editState.dirty, onDirtyChange]);
 
   useEffect(() => {
     setEditState({

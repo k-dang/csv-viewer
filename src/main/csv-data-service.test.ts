@@ -14,7 +14,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await service.closeActiveSession();
+  await service.closeAllSessions();
   await rm(tempDir, { recursive: true, force: true });
 });
 
@@ -33,7 +33,7 @@ describe('CsvDataService', () => {
     expect(session.rowCount).toBe(2);
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'age', 'joined']);
     expect(session.columns.map((column) => column.type)).toEqual(['VARCHAR', 'VARCHAR', 'VARCHAR']);
-    expect(service.getActiveSession()?.sessionId).toBe(session.sessionId);
+    expect(service.getSession(session.sessionId)?.sessionId).toBe(session.sessionId);
   });
 
   it('handles quoted fields and escaped delimiters through DuckDB CSV parsing', async () => {
@@ -83,16 +83,18 @@ describe('CsvDataService', () => {
     expect(rowIds(window.rows)).toEqual(['1', '2']);
   });
 
-  it('reopens the active file with new dialect options', async () => {
+  it('reopens a session with new dialect options and retires the old session', async () => {
     const filePath = await writeFixture('reopen.txt', ['name|age', 'Ada|37'].join('\n'));
 
     const auto = await service.openCsv(filePath);
-    const reopened = await service.reopenActiveCsv({ delimiter: '|' });
+    const reopened = await service.reopenSession(auto.sessionId, { delimiter: '|' });
 
     expect(reopened.sessionId).not.toBe(auto.sessionId);
     expect(reopened.file.path).toBe(filePath);
     expect(reopened.dialect).toEqual({ delimiter: '|' });
     expect(reopened.columns.map((column) => column.name)).toEqual(['name', 'age']);
+    expect(service.getSession(auto.sessionId)).toBeNull();
+    expect(service.getSession(reopened.sessionId)).toEqual(reopened);
   });
 
   it('rejects invalid delimiter choices before opening', async () => {
@@ -103,18 +105,18 @@ describe('CsvDataService', () => {
     );
   });
 
-  it('keeps the active session when a reopen option is invalid', async () => {
+  it('keeps the existing session when a reopen option is invalid', async () => {
     const filePath = await writeFixture('keep-active.csv', ['name,age', 'Ada,37'].join('\n'));
     const session = await service.openCsv(filePath);
 
-    await expect(service.reopenActiveCsv({ delimiter: '||' })).rejects.toThrow(
+    await expect(service.reopenSession(session.sessionId, { delimiter: '||' })).rejects.toThrow(
       'Delimiter must be exactly one character',
     );
 
-    expect(service.getActiveSession()).toEqual(session);
+    expect(service.getSession(session.sessionId)).toEqual(session);
   });
 
-  it('replaces the active session when opening another CSV', async () => {
+  it('keeps multiple sessions open with independent data', async () => {
     const firstPath = await writeFixture('first.csv', ['a', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['b,c', '2,3', '4,5'].join('\n'));
 
@@ -122,10 +124,85 @@ describe('CsvDataService', () => {
     const second = await service.openCsv(secondPath);
 
     expect(second.sessionId).not.toBe(first.sessionId);
-    expect(service.getActiveSession()).toEqual(second);
-    expect(second.file.name).toBe('second.csv');
-    expect(second.rowCount).toBe(2);
+    expect(service.getSession(first.sessionId)).toEqual(first);
+    expect(service.getSession(second.sessionId)).toEqual(second);
+
+    const firstRows = await service.getRows({ sessionId: first.sessionId, offset: 0, limit: 10 });
+    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+
+    expect(firstRows.filteredRowCount).toBe(1);
+    expect(secondRows.filteredRowCount).toBe(2);
     expect(second.columns.map((column) => column.name)).toEqual(['b', 'c']);
+  });
+
+  it('rejects opening a file that is already open and finds it by path', async () => {
+    const filePath = await writeFixture('dedupe.csv', ['a', '1'].join('\n'));
+
+    const session = await service.openCsv(filePath);
+
+    expect(service.findSessionByPath(filePath)).toEqual(session);
+    await expect(service.openCsv(filePath)).rejects.toThrow('CSV file is already open');
+    expect(service.findSessionByPath(path.join(tempDir, 'other.csv'))).toBeNull();
+  });
+
+  it('keeps edit journals independent per session', async () => {
+    const firstPath = await writeFixture('journal-first.csv', ['name', 'Ada'].join('\n'));
+    const secondPath = await writeFixture('journal-second.csv', ['name', 'Grace'].join('\n'));
+
+    const first = await service.openCsv(firstPath);
+    const second = await service.openCsv(secondPath);
+
+    await service.editCell({ sessionId: first.sessionId, rowId: '1', column: 'name', value: 'Edited' });
+
+    expect(service.isDirty(first.sessionId)).toBe(true);
+    expect(service.isDirty(second.sessionId)).toBe(false);
+    expect(service.getDirtySessions().map((session) => session.sessionId)).toEqual([first.sessionId]);
+    expect(service.getEditState({ sessionId: second.sessionId }).canUndo).toBe(false);
+
+    await expect(service.undoEdit({ sessionId: second.sessionId })).rejects.toThrow(
+      'No CSV edit is available to undo',
+    );
+
+    await service.undoEdit({ sessionId: first.sessionId });
+    expect(service.getDirtySessions()).toEqual([]);
+  });
+
+  it('closes a session and leaves other sessions untouched', async () => {
+    const firstPath = await writeFixture('close-first.csv', ['a', '1'].join('\n'));
+    const secondPath = await writeFixture('close-second.csv', ['b', '2'].join('\n'));
+
+    const first = await service.openCsv(firstPath);
+    const second = await service.openCsv(secondPath);
+
+    await service.closeSession(first.sessionId);
+
+    expect(service.getSession(first.sessionId)).toBeNull();
+    expect(service.findSessionByPath(firstPath)).toBeNull();
+    await expect(service.getRows({ sessionId: first.sessionId, offset: 0, limit: 1 })).rejects.toThrow(
+      'CSV session is no longer active',
+    );
+
+    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+    expect(secondRows.filteredRowCount).toBe(1);
+  });
+
+  it('reopens one session without disturbing another open session', async () => {
+    const firstPath = await writeFixture('reopen-isolated-first.txt', ['name|score', 'Ada|10'].join('\n'));
+    const secondPath = await writeFixture('reopen-isolated-second.csv', ['name,score', 'Grace,20'].join('\n'));
+
+    const first = await service.openCsv(firstPath);
+    const second = await service.openCsv(secondPath);
+    const reopenedFirst = await service.reopenSession(first.sessionId, { delimiter: '|' });
+
+    expect(service.getSession(first.sessionId)).toBeNull();
+    expect(service.getSession(reopenedFirst.sessionId)).toEqual(reopenedFirst);
+    expect(service.getSession(second.sessionId)).toEqual(second);
+
+    const reopenedRows = await service.getRows({ sessionId: reopenedFirst.sessionId, offset: 0, limit: 10 });
+    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+
+    expectVisibleRows(reopenedRows.rows).toEqual([{ name: 'Ada', score: '10' }]);
+    expectVisibleRows(secondRows.rows).toEqual([{ name: 'Grace', score: '20' }]);
   });
 
   it('returns bounded row windows without reading the full CSV', async () => {
@@ -1008,7 +1085,7 @@ describe('CsvDataService', () => {
       canUndo: false,
       canRedo: false,
     });
-    expect(service.hasUnsavedChanges()).toBe(false);
+    expect(service.isDirty(session.sessionId)).toBe(false);
   });
 
   it('saves delimiter and header settings from the active dialect', async () => {
@@ -1022,26 +1099,24 @@ describe('CsvDataService', () => {
     await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });
 
-  it('rejects stale sessions and oversized row windows', async () => {
-    const firstPath = await writeFixture('first.csv', ['value', '1'].join('\n'));
-    const secondPath = await writeFixture('second.csv', ['value', '2'].join('\n'));
+  it('rejects unknown sessions and oversized row windows', async () => {
+    const filePath = await writeFixture('windows.csv', ['value', '1'].join('\n'));
 
-    const first = await service.openCsv(firstPath);
-    await service.openCsv(secondPath);
+    const session = await service.openCsv(filePath);
 
-    await expect(service.getRows({ sessionId: first.sessionId, offset: 0, limit: 1 })).rejects.toThrow(
+    await expect(service.getRows({ sessionId: 'unknown-session', offset: 0, limit: 1 })).rejects.toThrow(
       'CSV session is no longer active',
     );
     await expect(
-      service.getRows({ sessionId: service.getActiveSession()?.sessionId ?? '', offset: 0, limit: 1001 }),
+      service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1001 }),
     ).rejects.toThrow('1000 or less');
   });
 
-  it('returns a clear error for missing files without keeping an active session', async () => {
-    await expect(service.openCsv(path.join(tempDir, 'missing.csv'))).rejects.toThrow(
-      'Unable to open CSV',
-    );
-    expect(service.getActiveSession()).toBeNull();
+  it('returns a clear error for missing files without keeping a session', async () => {
+    const missingPath = path.join(tempDir, 'missing.csv');
+
+    await expect(service.openCsv(missingPath)).rejects.toThrow('Unable to open CSV');
+    expect(service.findSessionByPath(missingPath)).toBeNull();
   });
 
   it('validates large-file access through bounded row windows', async () => {

@@ -5,7 +5,8 @@ const api: CsvViewerApi = {
   healthCheck: () => ipcRenderer.invoke(ipcChannels.healthCheck),
   openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
   openRecentCsv: (filePath, options) => ipcRenderer.invoke(ipcChannels.openRecentCsv, filePath, options),
-  reopenCsv: (options) => ipcRenderer.invoke(ipcChannels.reopenCsv, options),
+  reopenCsv: (sessionId, options) => ipcRenderer.invoke(ipcChannels.reopenCsv, sessionId, options),
+  closeCsv: (sessionId) => ipcRenderer.invoke(ipcChannels.closeCsv, sessionId),
   getRecentFiles: () => ipcRenderer.invoke(ipcChannels.getRecentFiles),
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
   getCsvColumnValueCounts: (request) => ipcRenderer.invoke(ipcChannels.getCsvColumnValueCounts, request),
@@ -23,6 +24,10 @@ const api: CsvViewerApi = {
   onReopenCsvRequest: (callback) => {
     ipcRenderer.on(ipcChannels.menuReopenCsv, callback);
     return () => ipcRenderer.removeListener(ipcChannels.menuReopenCsv, callback);
+  },
+  onCloseTabRequest: (callback) => {
+    ipcRenderer.on(ipcChannels.menuCloseTab, callback);
+    return () => ipcRenderer.removeListener(ipcChannels.menuCloseTab, callback);
   },
 };
 

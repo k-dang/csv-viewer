@@ -23,7 +23,7 @@ import type {
 } from '../shared/ipc';
 import { csvInternalRowIdField } from '../shared/ipc';
 
-const tableName = 'active_csv';
+const sessionTablePrefix = 'csv_session_';
 const csvDeletedField = '__csvViewerDeleted';
 const csvSourceOrderField = '__csvViewerSourceOrder';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
@@ -45,17 +45,89 @@ type CsvEditCommand =
       rowId: string;
     };
 
+type CsvSessionState = {
+  metadata: CsvSessionMetadata;
+  connection: DuckDBConnection;
+  tableName: string;
+  undoStack: CsvEditCommand[];
+  redoStack: CsvEditCommand[];
+};
+
 export class CsvDataService {
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
-  private session: CsvSessionMetadata | null = null;
-  private openOperationId = 0;
-  private undoStack: CsvEditCommand[] = [];
-  private redoStack: CsvEditCommand[] = [];
+  private sessions = new Map<string, CsvSessionState>();
 
   async openCsv(filePath: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
-    const operationId = this.openOperationId + 1;
-    this.openOperationId = operationId;
+    if (this.findSessionByPath(filePath)) {
+      throw new Error('CSV file is already open.');
+    }
+
+    const state = await this.createSession(filePath, options);
+    this.sessions.set(state.metadata.sessionId, state);
+    return state.metadata;
+  }
+
+  findSessionByPath(filePath: string): CsvSessionMetadata | null {
+    const normalizedPath = path.resolve(filePath);
+
+    for (const state of this.sessions.values()) {
+      if (path.resolve(state.metadata.file.path) === normalizedPath) {
+        return state.metadata;
+      }
+    }
+
+    return null;
+  }
+
+  getSession(sessionId: string): CsvSessionMetadata | null {
+    return this.sessions.get(sessionId)?.metadata ?? null;
+  }
+
+  async reopenSession(sessionId: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
+    const existing = this.requireSession(sessionId);
+    const state = await this.createSession(existing.metadata.file.path, options);
+    await this.closeSession(sessionId);
+    this.sessions.set(state.metadata.sessionId, state);
+    return state.metadata;
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const state = this.sessions.get(sessionId);
+
+    if (!state) {
+      return;
+    }
+
+    this.sessions.delete(sessionId);
+    await this.dropSessionTable(state.tableName);
+  }
+
+  async closeAllSessions(): Promise<void> {
+    for (const sessionId of [...this.sessions.keys()]) {
+      await this.closeSession(sessionId);
+    }
+
+    this.connection?.closeSync();
+    this.connection = null;
+    this.instance?.closeSync();
+    this.instance = null;
+  }
+
+  isDirty(sessionId: string): boolean {
+    return (this.sessions.get(sessionId)?.undoStack.length ?? 0) > 0;
+  }
+
+  getDirtySessions(): CsvSessionMetadata[] {
+    return [...this.sessions.values()]
+      .filter((state) => state.undoStack.length > 0)
+      .map((state) => state.metadata);
+  }
+
+  private async createSession(
+    filePath: string,
+    options: CsvDialectOptions,
+  ): Promise<CsvSessionState> {
     const dialect = validateDialectOptions(options);
 
     const fileStats = await stat(filePath).catch((error: unknown) => {
@@ -73,8 +145,9 @@ export class CsvDataService {
       );
     }
 
-    const instance = await DuckDBInstance.create(':memory:');
-    const connection = await instance.connect();
+    const connection = await this.getConnection();
+    const sessionId = randomUUID();
+    const tableName = buildSessionTableName(sessionId);
 
     try {
       await connection.run(
@@ -86,11 +159,11 @@ export class CsvDataService {
         )})`,
       );
 
-      const columns = await readColumns(connection);
-      const rowCount = await readRowCount(connection);
+      const columns = await readColumns(connection, tableName);
+      const rowCount = await readRowCount(connection, tableName);
 
-      const session: CsvSessionMetadata = {
-        sessionId: randomUUID(),
+      const metadata: CsvSessionMetadata = {
+        sessionId,
         file: {
           path: filePath,
           name: path.basename(filePath),
@@ -101,53 +174,26 @@ export class CsvDataService {
         dialect,
       };
 
-      if (operationId !== this.openOperationId) {
-        connection.closeSync();
-        instance.closeSync();
-        throw new Error('CSV open was superseded by a newer request.');
-      }
-
-      await this.closeActiveSession();
-      this.instance = instance;
-      this.connection = connection;
-      this.session = session;
-      this.clearEditJournal();
-
-      return session;
+      return {
+        metadata,
+        connection,
+        tableName,
+        undoStack: [],
+        redoStack: [],
+      };
     } catch (error) {
-      connection.closeSync();
-      instance.closeSync();
+      await this.dropSessionTable(tableName);
       throw normalizeOpenError(error);
     }
   }
 
-  getActiveSession(): CsvSessionMetadata | null {
-    return this.session;
-  }
-
-  async reopenActiveCsv(options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
-    if (!this.session) {
-      throw new Error('No active CSV session.');
-    }
-
-    const filePath = this.session.file.path;
-    return this.openCsv(filePath, options);
-  }
-
   getEditState(request: CsvEditStateRequest): CsvEditState {
-    this.assertActiveSession(request.sessionId);
-    return this.buildEditState();
+    return buildEditState(this.requireSession(request.sessionId));
   }
 
   async getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow> {
-    if (!this.session || !this.connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    if (request.sessionId !== this.session.sessionId) {
-      throw new Error('CSV session is no longer active.');
-    }
-
+    const state = this.requireSession(request.sessionId);
+    const connection = this.requireConnection();
     const offset = validateWindowInteger(request.offset, 'offset');
     const limit = validateWindowInteger(request.limit, 'limit');
 
@@ -156,7 +202,8 @@ export class CsvDataService {
     }
 
     const query = buildRowsQuery({
-      columns: this.session.columns,
+      tableName: state.tableName,
+      columns: state.metadata.columns,
       filters: request.filters ?? [],
       search: request.search ?? '',
       sort: request.sort ?? [],
@@ -164,12 +211,12 @@ export class CsvDataService {
       offset,
     });
 
-    const countResult = await this.connection.runAndReadAll(query.countSql, query.values);
-    const rowsResult = await this.connection.runAndReadAll(query.rowsSql, query.values);
+    const countResult = await connection.runAndReadAll(query.countSql, query.values);
+    const rowsResult = await connection.runAndReadAll(query.rowsSql, query.values);
     const [countRow] = countResult.getRowObjectsJS();
 
     return {
-      sessionId: this.session.sessionId,
+      sessionId: state.metadata.sessionId,
       offset,
       filteredRowCount: normalizeCount(countRow.filtered_row_count),
       rows: rowsResult.getRowObjectsJS().map(normalizeRow),
@@ -177,18 +224,15 @@ export class CsvDataService {
   }
 
   async getColumnValueCounts(request: CsvColumnValueCountsRequest): Promise<CsvColumnValueCounts> {
-    this.assertActiveSession(request.sessionId);
-    const connection = this.connection;
-    const session = this.session;
-
-    if (!connection || !session) {
-      throw new Error('No active CSV session.');
-    }
+    const state = this.requireSession(request.sessionId);
+    const connection = this.requireConnection();
+    const { metadata: session } = state;
 
     const knownColumns = new Set(session.columns.map((column) => column.name));
     assertKnownColumn(request.column, knownColumns);
 
     const query = buildColumnValueCountsQuery({
+      tableName: state.tableName,
       columns: session.columns,
       column: request.column,
       filters: request.filters ?? [],
@@ -211,13 +255,8 @@ export class CsvDataService {
   }
 
   async editCell(request: CsvCellEditRequest): Promise<CsvCellEditResult> {
-    this.assertActiveSession(request.sessionId);
-    const connection = this.connection;
-    const session = this.session;
-
-    if (!connection || !session) {
-      throw new Error('No active CSV session.');
-    }
+    const state = this.requireSession(request.sessionId);
+    const session = state.metadata;
 
     const knownColumns = new Set(session.columns.map((column) => column.name));
     assertKnownColumn(request.column, knownColumns);
@@ -226,27 +265,27 @@ export class CsvDataService {
       throw new Error('CSV row identifier is required.');
     }
 
-    const existingValue = await this.readCellValue(request.rowId, request.column);
+    const existingValue = await readCellValue(state, request.rowId, request.column);
 
-    await this.applyCellValue(request.rowId, request.column, request.value);
-    this.undoStack.push({
+    await applyCellValue(state, request.rowId, request.column, request.value);
+    state.undoStack.push({
       type: 'cell-edit',
       rowId: request.rowId,
       column: request.column,
       oldValue: existingValue,
       newValue: request.value,
     });
-    this.redoStack = [];
+    state.redoStack = [];
 
     return {
       rowId: request.rowId,
       column: request.column,
-      ...this.buildEditState(),
+      ...buildEditState(state),
     };
   }
 
   async deleteRows(request: CsvDeleteRowsRequest): Promise<CsvEditState> {
-    this.assertActiveSession(request.sessionId);
+    const state = this.requireSession(request.sessionId);
 
     const rowIds = normalizeRowIds(request.rowIds);
 
@@ -254,16 +293,16 @@ export class CsvDataService {
       throw new Error('At least one CSV row must be selected for deletion.');
     }
 
-    await this.assertRowsExist(rowIds);
-    await this.applyRowDeletion(rowIds, true);
-    this.undoStack.push({ type: 'delete-rows', rowIds });
-    this.redoStack = [];
+    await assertRowsExist(state, rowIds);
+    await applyRowDeletion(state, rowIds, true);
+    state.undoStack.push({ type: 'delete-rows', rowIds });
+    state.redoStack = [];
 
-    return this.buildEditState();
+    return buildEditState(state);
   }
 
   async insertRow(request: CsvInsertRowRequest): Promise<CsvEditState> {
-    this.assertActiveSession(request.sessionId);
+    const state = this.requireSession(request.sessionId);
 
     if (request.hasActiveQuery) {
       throw new Error('CSV rows cannot be inserted while sort, filter, or search is active.');
@@ -279,51 +318,47 @@ export class CsvDataService {
       throw new Error('Insert above or below requires exactly one selected CSV row.');
     }
 
-    const insertedRowId = await this.insertEmptyRow(request.placement, rowIds[0]);
-    this.undoStack.push({ type: 'insert-row', rowId: insertedRowId });
-    this.redoStack = [];
+    const insertedRowId = await insertEmptyRow(state, request.placement, rowIds[0]);
+    state.undoStack.push({ type: 'insert-row', rowId: insertedRowId });
+    state.redoStack = [];
 
-    return this.buildEditState();
+    return buildEditState(state);
   }
 
   async undoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
-    this.assertActiveSession(request.sessionId);
-    const command = this.undoStack.pop();
+    const state = this.requireSession(request.sessionId);
+    const command = state.undoStack.pop();
 
     if (!command) {
       throw new Error('No CSV edit is available to undo.');
     }
 
-    await this.revertCommand(command);
-    this.redoStack.push(command);
-    return this.buildEditState();
+    await revertCommand(state, command);
+    state.redoStack.push(command);
+    return buildEditState(state);
   }
 
   async redoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
-    this.assertActiveSession(request.sessionId);
-    const command = this.redoStack.pop();
+    const state = this.requireSession(request.sessionId);
+    const command = state.redoStack.pop();
 
     if (!command) {
       throw new Error('No CSV edit is available to redo.');
     }
 
-    await this.applyCommand(command);
-    this.undoStack.push(command);
-    return this.buildEditState();
+    await applyCommand(state, command);
+    state.undoStack.push(command);
+    return buildEditState(state);
   }
 
   async saveAs(request: CsvEditStateRequest, filePath: string): Promise<CsvEditState> {
-    this.assertActiveSession(request.sessionId);
-    const connection = this.connection;
-    const session = this.session;
-
-    if (!connection || !session) {
-      throw new Error('No active CSV session.');
-    }
+    const state = this.requireSession(request.sessionId);
+    const connection = this.requireConnection();
+    const { metadata: session } = state;
 
     const rowProjectionSql = session.columns.map((column) => quoteIdentifier(column.name)).join(', ');
     const rowsResult = await connection.runAndReadAll(
-      `SELECT ${rowProjectionSql} FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+      `SELECT ${rowProjectionSql} FROM ${quoteIdentifier(state.tableName)} WHERE ${quoteIdentifier(
         csvDeletedField,
       )} = false ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`,
     );
@@ -344,254 +379,230 @@ export class CsvDataService {
     }
 
     await writeFile(filePath, `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`, 'utf8');
-    this.clearEditJournal();
+    state.undoStack = [];
+    state.redoStack = [];
 
-    return this.buildEditState();
+    return buildEditState(state);
   }
 
-  hasUnsavedChanges(): boolean {
-    return Boolean(this.session && this.undoStack.length > 0);
+  private async getConnection(): Promise<DuckDBConnection> {
+    if (!this.instance) {
+      this.instance = await DuckDBInstance.create(':memory:');
+    }
+
+    if (!this.connection) {
+      this.connection = await this.instance.connect();
+    }
+
+    return this.connection;
   }
 
-  async closeActiveSession(): Promise<void> {
-    this.session = null;
-    this.clearEditJournal();
-
-    if (this.connection) {
-      this.connection.closeSync();
-      this.connection = null;
+  private requireConnection(): DuckDBConnection {
+    if (!this.connection) {
+      throw new Error('CSV data store is not open.');
     }
 
-    if (this.instance) {
-      this.instance.closeSync();
-      this.instance = null;
-    }
+    return this.connection;
   }
 
-  private async readCellValue(rowId: string, column: string): Promise<CsvCellValue> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    const result = await connection.runAndReadAll(
-      `SELECT ${quoteIdentifier(column)} AS cell_value FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
-      [rowId],
-    );
-    const [row] = result.getRowObjectsJS();
-
-    if (!row) {
-      throw new Error('CSV row no longer exists.');
-    }
-
-    return normalizeCellValue(row.cell_value);
-  }
-
-  private async applyCellValue(rowId: string, column: string, value: CsvCellValue): Promise<void> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    await connection.run(
-      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(column)} = ? WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} = ?`,
-      [value, rowId],
-    );
-  }
-
-  private async applyCommand(command: CsvEditCommand): Promise<void> {
-    if (command.type === 'cell-edit') {
-      await this.applyCellValue(command.rowId, command.column, command.newValue);
+  private async dropSessionTable(tableName: string): Promise<void> {
+    if (!this.connection) {
       return;
     }
 
-    if (command.type === 'delete-rows') {
-      await this.applyRowDeletion(command.rowIds, true);
-      return;
-    }
-
-    if (command.type === 'insert-row') {
-      await this.applyRowDeletion([command.rowId], false);
-    }
+    await this.connection.run(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`);
   }
 
-  private async revertCommand(command: CsvEditCommand): Promise<void> {
-    if (command.type === 'cell-edit') {
-      await this.applyCellValue(command.rowId, command.column, command.oldValue);
-      return;
-    }
+  private requireSession(sessionId: string): CsvSessionState {
+    const state = this.sessions.get(sessionId);
 
-    if (command.type === 'delete-rows') {
-      await this.applyRowDeletion(command.rowIds, false);
-      return;
-    }
-
-    if (command.type === 'insert-row') {
-      await this.applyRowDeletion([command.rowId], true);
-    }
-  }
-
-  private async insertEmptyRow(
-    placement: CsvInsertRowRequest['placement'],
-    targetRowId: string | undefined,
-  ): Promise<string> {
-    const connection = this.connection;
-    const session = this.session;
-
-    if (!connection || !session) {
-      throw new Error('No active CSV session.');
-    }
-
-    const insertedRowId = await this.nextRowId();
-    const sourceOrder = await this.resolveInsertionOrder(placement, targetRowId);
-
-    if (placement !== 'append') {
-      await connection.run(
-        `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvSourceOrderField)} = ${quoteIdentifier(
-          csvSourceOrderField,
-        )} + 1 WHERE ${quoteIdentifier(csvSourceOrderField)} >= ?`,
-        [sourceOrder],
-      );
-    }
-
-    const insertColumns = [
-      csvInternalRowIdField,
-      csvSourceOrderField,
-      csvDeletedField,
-      ...session.columns.map((column) => column.name),
-    ];
-    const values = [insertedRowId, sourceOrder, false, ...session.columns.map(() => '')];
-
-    await connection.run(
-      `INSERT INTO ${quoteIdentifier(tableName)} (${insertColumns
-        .map((column) => quoteIdentifier(column))
-        .join(', ')}) VALUES (${buildPlaceholders(insertColumns.length)})`,
-      values,
-    );
-
-    return insertedRowId;
-  }
-
-  private async nextRowId(): Promise<string> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    const result = await connection.runAndReadAll(
-      `SELECT coalesce(max(CAST(${quoteIdentifier(csvInternalRowIdField)} AS BIGINT)), 0)::BIGINT + 1 AS next_row_id FROM ${quoteIdentifier(tableName)}`,
-    );
-    const [row] = result.getRowObjectsJS();
-    return String(row.next_row_id);
-  }
-
-  private async resolveInsertionOrder(
-    placement: CsvInsertRowRequest['placement'],
-    targetRowId: string | undefined,
-  ): Promise<number> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    if (placement === 'append') {
-      const result = await connection.runAndReadAll(
-        `SELECT coalesce(max(${quoteIdentifier(csvSourceOrderField)}), 0)::BIGINT + 1 AS source_order FROM ${quoteIdentifier(tableName)}`,
-      );
-      const [row] = result.getRowObjectsJS();
-      return Number(row.source_order);
-    }
-
-    if (!targetRowId) {
-      throw new Error('CSV row identifier is required for insertion.');
-    }
-
-    const result = await connection.runAndReadAll(
-      `SELECT ${quoteIdentifier(csvSourceOrderField)} AS source_order FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
-      [targetRowId],
-    );
-    const [row] = result.getRowObjectsJS();
-
-    if (!row) {
-      throw new Error(`CSV row no longer exists: ${targetRowId}`);
-    }
-
-    return Number(row.source_order) + (placement === 'below' ? 1 : 0);
-  }
-
-  private async assertRowsExist(rowIds: string[]): Promise<void> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    const result = await connection.runAndReadAll(
-      `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} IN (${buildPlaceholders(rowIds.length)}) AND ${quoteIdentifier(csvDeletedField)} = false`,
-      rowIds,
-    );
-    const foundRowIds = new Set(result.getRowObjectsJS().map((row) => String(row.row_id)));
-    const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
-
-    if (missingRowId) {
-      throw new Error(`CSV row no longer exists: ${missingRowId}`);
-    }
-  }
-
-  private async applyRowDeletion(rowIds: string[], deleted: boolean): Promise<void> {
-    const connection = this.connection;
-
-    if (!connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    await connection.run(
-      `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
-        csvInternalRowIdField,
-      )} IN (${buildPlaceholders(rowIds.length)})`,
-      [deleted, ...rowIds],
-    );
-  }
-
-  private buildEditState(): CsvEditState {
-    if (!this.session) {
-      throw new Error('No active CSV session.');
-    }
-
-    return {
-      sessionId: this.session.sessionId,
-      dirty: this.undoStack.length > 0,
-      canUndo: this.undoStack.length > 0,
-      canRedo: this.redoStack.length > 0,
-    };
-  }
-
-  private clearEditJournal(): void {
-    this.undoStack = [];
-    this.redoStack = [];
-  }
-
-  private assertActiveSession(sessionId: string): void {
-    if (!this.session || !this.connection) {
-      throw new Error('No active CSV session.');
-    }
-
-    if (sessionId !== this.session.sessionId) {
+    if (!state) {
       throw new Error('CSV session is no longer active.');
     }
+
+    return state;
   }
+}
+
+async function readCellValue(
+  state: CsvSessionState,
+  rowId: string,
+  column: string,
+): Promise<CsvCellValue> {
+  const result = await state.connection.runAndReadAll(
+    `SELECT ${quoteIdentifier(column)} AS cell_value FROM ${quoteIdentifier(state.tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
+    [rowId],
+  );
+  const [row] = result.getRowObjectsJS();
+
+  if (!row) {
+    throw new Error('CSV row no longer exists.');
+  }
+
+  return normalizeCellValue(row.cell_value);
+}
+
+async function applyCellValue(
+  state: CsvSessionState,
+  rowId: string,
+  column: string,
+  value: CsvCellValue,
+): Promise<void> {
+  await state.connection.run(
+    `UPDATE ${quoteIdentifier(state.tableName)} SET ${quoteIdentifier(column)} = ? WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ?`,
+    [value, rowId],
+  );
+}
+
+async function applyCommand(state: CsvSessionState, command: CsvEditCommand): Promise<void> {
+  if (command.type === 'cell-edit') {
+    await applyCellValue(state, command.rowId, command.column, command.newValue);
+    return;
+  }
+
+  if (command.type === 'delete-rows') {
+    await applyRowDeletion(state, command.rowIds, true);
+    return;
+  }
+
+  if (command.type === 'insert-row') {
+    await applyRowDeletion(state, [command.rowId], false);
+  }
+}
+
+async function revertCommand(state: CsvSessionState, command: CsvEditCommand): Promise<void> {
+  if (command.type === 'cell-edit') {
+    await applyCellValue(state, command.rowId, command.column, command.oldValue);
+    return;
+  }
+
+  if (command.type === 'delete-rows') {
+    await applyRowDeletion(state, command.rowIds, false);
+    return;
+  }
+
+  if (command.type === 'insert-row') {
+    await applyRowDeletion(state, [command.rowId], true);
+  }
+}
+
+async function insertEmptyRow(
+  state: CsvSessionState,
+  placement: CsvInsertRowRequest['placement'],
+  targetRowId: string | undefined,
+): Promise<string> {
+  const { connection, metadata: session } = state;
+  const insertedRowId = await nextRowId(state);
+  const sourceOrder = await resolveInsertionOrder(state, placement, targetRowId);
+
+  if (placement !== 'append') {
+    await connection.run(
+      `UPDATE ${quoteIdentifier(state.tableName)} SET ${quoteIdentifier(csvSourceOrderField)} = ${quoteIdentifier(
+        csvSourceOrderField,
+      )} + 1 WHERE ${quoteIdentifier(csvSourceOrderField)} >= ?`,
+      [sourceOrder],
+    );
+  }
+
+  const insertColumns = [
+    csvInternalRowIdField,
+    csvSourceOrderField,
+    csvDeletedField,
+    ...session.columns.map((column) => column.name),
+  ];
+  const values = [insertedRowId, sourceOrder, false, ...session.columns.map(() => '')];
+
+  await connection.run(
+    `INSERT INTO ${quoteIdentifier(state.tableName)} (${insertColumns
+      .map((column) => quoteIdentifier(column))
+      .join(', ')}) VALUES (${buildPlaceholders(insertColumns.length)})`,
+    values,
+  );
+
+  return insertedRowId;
+}
+
+async function nextRowId(state: CsvSessionState): Promise<string> {
+  const result = await state.connection.runAndReadAll(
+    `SELECT coalesce(max(CAST(${quoteIdentifier(csvInternalRowIdField)} AS BIGINT)), 0)::BIGINT + 1 AS next_row_id FROM ${quoteIdentifier(state.tableName)}`,
+  );
+  const [row] = result.getRowObjectsJS();
+  return String(row.next_row_id);
+}
+
+async function resolveInsertionOrder(
+  state: CsvSessionState,
+  placement: CsvInsertRowRequest['placement'],
+  targetRowId: string | undefined,
+): Promise<number> {
+  const connection = state.connection;
+
+  if (placement === 'append') {
+    const result = await connection.runAndReadAll(
+      `SELECT coalesce(max(${quoteIdentifier(csvSourceOrderField)}), 0)::BIGINT + 1 AS source_order FROM ${quoteIdentifier(state.tableName)}`,
+    );
+    const [row] = result.getRowObjectsJS();
+    return Number(row.source_order);
+  }
+
+  if (!targetRowId) {
+    throw new Error('CSV row identifier is required for insertion.');
+  }
+
+  const result = await connection.runAndReadAll(
+    `SELECT ${quoteIdentifier(csvSourceOrderField)} AS source_order FROM ${quoteIdentifier(state.tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
+    [targetRowId],
+  );
+  const [row] = result.getRowObjectsJS();
+
+  if (!row) {
+    throw new Error(`CSV row no longer exists: ${targetRowId}`);
+  }
+
+  return Number(row.source_order) + (placement === 'below' ? 1 : 0);
+}
+
+async function assertRowsExist(state: CsvSessionState, rowIds: string[]): Promise<void> {
+  const result = await state.connection.runAndReadAll(
+    `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(state.tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} IN (${buildPlaceholders(rowIds.length)}) AND ${quoteIdentifier(csvDeletedField)} = false`,
+    rowIds,
+  );
+  const foundRowIds = new Set(result.getRowObjectsJS().map((row) => String(row.row_id)));
+  const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
+
+  if (missingRowId) {
+    throw new Error(`CSV row no longer exists: ${missingRowId}`);
+  }
+}
+
+async function applyRowDeletion(
+  state: CsvSessionState,
+  rowIds: string[],
+  deleted: boolean,
+): Promise<void> {
+  await state.connection.run(
+    `UPDATE ${quoteIdentifier(state.tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} IN (${buildPlaceholders(rowIds.length)})`,
+    [deleted, ...rowIds],
+  );
+}
+
+function buildEditState(state: CsvSessionState): CsvEditState {
+  return {
+    sessionId: state.metadata.sessionId,
+    dirty: state.undoStack.length > 0,
+    canUndo: state.undoStack.length > 0,
+    canRedo: state.redoStack.length > 0,
+  };
 }
 
 function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
@@ -676,6 +687,7 @@ type ColumnValueCountsQuery = {
 };
 
 function buildRowsQuery({
+  tableName,
   columns,
   filters,
   search,
@@ -683,6 +695,7 @@ function buildRowsQuery({
   limit,
   offset,
 }: {
+  tableName: string;
   columns: CsvColumn[];
   filters: CsvFilterDescriptor[];
   search: string;
@@ -711,11 +724,13 @@ function buildRowsQuery({
 }
 
 function buildColumnValueCountsQuery({
+  tableName,
   columns,
   column,
   filters,
   search,
 }: {
+  tableName: string;
   columns: CsvColumn[];
   column: string;
   filters: CsvFilterDescriptor[];
@@ -934,7 +949,11 @@ function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
+function buildSessionTableName(sessionId: string): string {
+  return `${sessionTablePrefix}${sessionId.replaceAll('-', '_')}`;
+}
+
+async function readColumns(connection: DuckDBConnection, tableName: string): Promise<CsvColumn[]> {
   const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`);
   return result
     .getRowObjectsJS()
@@ -945,7 +964,7 @@ async function readColumns(connection: DuckDBConnection): Promise<CsvColumn[]> {
     }));
 }
 
-async function readRowCount(connection: DuckDBConnection): Promise<number> {
+async function readRowCount(connection: DuckDBConnection, tableName: string): Promise<number> {
   const result = await connection.runAndReadAll(
     `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false`,
   );
