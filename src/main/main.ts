@@ -7,11 +7,11 @@ import {
   session,
   type BrowserWindowConstructorOptions,
   type MessageBoxOptions,
-  type MenuItemConstructorOptions,
   type SaveDialogOptions,
 } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { buildApplicationMenuTemplate } from './application-menu';
 import { CsvDataService } from './csv-data-service';
 import {
   ipcChannels,
@@ -113,84 +113,23 @@ function createWindow() {
 }
 
 function createApplicationMenu() {
-  const fileMenu: MenuItemConstructorOptions = {
-    label: 'File',
-    submenu: [
-      {
-        label: 'Open CSV...',
-        accelerator: 'CmdOrCtrl+O',
-        click: () => {
-          sendMenuRequest(ipcChannels.menuOpenCsv);
-        },
-      },
-      {
-        label: 'Reopen CSV',
-        accelerator: 'CmdOrCtrl+R',
-        click: () => {
-          sendMenuRequest(ipcChannels.menuReopenCsv);
-        },
-      },
-      {
-        label: 'Close Tab',
-        accelerator: 'CmdOrCtrl+W',
-        click: () => {
-          sendMenuRequest(ipcChannels.menuCloseTab);
-        },
-      },
-      { type: 'separator' },
-      process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
-    ],
-  };
-
-  const viewMenu: MenuItemConstructorOptions = {
-    label: 'View',
-    submenu: [
-      { role: 'reload' },
-      ...(isDevelopment ? ([{ role: 'toggleDevTools' }, { type: 'separator' }] as MenuItemConstructorOptions[]) : []),
-      { role: 'resetZoom' },
-      { role: 'zoomIn' },
-      { role: 'zoomOut' },
-      { type: 'separator' },
-      { role: 'togglefullscreen' },
-    ],
-  };
-
-  const windowMenu: MenuItemConstructorOptions = {
-    label: 'Window',
-    submenu: [{ role: 'minimize' }, { role: 'close' }],
-  };
-
-  const helpMenu: MenuItemConstructorOptions = {
-    label: 'Help',
-    submenu: [
-      {
-        label: 'About CSV Viewer',
-        click: () => {
-          const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          void dialog.showMessageBox(ownerWindow, {
-            type: 'info',
-            title: 'About CSV Viewer',
-            message: 'CSV Viewer',
-            detail: 'A desktop viewer for opening, inspecting, filtering, and sorting CSV-style files.',
-          });
-        },
-      },
-    ],
-  };
-
-  const template: MenuItemConstructorOptions[] =
-    process.platform === 'darwin'
-      ? [
-          {
-            label: app.name,
-            submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit' }],
-          },
-          fileMenu,
-          viewMenu,
-          windowMenu,
-          helpMenu,
-        ]
-      : [fileMenu, viewMenu, windowMenu, helpMenu];
+  const template = buildApplicationMenuTemplate({
+    platform: process.platform,
+    appName: app.name,
+    isDevelopment,
+    onOpenCsv: () => sendMenuRequest(ipcChannels.menuOpenCsv),
+    onReopenCsv: () => sendMenuRequest(ipcChannels.menuReopenCsv),
+    onCloseTab: () => sendMenuRequest(ipcChannels.menuCloseTab),
+    onAbout: () => {
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      void dialog.showMessageBox(ownerWindow, {
+        type: 'info',
+        title: 'About CSV Viewer',
+        message: 'CSV Viewer',
+        detail: 'A desktop viewer for opening, inspecting, filtering, and sorting CSV-style files.',
+      });
+    },
+  });
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
