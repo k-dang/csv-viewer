@@ -12,9 +12,18 @@ import {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
-import { CsvDataService } from './csv-data-service';
+import { CsvWorkspace, type CloseImpact } from './csv-workspace';
 import {
   ipcChannels,
+  type BeginComparisonRequest,
+  type BeginComparisonResult,
+  type CancelComparisonResult,
+  type ComparisonCandidate,
+  type ComparisonEvent,
+  type ComparisonMutationOutcome,
+  type ComparisonView,
+  type ComparisonWindowOutcome,
+  type ComparisonWindowRequest,
   type CsvCellEditRequest,
   type CsvCellEditResult,
   type CsvCloseResult,
@@ -35,7 +44,9 @@ import {
 } from '../shared/ipc';
 
 const electronRoot = __dirname;
-const csvDataService = new CsvDataService();
+const workspace = new CsvWorkspace();
+const csvDataService = workspace.csvs;
+const csvComparisonService = workspace.comparisons;
 const maxRecentFiles = 8;
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -153,22 +164,25 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle(ipcChannels.openCsv, async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
-    const result = await dialog.showOpenDialog({
-      title: 'Open CSV',
-      properties: ['openFile'],
-      filters: [
-        { name: 'CSV files', extensions: ['csv', 'tsv', 'txt'] },
-        { name: 'All files', extensions: ['*'] },
-      ],
-    });
+  ipcMain.handle(
+    ipcChannels.openCsv,
+    async (_event, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+      const result = await dialog.showOpenDialog({
+        title: 'Open CSV',
+        properties: ['openFile'],
+        filters: [
+          { name: 'CSV files', extensions: ['csv', 'tsv', 'txt'] },
+          { name: 'All files', extensions: ['*'] },
+        ],
+      });
 
-    if (result.canceled || result.filePaths.length === 0) {
-      return { status: 'cancelled' };
-    }
+      if (result.canceled || result.filePaths.length === 0) {
+        return { status: 'cancelled' };
+      }
 
-    return openCsvAsTab(result.filePaths[0], options);
-  });
+      return openCsvAsTab(result.filePaths[0], options);
+    },
+  );
 
   ipcMain.handle(
     ipcChannels.openRecentCsv,
@@ -205,23 +219,59 @@ function registerIpcHandlers() {
     ipcChannels.closeCsv,
     async (_event, sessionId: string): Promise<CsvCloseResult> => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      const existing = csvDataService.getSession(sessionId);
-
-      if (!existing) {
-        return { status: 'closed' };
+      let outcome = await workspace.closeCsv(sessionId);
+      while (outcome.status === 'confirmation-required') {
+        const canContinue = await confirmCloseImpact(ownerWindow, outcome.impact);
+        if (!canContinue) return { status: 'cancelled' };
+        outcome = await workspace.closeCsv(sessionId, outcome.impact);
       }
-
-      if (csvDataService.isDirty(sessionId)) {
-        const canContinue = await confirmDiscardChanges(ownerWindow, [existing.file.name]);
-
-        if (!canContinue) {
-          return { status: 'cancelled' };
-        }
-      }
-
-      await csvDataService.closeSession(sessionId);
-      return { status: 'closed' };
+      if (outcome.status === 'failed') throw new Error(outcome.message);
+      return outcome;
     },
+  );
+
+  ipcMain.handle(
+    ipcChannels.getComparisonCandidates,
+    (_event, baselineId: string): ComparisonCandidate[] =>
+      csvComparisonService.candidatesFor(baselineId),
+  );
+
+  ipcMain.handle(ipcChannels.openComparison, (_event, baselineId: string, candidateId: string) =>
+    csvComparisonService.open({ baselineId, candidateId }),
+  );
+
+  ipcMain.handle(
+    ipcChannels.getComparisonState,
+    (_event, comparisonId: string): ComparisonView | null =>
+      csvComparisonService.getState(comparisonId),
+  );
+
+  ipcMain.handle(
+    ipcChannels.beginComparison,
+    (_event, request: BeginComparisonRequest): BeginComparisonResult =>
+      csvComparisonService.begin(request),
+  );
+
+  ipcMain.handle(
+    ipcChannels.cancelComparison,
+    (_event, comparisonId: string, operationId: string): CancelComparisonResult =>
+      csvComparisonService.cancel(comparisonId, operationId),
+  );
+
+  ipcMain.handle(
+    ipcChannels.getComparisonWindow,
+    async (_event, request: ComparisonWindowRequest): Promise<ComparisonWindowOutcome> =>
+      csvComparisonService.getWindow(request),
+  );
+
+  ipcMain.handle(
+    ipcChannels.swapComparison,
+    (_event, comparisonId: string): ComparisonMutationOutcome =>
+      csvComparisonService.swap(comparisonId),
+  );
+
+  ipcMain.handle(ipcChannels.closeComparison, async (_event, comparisonId: string) =>
+    csvComparisonService.close(comparisonId),
   );
 
   ipcMain.handle(ipcChannels.getRecentFiles, async (): Promise<RecentCsvFile[]> => {
@@ -333,6 +383,34 @@ async function confirmDiscardChanges(
   return result.response === 0;
 }
 
+async function confirmCloseImpact(
+  ownerWindow: BrowserWindow | undefined,
+  impact: CloseImpact,
+): Promise<boolean> {
+  if (impact.dependentComparisons.length === 0) {
+    return confirmDiscardChanges(ownerWindow, [impact.fileName]);
+  }
+  const dependentNames = impact.dependentComparisons.map(
+    (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
+  );
+  const messageOptions: MessageBoxOptions = {
+    type: 'warning',
+    title: 'Close CSV and comparisons',
+    message: `Close ${impact.fileName} and ${dependentNames.length} dependent Comparison ${dependentNames.length === 1 ? 'Tab' : 'Tabs'}?`,
+    detail: impact.dirty
+      ? `The dependent comparisons below will close and unsaved CSV edits will be lost:\n${dependentNames.join('\n')}`
+      : `These dependent Comparison Tabs will also close:\n${dependentNames.join('\n')}`,
+    buttons: ['Close CSV and comparisons', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = ownerWindow
+    ? await dialog.showMessageBox(ownerWindow, messageOptions)
+    : await dialog.showMessageBox(messageOptions);
+  return result.response === 0;
+}
+
 async function saveCsvAsForSession(
   ownerWindow: BrowserWindow | undefined,
   request: CsvSaveAsRequest,
@@ -430,6 +508,11 @@ app.whenReady().then(() => {
   registerContentSecurityPolicy();
   createApplicationMenu();
   registerIpcHandlers();
+  csvComparisonService.subscribe((event: ComparisonEvent) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send(ipcChannels.comparisonStateChanged, event);
+    }
+  });
   createWindow();
 
   app.on('activate', () => {
@@ -445,6 +528,28 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  void csvDataService.closeAllSessions();
+let workspaceDisposed = false;
+let workspaceDisposalStarted = false;
+const workspaceDisposalAttempts = 2;
+
+app.on('before-quit', (event) => {
+  if (workspaceDisposed) return;
+  event.preventDefault();
+  if (workspaceDisposalStarted) return;
+  workspaceDisposalStarted = true;
+  void disposeWorkspaceBeforeQuit();
 });
+
+async function disposeWorkspaceBeforeQuit(): Promise<void> {
+  for (let attempt = 1; attempt <= workspaceDisposalAttempts; attempt += 1) {
+    try {
+      await workspace.dispose();
+      workspaceDisposed = true;
+      app.quit();
+      return;
+    } catch (error) {
+      console.error(`Workspace disposal attempt ${attempt} failed.`, error);
+    }
+  }
+  app.exit(1);
+}

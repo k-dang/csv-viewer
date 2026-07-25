@@ -226,6 +226,40 @@
   padding: 10px 14px;
 }
 
+.comparison-grid-frame {
+  height: 100%;
+  min-height: 0;
+}
+
+.comparison-grid-frame .ag-root-wrapper {
+  border: 0;
+}
+
+.comparison-classification {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-transform: capitalize;
+}
+
+.comparison-classification--changed {
+  color: var(--primary);
+}
+
+.comparison-result-cell--changed {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.comparison-cell--changed-baseline {
+  background: color-mix(in srgb, #e11d48 13%, transparent);
+  box-shadow: inset 3px 0 #e11d48;
+}
+
+.comparison-cell--changed-candidate {
+  background: color-mix(in srgb, #059669 13%, transparent);
+  box-shadow: inset 3px 0 #059669;
+}
+
 .csv-cell-empty {
   color: oklch(0.47 0.1 245);
   font-style: italic;

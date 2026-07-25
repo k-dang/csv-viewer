@@ -4,6 +4,7 @@ import { createCsvGridDataSource } from './csv-grid-data-source';
 
 const session: CsvSessionMetadata = {
   sessionId: 'session-1',
+  dataRevision: 0,
   file: {
     path: 'C:\\data\\people.csv',
     name: 'people.csv',

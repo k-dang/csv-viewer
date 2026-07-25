@@ -20,12 +20,36 @@ import {
   type GridReadyEvent,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
-import { ArrowDown, ArrowUp, BarChart3, Database, HardDrive, Plus, Redo2, RotateCcw, Save, Search, Table2, Trash2, Undo2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  BarChart3,
+  Database,
+  HardDrive,
+  Plus,
+  Redo2,
+  RotateCcw,
+  Save,
+  Search,
+  Table2,
+  Trash2,
+  Undo2,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { CsvCellValue, CsvEditState, CsvFilterDescriptor, CsvRow, CsvSessionMetadata } from '../../shared/ipc';
+import type {
+  CsvCellValue,
+  CsvEditState,
+  CsvFilterDescriptor,
+  CsvRow,
+  CsvSessionMetadata,
+} from '../../shared/ipc';
 import { csvInternalRowIdField } from '../../shared/ipc';
-import { createCsvGridDataSource, toCsvFilterDescriptors, type AgFilterModel } from './csv-grid-data-source';
+import {
+  createCsvGridDataSource,
+  toCsvFilterDescriptors,
+  type AgFilterModel,
+} from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
@@ -51,7 +75,8 @@ const csvGridLightTheme = themeQuartz.withParams({
   browserColorScheme: 'light',
   cellFontSize: 13,
   chromeBackgroundColor: '#f8fafc',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily:
+    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontSize: 13,
   foregroundColor: '#0f172a',
   headerBackgroundColor: '#f1f5f9',
@@ -74,7 +99,8 @@ const csvGridDarkTheme = themeQuartz.withParams({
   browserColorScheme: 'dark',
   cellFontSize: 13,
   chromeBackgroundColor: '#202020',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily:
+    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontSize: 13,
   foregroundColor: '#f5f5f5',
   headerBackgroundColor: '#262626',
@@ -173,7 +199,7 @@ export function CsvGrid({
     setStatsFilters([]);
     setStatsRefreshKey((current) => current + 1);
     void refreshEditState();
-  }, [session.sessionId]);
+  }, [session.dataRevision, session.sessionId]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
@@ -424,143 +450,158 @@ export function CsvGrid({
 
   return (
     <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card shadow-sm">
-      <div className="flex min-h-[64px] flex-col gap-3 border-b bg-card/90 px-[18px] py-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground" aria-hidden="true">
-            <Database className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <h2 id="metadata-title" className="truncate text-base font-semibold text-foreground" title={session.file.name}>
-              {session.file.name}
-            </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-              <span>{formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)} rows</span>
-              <span className="inline-flex items-center gap-1.5">
-                <Table2 className="size-3.5" aria-hidden="true" />
-                {formatNumber(session.columns.length)} columns
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <HardDrive className="size-3.5" aria-hidden="true" />
-                {formatFileSize(session.file.sizeBytes)}
-              </span>
-              {editState.dirty ? (
-                <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
-                  Unsaved changes
+      <div>
+        <div className="flex min-h-[64px] flex-col gap-3 border-b bg-card/90 px-[18px] py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
+              aria-hidden="true"
+            >
+              <Database className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <h2
+                id="metadata-title"
+                className="truncate text-base font-semibold text-foreground"
+                title={session.file.name}
+              >
+                {session.file.name}
+              </h2>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                <span>
+                  {formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)}{' '}
+                  rows
                 </span>
-              ) : null}
+                <span className="inline-flex items-center gap-1.5">
+                  <Table2 className="size-3.5" aria-hidden="true" />
+                  {formatNumber(session.columns.length)} columns
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <HardDrive className="size-3.5" aria-hidden="true" />
+                  {formatFileSize(session.file.sizeBytes)}
+                </span>
+                {editState.dirty ? (
+                  <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+                    Unsaved changes
+                  </span>
+                ) : null}
+              </div>
+              {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
             </div>
-            {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
           </div>
-        </div>
-        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-          <QueryStatusBadge state={queryState} />
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void insertRow('above')}
-              disabled={!canInsertRelative}
-              title="Insert row above"
-              aria-label="Insert row above"
-            >
-              <ArrowUp />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void insertRow('below')}
-              disabled={!canInsertRelative}
-              title="Insert row below"
-              aria-label="Insert row below"
-            >
-              <ArrowDown />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void insertRow('append')}
-              disabled={!canAppendRow}
-              title="Append row"
-              aria-label="Append row"
-            >
-              <Plus />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void deleteSelectedRows()}
-              disabled={selectedRowIds.length === 0}
-              title="Delete selected rows"
-              aria-label="Delete selected rows"
-            >
-              <Trash2 />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void saveAs()}
-              disabled={!editState.dirty}
-              title="Save CSV as"
-              aria-label="Save CSV as"
-            >
-              <Save />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void runHistoryAction('undo')}
-              disabled={!editState.canUndo}
-              title="Undo edit"
-              aria-label="Undo edit"
-            >
-              <Undo2 />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void runHistoryAction('redo')}
-              disabled={!editState.canRedo}
-              title="Redo edit"
-              aria-label="Redo edit"
-            >
-              <Redo2 />
-            </Button>
-            <Button
-              type="button"
-              variant={statsPanelOpen ? 'default' : 'outline'}
-              size="icon"
-              onClick={toggleStatsPanel}
-              title={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
-              aria-label={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
-            >
-              <BarChart3 />
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+            <QueryStatusBadge state={queryState} />
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void insertRow('above')}
+                disabled={!canInsertRelative}
+                title="Insert row above"
+                aria-label="Insert row above"
+              >
+                <ArrowUp />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void insertRow('below')}
+                disabled={!canInsertRelative}
+                title="Insert row below"
+                aria-label="Insert row below"
+              >
+                <ArrowDown />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void insertRow('append')}
+                disabled={!canAppendRow}
+                title="Append row"
+                aria-label="Append row"
+              >
+                <Plus />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void deleteSelectedRows()}
+                disabled={selectedRowIds.length === 0}
+                title="Delete selected rows"
+                aria-label="Delete selected rows"
+              >
+                <Trash2 />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void saveAs()}
+                disabled={!editState.dirty}
+                title="Save CSV as"
+                aria-label="Save CSV as"
+              >
+                <Save />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void runHistoryAction('undo')}
+                disabled={!editState.canUndo}
+                title="Undo edit"
+                aria-label="Undo edit"
+              >
+                <Undo2 />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => void runHistoryAction('redo')}
+                disabled={!editState.canRedo}
+                title="Redo edit"
+                aria-label="Redo edit"
+              >
+                <Redo2 />
+              </Button>
+              <Button
+                type="button"
+                variant={statsPanelOpen ? 'default' : 'outline'}
+                size="icon"
+                onClick={toggleStatsPanel}
+                title={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
+                aria-label={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
+              >
+                <BarChart3 />
+              </Button>
+            </div>
+            <label className="sr-only" htmlFor="global-search">
+              Global search
+            </label>
+            <div className="relative min-w-0 sm:w-[270px]">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                id="global-search"
+                className="w-full min-w-0 bg-card pr-3 pl-9"
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search all columns"
+              />
+            </div>
+            <Button type="button" variant="outline" onClick={clearQuery} disabled={!canClearQuery}>
+              <RotateCcw />
+              Clear query
             </Button>
           </div>
-          <label className="sr-only" htmlFor="global-search">
-            Global search
-          </label>
-          <div className="relative min-w-0 sm:w-[270px]">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="global-search"
-              className="w-full min-w-0 bg-card pr-3 pl-9"
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search all columns"
-            />
-          </div>
-          <Button type="button" variant="outline" onClick={clearQuery} disabled={!canClearQuery}>
-            <RotateCcw />
-            Clear query
-          </Button>
         </div>
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
@@ -579,7 +620,12 @@ export function CsvGrid({
             cacheBlockSize={100}
             maxBlocksInCache={6}
             rowBuffer={8}
-            rowSelection={{ mode: 'multiRow', enableClickSelection: true, checkboxes: false, headerCheckbox: false }}
+            rowSelection={{
+              mode: 'multiRow',
+              enableClickSelection: true,
+              checkboxes: false,
+              headerCheckbox: false,
+            }}
             enableCellTextSelection
             ensureDomOrder
             suppressDragLeaveHidesColumns
@@ -626,7 +672,11 @@ function getCsvFilters(api: GridApi<CsvRow>): CsvFilterDescriptor[] {
 }
 
 function getColumnFilter(columnType: string): string {
-  if (/^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|FLOAT|DOUBLE|DECIMAL)/i.test(columnType)) {
+  if (
+    /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|FLOAT|DOUBLE|DECIMAL)/i.test(
+      columnType,
+    )
+  ) {
     return 'agNumberColumnFilter';
   }
 
