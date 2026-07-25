@@ -4,12 +4,26 @@ import { type CsvViewerApi, ipcChannels } from '../shared/ipc';
 const api: CsvViewerApi = {
   healthCheck: () => ipcRenderer.invoke(ipcChannels.healthCheck),
   openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
-  openRecentCsv: (filePath, options) => ipcRenderer.invoke(ipcChannels.openRecentCsv, filePath, options),
+  openRecentCsv: (filePath, options) =>
+    ipcRenderer.invoke(ipcChannels.openRecentCsv, filePath, options),
   reopenCsv: (sessionId, options) => ipcRenderer.invoke(ipcChannels.reopenCsv, sessionId, options),
   closeCsv: (sessionId) => ipcRenderer.invoke(ipcChannels.closeCsv, sessionId),
+  getComparisonCandidates: (baselineId) =>
+    ipcRenderer.invoke(ipcChannels.getComparisonCandidates, baselineId),
+  openComparison: (baselineId, candidateId) =>
+    ipcRenderer.invoke(ipcChannels.openComparison, baselineId, candidateId),
+  getComparisonState: (comparisonId) =>
+    ipcRenderer.invoke(ipcChannels.getComparisonState, comparisonId),
+  beginComparison: (request) => ipcRenderer.invoke(ipcChannels.beginComparison, request),
+  cancelComparison: (comparisonId, operationId) =>
+    ipcRenderer.invoke(ipcChannels.cancelComparison, comparisonId, operationId),
+  getComparisonWindow: (request) => ipcRenderer.invoke(ipcChannels.getComparisonWindow, request),
+  swapComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.swapComparison, comparisonId),
+  closeComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.closeComparison, comparisonId),
   getRecentFiles: () => ipcRenderer.invoke(ipcChannels.getRecentFiles),
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
-  getCsvColumnValueCounts: (request) => ipcRenderer.invoke(ipcChannels.getCsvColumnValueCounts, request),
+  getCsvColumnValueCounts: (request) =>
+    ipcRenderer.invoke(ipcChannels.getCsvColumnValueCounts, request),
   editCsvCell: (request) => ipcRenderer.invoke(ipcChannels.editCsvCell, request),
   deleteCsvRows: (request) => ipcRenderer.invoke(ipcChannels.deleteCsvRows, request),
   insertCsvRow: (request) => ipcRenderer.invoke(ipcChannels.insertCsvRow, request),
@@ -28,6 +42,12 @@ const api: CsvViewerApi = {
   onCloseTabRequest: (callback) => {
     ipcRenderer.on(ipcChannels.menuCloseTab, callback);
     return () => ipcRenderer.removeListener(ipcChannels.menuCloseTab, callback);
+  },
+  onComparisonEvent: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: Parameters<typeof callback>[0]) =>
+      callback(value);
+    ipcRenderer.on(ipcChannels.comparisonStateChanged, listener);
+    return () => ipcRenderer.removeListener(ipcChannels.comparisonStateChanged, listener);
   },
 };
 

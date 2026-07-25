@@ -1,31 +1,35 @@
-import { X } from 'lucide-react';
+import { ArrowLeftRight, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { CsvSessionMetadata } from '../../shared/ipc';
+import type { ComparisonView, CsvSessionMetadata } from '../../shared/ipc';
+
+export type OpenRendererTab =
+  | { kind: 'csv'; id: string; csv: CsvSessionMetadata }
+  | { kind: 'comparison'; id: string; comparison: ComparisonView };
 
 export function TabStrip({
   tabs,
-  activeSessionId,
+  activeTabId,
   dirtySessionIds,
   onSelectTab,
   onCloseTab,
 }: {
-  tabs: CsvSessionMetadata[];
-  activeSessionId: string | null;
+  tabs: OpenRendererTab[];
+  activeTabId: string | null;
   dirtySessionIds: ReadonlySet<string>;
-  onSelectTab: (sessionId: string) => void;
-  onCloseTab: (sessionId: string) => void;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tab: OpenRendererTab) => void;
 }) {
   return (
     <Tabs
-      value={activeSessionId ?? undefined}
+      value={activeTabId ?? undefined}
       onValueChange={onSelectTab}
       className="gap-0 border-b bg-muted/40"
     >
       <TabsList
-        aria-label="Open CSV files"
+        aria-label="Open CSV and Comparison Tabs"
         variant="line"
         className="h-auto max-w-full justify-start overflow-x-auto rounded-none px-3 pt-1.5 pb-0"
         onWheel={(event) => {
@@ -34,29 +38,43 @@ export function TabStrip({
           }
         }}
       >
-        {tabs.map((session) => {
-          const isActive = session.sessionId === activeSessionId;
-          const isDirty = dirtySessionIds.has(session.sessionId);
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTabId;
+          const isCsv = tab.kind === 'csv';
+          const label = isCsv
+            ? tab.csv.file.name
+            : `${tab.comparison.baseline.file.name} ⇄ ${tab.comparison.candidate.file.name}`;
+          const isDirty = isCsv && dirtySessionIds.has(tab.csv.sessionId);
+          const isOutdated = !isCsv && tab.comparison.applied?.freshness.kind === 'outdated';
 
           return (
             <div
-              key={session.sessionId}
-              title={session.file.path}
+              key={tab.id}
+              title={isCsv ? tab.csv.file.path : label}
               className={cn(
                 'group flex max-w-56 shrink-0 flex-none items-center rounded-t-md border border-b-0',
                 isActive ? 'bg-background text-foreground' : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
               <TabsTrigger
-                value={session.sessionId}
+                value={tab.id}
                 className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
-                <span className="truncate">{session.file.name}</span>
+                {!isCsv ? <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+                <span className="truncate">{label}</span>
                 {isDirty ? (
                   <Badge
+                    role="img"
                     variant="secondary"
                     className="size-1.5 shrink-0 rounded-full p-0"
                     aria-label="Unsaved changes"
+                  />
+                ) : null}
+                {isOutdated ? (
+                  <Badge
+                    role="img"
+                    className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0"
+                    aria-label="Outdated comparison"
                   />
                 ) : null}
               </TabsTrigger>
@@ -64,9 +82,9 @@ export function TabStrip({
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                aria-label={`Close ${session.file.name}`}
+                aria-label={`Close ${label}`}
                 className={cn('mr-1 shrink-0', isActive ? '' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')}
-                onClick={() => onCloseTab(session.sessionId)}
+                onClick={() => onCloseTab(tab)}
               >
                 <X className="size-3.5" />
               </Button>

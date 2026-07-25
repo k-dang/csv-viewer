@@ -13,19 +13,26 @@ import type {
   CsvDialectOptions,
   CsvEditState,
   CsvEditStateRequest,
-  CsvFilterDescriptor,
   CsvInsertRowRequest,
   CsvRow,
   CsvRowWindow,
   CsvRowWindowRequest,
-  CsvSortDescriptor,
   CsvSessionMetadata,
 } from '../shared/ipc';
 import { csvInternalRowIdField } from '../shared/ipc';
+import type { ComparisonExecutor } from './comparison-executor';
+import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
+import {
+  assertKnownColumn,
+  buildColumnValueCountsQuery,
+  buildRowsQuery,
+  normalizeCellValue,
+  normalizeCount,
+  quoteIdentifier,
+} from './csv-query';
+import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 
 const sessionTablePrefix = 'csv_session_';
-const csvDeletedField = '__csvViewerDeleted';
-const csvSourceOrderField = '__csvViewerSourceOrder';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
 type CsvEditCommand =
@@ -57,6 +64,9 @@ export class CsvDataService {
   private instance: DuckDBInstance | null = null;
   private connection: DuckDBConnection | null = null;
   private sessions = new Map<string, CsvSessionState>();
+  private dataChangeListeners = new Set<(sessionId: string) => void>();
+  private closingSessions = new Set<string>();
+  private comparisonExecutor: ComparisonExecutor | null = null;
 
   async openCsv(filePath: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
     if (this.findSessionByPath(filePath)) {
@@ -84,11 +94,66 @@ export class CsvDataService {
     return this.sessions.get(sessionId)?.metadata ?? null;
   }
 
-  async reopenSession(sessionId: string, options: CsvDialectOptions = {}): Promise<CsvSessionMetadata> {
+  listSessions(): CsvSessionMetadata[] {
+    return [...this.sessions.values()].map((state) => state.metadata);
+  }
+
+  subscribeToDataChanges(listener: (sessionId: string) => void): () => void {
+    this.dataChangeListeners.add(listener);
+    return () => this.dataChangeListeners.delete(listener);
+  }
+
+  isClosing(sessionId: string): boolean {
+    return this.closingSessions.has(sessionId);
+  }
+
+  beginClose(sessionId: string): boolean {
+    if (!this.sessions.has(sessionId) || this.closingSessions.has(sessionId)) return false;
+    this.closingSessions.add(sessionId);
+    return true;
+  }
+
+  endClose(sessionId: string): void {
+    this.closingSessions.delete(sessionId);
+  }
+
+  createComparisonExecutor(): ComparisonExecutor {
+    if (!this.comparisonExecutor) {
+      this.comparisonExecutor = new DuckDbComparisonExecutor({
+        getSource: (sessionId) => {
+          const state = this.requireSession(sessionId);
+          return { tableName: state.tableName, columns: state.metadata.columns };
+        },
+        getOwnerConnection: () => this.getConnection(),
+        connectWorker: async () => {
+          await this.getConnection();
+          return this.instance!.connect();
+        },
+      });
+    }
+    return this.comparisonExecutor;
+  }
+
+  async reopenSession(
+    sessionId: string,
+    options: CsvDialectOptions = {},
+  ): Promise<CsvSessionMetadata> {
+    this.assertNotClosing(sessionId);
     const existing = this.requireSession(sessionId);
-    const state = await this.createSession(existing.metadata.file.path, options);
-    await this.closeSession(sessionId);
-    this.sessions.set(state.metadata.sessionId, state);
+    const state = await this.createSession(
+      existing.metadata.file.path,
+      options,
+      sessionId,
+      existing.metadata.dataRevision + 1,
+    );
+    try {
+      await this.dropSessionTable(existing.tableName);
+    } catch (error) {
+      await this.dropSessionTable(state.tableName).catch(() => undefined);
+      throw error;
+    }
+    this.sessions.set(sessionId, state);
+    this.notifyDataChange(sessionId);
     return state.metadata;
   }
 
@@ -99,8 +164,9 @@ export class CsvDataService {
       return;
     }
 
-    this.sessions.delete(sessionId);
     await this.dropSessionTable(state.tableName);
+    this.sessions.delete(sessionId);
+    this.closingSessions.delete(sessionId);
   }
 
   async closeAllSessions(): Promise<void> {
@@ -127,6 +193,8 @@ export class CsvDataService {
   private async createSession(
     filePath: string,
     options: CsvDialectOptions,
+    logicalSessionId: string = randomUUID(),
+    dataRevision = 0,
   ): Promise<CsvSessionState> {
     const dialect = validateDialectOptions(options);
 
@@ -146,8 +214,7 @@ export class CsvDataService {
     }
 
     const connection = await this.getConnection();
-    const sessionId = randomUUID();
-    const tableName = buildSessionTableName(sessionId);
+    const tableName = buildSessionTableName(randomUUID());
 
     try {
       await connection.run(
@@ -163,7 +230,8 @@ export class CsvDataService {
       const rowCount = await readRowCount(connection, tableName);
 
       const metadata: CsvSessionMetadata = {
-        sessionId,
+        sessionId: logicalSessionId,
+        dataRevision,
         file: {
           path: filePath,
           name: path.basename(filePath),
@@ -255,6 +323,7 @@ export class CsvDataService {
   }
 
   async editCell(request: CsvCellEditRequest): Promise<CsvCellEditResult> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
     const session = state.metadata;
 
@@ -276,6 +345,7 @@ export class CsvDataService {
       newValue: request.value,
     });
     state.redoStack = [];
+    this.commitDataChange(state);
 
     return {
       rowId: request.rowId,
@@ -285,6 +355,7 @@ export class CsvDataService {
   }
 
   async deleteRows(request: CsvDeleteRowsRequest): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
 
     const rowIds = normalizeRowIds(request.rowIds);
@@ -297,11 +368,13 @@ export class CsvDataService {
     await applyRowDeletion(state, rowIds, true);
     state.undoStack.push({ type: 'delete-rows', rowIds });
     state.redoStack = [];
+    this.commitDataChange(state);
 
     return buildEditState(state);
   }
 
   async insertRow(request: CsvInsertRowRequest): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
 
     if (request.hasActiveQuery) {
@@ -321,11 +394,13 @@ export class CsvDataService {
     const insertedRowId = await insertEmptyRow(state, request.placement, rowIds[0]);
     state.undoStack.push({ type: 'insert-row', rowId: insertedRowId });
     state.redoStack = [];
+    this.commitDataChange(state);
 
     return buildEditState(state);
   }
 
   async undoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
     const command = state.undoStack.pop();
 
@@ -335,10 +410,12 @@ export class CsvDataService {
 
     await revertCommand(state, command);
     state.redoStack.push(command);
+    this.commitDataChange(state);
     return buildEditState(state);
   }
 
   async redoEdit(request: CsvEditStateRequest): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
     const command = state.redoStack.pop();
 
@@ -348,15 +425,19 @@ export class CsvDataService {
 
     await applyCommand(state, command);
     state.undoStack.push(command);
+    this.commitDataChange(state);
     return buildEditState(state);
   }
 
   async saveAs(request: CsvEditStateRequest, filePath: string): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
     const connection = this.requireConnection();
     const { metadata: session } = state;
 
-    const rowProjectionSql = session.columns.map((column) => quoteIdentifier(column.name)).join(', ');
+    const rowProjectionSql = session.columns
+      .map((column) => quoteIdentifier(column.name))
+      .join(', ');
     const rowsResult = await connection.runAndReadAll(
       `SELECT ${rowProjectionSql} FROM ${quoteIdentifier(state.tableName)} WHERE ${quoteIdentifier(
         csvDeletedField,
@@ -367,7 +448,9 @@ export class CsvDataService {
     const lines: string[] = [];
 
     if (session.dialect.header !== false) {
-      lines.push(session.columns.map((column) => serializeCsvField(column.name, delimiter)).join(delimiter));
+      lines.push(
+        session.columns.map((column) => serializeCsvField(column.name, delimiter)).join(delimiter),
+      );
     }
 
     for (const row of rows) {
@@ -421,6 +504,27 @@ export class CsvDataService {
     }
 
     return state;
+  }
+
+  private assertNotClosing(sessionId: string): void {
+    if (this.closingSessions.has(sessionId)) {
+      throw new Error('CSV session is closing.');
+    }
+  }
+
+  private commitDataChange(state: CsvSessionState): void {
+    state.metadata = { ...state.metadata, dataRevision: state.metadata.dataRevision + 1 };
+    this.notifyDataChange(state.metadata.sessionId);
+  }
+
+  private notifyDataChange(sessionId: string): void {
+    for (const listener of this.dataChangeListeners) {
+      try {
+        listener(sessionId);
+      } catch (error) {
+        console.error(`CSV data-change listener failed for session ${sessionId}.`, error);
+      }
+    }
   }
 }
 
@@ -659,292 +763,6 @@ function normalizeRow(row: Record<string, unknown>): CsvRow {
   return normalizedRow as CsvRow;
 }
 
-function normalizeCellValue(value: unknown): CsvCellValue {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  return String(value);
-}
-
-type QueryParts = {
-  rowsSql: string;
-  countSql: string;
-  values: Array<string | number | boolean | null>;
-};
-
-type ColumnValueCountsQuery = {
-  sql: string;
-  values: Array<string | number | boolean | null>;
-};
-
-function buildRowsQuery({
-  tableName,
-  columns,
-  filters,
-  search,
-  sort,
-  limit,
-  offset,
-}: {
-  tableName: string;
-  columns: CsvColumn[];
-  filters: CsvFilterDescriptor[];
-  search: string;
-  sort: CsvSortDescriptor[];
-  limit: number;
-  offset: number;
-}): QueryParts {
-  const knownColumns = new Set(columns.map((column) => column.name));
-  const scope = buildCountScopeWhere({ columns, filters, search });
-  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
-  const orderSql =
-    orderClauses.length > 0
-      ? ` ORDER BY ${orderClauses.join(', ')}`
-      : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
-  const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
-  const rowProjectionSql = [
-    quoteIdentifier(csvInternalRowIdField),
-    ...columns.map((column) => quoteIdentifier(column.name)),
-  ].join(', ');
-
-  return {
-    countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
-    rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
-    values: scope.values,
-  };
-}
-
-function buildColumnValueCountsQuery({
-  tableName,
-  columns,
-  column,
-  filters,
-  search,
-}: {
-  tableName: string;
-  columns: CsvColumn[];
-  column: string;
-  filters: CsvFilterDescriptor[];
-  search: string;
-}): ColumnValueCountsQuery {
-  const scope = buildCountScopeWhere({ columns, filters, search });
-  const countedValueSql = quoteIdentifier(column);
-
-  return {
-    sql: `WITH scoped_rows AS (
-      SELECT ${countedValueSql} AS counted_value
-      FROM ${quoteIdentifier(tableName)}${scope.whereSql}
-    ),
-    counted_values AS (
-      SELECT counted_value, count(*)::BIGINT AS value_count
-      FROM scoped_rows
-      GROUP BY counted_value
-    ),
-    scoped_total AS (
-      SELECT count(*)::BIGINT AS scope_row_count
-      FROM scoped_rows
-    )
-    SELECT counted_values.counted_value,
-      counted_values.value_count,
-      scoped_total.scope_row_count,
-      CASE
-        WHEN scoped_total.scope_row_count = 0 THEN 0
-        ELSE (counted_values.value_count::DOUBLE / scoped_total.scope_row_count::DOUBLE) * 100
-      END AS percent_of_scope
-    FROM counted_values
-    CROSS JOIN scoped_total
-    ORDER BY counted_values.value_count DESC, counted_values.counted_value ASC NULLS FIRST
-    LIMIT 50`,
-    values: scope.values,
-  };
-}
-
-function buildCountScopeWhere({
-  columns,
-  filters,
-  search,
-}: {
-  columns: CsvColumn[];
-  filters: CsvFilterDescriptor[];
-  search: string;
-}): {
-  whereSql: string;
-  values: Array<string | number | boolean | null>;
-} {
-  const knownColumns = new Set(columns.map((column) => column.name));
-  const values: Array<string | number | boolean | null> = [];
-  const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));
-  whereClauses.push(`${quoteIdentifier(csvDeletedField)} = false`);
-  const searchClause = buildSearchClause(columns, search, values);
-
-  if (searchClause) {
-    whereClauses.push(searchClause);
-  }
-
-  return {
-    whereSql: ` WHERE ${whereClauses.join(' AND ')}`,
-    values,
-  };
-}
-
-function buildSearchClause(
-  columns: CsvColumn[],
-  search: string,
-  values: Array<string | number | boolean | null>,
-): string | null {
-  const normalizedSearch = search.trim();
-
-  if (normalizedSearch.length === 0) {
-    return null;
-  }
-
-  const searchableColumns = columns.map((column) => quoteIdentifier(column.name));
-  const pattern = `%${escapeLike(normalizedSearch)}%`;
-
-  values.push(...searchableColumns.map(() => pattern));
-
-  return `(${searchableColumns
-    .map((columnSql) => `${castForText(columnSql)} ILIKE ? ESCAPE '\\'`)
-    .join(' OR ')})`;
-}
-
-function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {
-  assertKnownColumn(descriptor.column, knownColumns);
-  return `${quoteIdentifier(descriptor.column)} ${descriptor.direction === 'desc' ? 'DESC' : 'ASC'} NULLS LAST`;
-}
-
-function buildFilterClause(
-  filter: CsvFilterDescriptor,
-  knownColumns: Set<string>,
-  values: Array<string | number | boolean | null>,
-): string {
-  assertKnownColumn(filter.column, knownColumns);
-  const columnSql = quoteIdentifier(filter.column);
-
-  if (filter.operator === 'blank') {
-    return `(${columnSql} IS NULL OR ${castForText(columnSql)} = '')`;
-  }
-
-  if (filter.operator === 'notBlank') {
-    return `(${columnSql} IS NOT NULL AND ${castForText(columnSql)} <> '')`;
-  }
-
-  if (filter.kind === 'text') {
-    return buildTextFilterClause(columnSql, filter.operator, filter.value ?? '', values);
-  }
-
-  if (filter.kind === 'number') {
-    return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
-  }
-
-  return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
-}
-
-function buildTextFilterClause(
-  columnSql: string,
-  operator: Exclude<CsvFilterDescriptor & { kind: 'text' }, never>['operator'],
-  value: string,
-  values: Array<string | number | boolean | null>,
-): string {
-  const textSql = castForText(columnSql);
-
-  switch (operator) {
-    case 'contains':
-      values.push(`%${escapeLike(value)}%`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
-    case 'notContains':
-      values.push(`%${escapeLike(value)}%`);
-      return `(${columnSql} IS NULL OR ${textSql} NOT ILIKE ? ESCAPE '\\')`;
-    case 'equals':
-      values.push(value);
-      return `${textSql} = ?`;
-    case 'notEqual':
-      values.push(value);
-      return `(${columnSql} IS NULL OR ${textSql} <> ?)`;
-    case 'startsWith':
-      values.push(`${escapeLike(value)}%`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
-    case 'endsWith':
-      values.push(`%${escapeLike(value)}`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
-    default:
-      throw new Error(`Unsupported text filter operator: ${operator}`);
-  }
-}
-
-function buildScalarFilterClause(
-  columnSql: string,
-  operator: string,
-  value: string | number | undefined,
-  valueTo: string | number | undefined,
-  values: Array<string | number | boolean | null>,
-): string {
-  const textSql = castForText(columnSql);
-  const textValue = value === undefined ? null : String(value);
-  const textValueTo = valueTo === undefined ? null : String(valueTo);
-
-  switch (operator) {
-    case 'equals':
-      values.push(textValue);
-      return `${textSql} = ?`;
-    case 'notEqual':
-      values.push(textValue);
-      return `(${columnSql} IS NULL OR ${textSql} <> ?)`;
-    case 'greaterThan':
-      values.push(textValue);
-      return `${textSql} > ?`;
-    case 'greaterThanOrEqual':
-      values.push(textValue);
-      return `${textSql} >= ?`;
-    case 'lessThan':
-      values.push(textValue);
-      return `${textSql} < ?`;
-    case 'lessThanOrEqual':
-      values.push(textValue);
-      return `${textSql} <= ?`;
-    case 'inRange':
-      values.push(textValue, textValueTo);
-      return `${textSql} BETWEEN ? AND ?`;
-    default:
-      throw new Error(`Unsupported scalar filter operator: ${operator}`);
-  }
-}
-
-function assertKnownColumn(column: string, knownColumns: Set<string>): void {
-  if (!knownColumns.has(column)) {
-    throw new Error(`Unknown CSV column: ${column}`);
-  }
-}
-
-function castForText(columnSql: string): string {
-  return `coalesce(CAST(${columnSql} AS VARCHAR), '')`;
-}
-
-function escapeLike(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
-}
-
-function normalizeCount(value: unknown): number {
-  if (typeof value === 'bigint') {
-    return Number(value);
-  }
-
-  return Number(value);
-}
-
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
-
 function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
@@ -954,10 +772,17 @@ function buildSessionTableName(sessionId: string): string {
 }
 
 async function readColumns(connection: DuckDBConnection, tableName: string): Promise<CsvColumn[]> {
-  const result = await connection.runAndReadAll(`DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`);
+  const result = await connection.runAndReadAll(
+    `DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`,
+  );
   return result
     .getRowObjectsJS()
-    .filter((row) => !new Set([csvInternalRowIdField, csvSourceOrderField, csvDeletedField]).has(String(row.column_name)))
+    .filter(
+      (row) =>
+        !new Set([csvInternalRowIdField, csvSourceOrderField, csvDeletedField]).has(
+          String(row.column_name),
+        ),
+    )
     .map((row) => ({
       name: String(row.column_name),
       type: String(row.column_type),
@@ -1006,7 +831,12 @@ function resolveOutputDelimiter(session: CsvSessionMetadata): string {
 }
 
 function serializeCsvField(value: string, delimiter: string): string {
-  if (value.includes('"') || value.includes('\n') || value.includes('\r') || value.includes(delimiter)) {
+  if (
+    value.includes('"') ||
+    value.includes('\n') ||
+    value.includes('\r') ||
+    value.includes(delimiter)
+  ) {
     return `"${value.replaceAll('"', '""')}"`;
   }
 
