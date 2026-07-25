@@ -430,6 +430,7 @@ export class CsvDataService {
   }
 
   async saveAs(request: CsvEditStateRequest, filePath: string): Promise<CsvEditState> {
+    this.assertNotClosing(request.sessionId);
     const state = this.requireSession(request.sessionId);
     const connection = this.requireConnection();
     const { metadata: session } = state;
@@ -517,7 +518,13 @@ export class CsvDataService {
   }
 
   private notifyDataChange(sessionId: string): void {
-    for (const listener of this.dataChangeListeners) listener(sessionId);
+    for (const listener of this.dataChangeListeners) {
+      try {
+        listener(sessionId);
+      } catch (error) {
+        console.error(`CSV data-change listener failed for session ${sessionId}.`, error);
+      }
+    }
   }
 }
 

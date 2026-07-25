@@ -158,8 +158,11 @@ describe('CsvWorkspace lifecycle', () => {
         status: 'closed',
       });
     } finally {
-      await workspace.dispose();
-      await rm(tempDir, { recursive: true, force: true });
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -167,52 +170,57 @@ describe('CsvWorkspace lifecycle', () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-'));
     const baselinePath = path.join(tempDir, 'baseline.csv');
     const candidatePath = path.join(tempDir, 'candidate.csv');
-    await writeFile(baselinePath, 'id,value\n1,a\n');
-    await writeFile(candidatePath, 'id,value\n1,b\n');
     const csvs = new CsvDataService();
     const executor = new ControlledExecutor();
     const workspace = new CsvWorkspace(csvs, executor);
-    const baseline = await csvs.openCsv(baselinePath);
-    const candidate = await csvs.openCsv(candidatePath);
-    const opened = workspace.comparisons.open({
-      baselineId: baseline.sessionId,
-      candidateId: candidate.sessionId,
-    });
-    if (opened.status === 'rejected') throw new Error('open rejected');
-    workspace.comparisons.begin({
-      kind: 'apply-key',
-      comparisonId: opened.comparison.comparisonId,
-      key: ['id'],
-    });
-    await waitForComparing(workspace, opened.comparison.comparisonId);
-
-    const confirmation = await workspace.closeCsv(baseline.sessionId);
-    if (confirmation.status !== 'confirmation-required')
-      throw new Error('confirmation not required');
-    const closing = workspace.closeCsv(baseline.sessionId, confirmation.impact);
-
-    expect(
-      workspace.comparisons.open({
+    try {
+      await writeFile(baselinePath, 'id,value\n1,a\n');
+      await writeFile(candidatePath, 'id,value\n1,b\n');
+      const baseline = await csvs.openCsv(baselinePath);
+      const candidate = await csvs.openCsv(candidatePath);
+      const opened = workspace.comparisons.open({
         baselineId: baseline.sessionId,
         candidateId: candidate.sessionId,
-      }),
-    ).toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
-    await expect(
-      csvs.editCell({
-        sessionId: baseline.sessionId,
-        rowId: '1',
-        column: 'value',
-        value: 'changed while closing',
-      }),
-    ).rejects.toThrow('closing');
+      });
+      if (opened.status === 'rejected') throw new Error('open rejected');
+      workspace.comparisons.begin({
+        kind: 'apply-key',
+        comparisonId: opened.comparison.comparisonId,
+        key: ['id'],
+      });
+      await waitForComparing(workspace, opened.comparison.comparisonId);
 
-    executor.releaseCancellation();
-    await expect(closing).resolves.toEqual({ status: 'closed' });
-    expect(csvs.getSession(baseline.sessionId)).toBeNull();
-    expect(workspace.comparisons.getState(opened.comparison.comparisonId)).toBeNull();
+      const confirmation = await workspace.closeCsv(baseline.sessionId);
+      if (confirmation.status !== 'confirmation-required')
+        throw new Error('confirmation not required');
+      const closing = workspace.closeCsv(baseline.sessionId, confirmation.impact);
 
-    await workspace.dispose();
-    await rm(tempDir, { recursive: true, force: true });
+      expect(
+        workspace.comparisons.open({
+          baselineId: baseline.sessionId,
+          candidateId: candidate.sessionId,
+        }),
+      ).toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
+      await expect(
+        csvs.editCell({
+          sessionId: baseline.sessionId,
+          rowId: '1',
+          column: 'value',
+          value: 'changed while closing',
+        }),
+      ).rejects.toThrow('closing');
+
+      executor.releaseCancellation();
+      await expect(closing).resolves.toEqual({ status: 'closed' });
+      expect(csvs.getSession(baseline.sessionId)).toBeNull();
+      expect(workspace.comparisons.getState(opened.comparison.comparisonId)).toBeNull();
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it('shares one idempotent disposal operation', async () => {

@@ -175,6 +175,14 @@ export function ComparisonGrid({
         maxConcurrentDatasourceRequests={2}
         infiniteInitialRowCount={1}
         getRowId={(params) => params.data.rowKey}
+        onCellKeyDown={(params) => {
+          const event = params.event as KeyboardEvent | null;
+          if (event?.key !== 'Enter' || !('value' in params) || !isDisplayValue(params.value)) {
+            return;
+          }
+          event.preventDefault();
+          copyComparisonValue(params.value.copyText);
+        }}
         defaultColDef={{ resizable: true, sortable: false, minWidth: 120 }}
         overlayLoadingTemplate="<span class='ag-overlay-loading-center'>Loading comparison rows…</span>"
       />
@@ -207,12 +215,14 @@ function valueColumn(field: string, headerName: string): ColDef<GridComparisonRo
             <span className={value.kind === 'value' ? '' : 'italic text-muted-foreground'}>
               {value.text}
             </span>
+            <span className="sr-only">. Press Enter to copy this value.</span>
           </span>
           <button
             type="button"
             className="opacity-0 group-hover/cell:opacity-100 focus:opacity-100"
             aria-label={`Copy ${value.side} value`}
-            onClick={() => void navigator.clipboard.writeText(value.copyText)}
+            tabIndex={-1}
+            onClick={() => copyComparisonValue(value.copyText)}
           >
             Copy
           </button>
@@ -220,6 +230,14 @@ function valueColumn(field: string, headerName: string): ColDef<GridComparisonRo
       );
     },
   };
+}
+
+function copyComparisonValue(value: string): void {
+  void navigator.clipboard.writeText(value).catch(() => undefined);
+}
+
+function isDisplayValue(value: unknown): value is DisplayValue {
+  return typeof value === 'object' && value !== null && 'copyText' in value;
 }
 
 function toGridRow(row: ComparisonRow): GridComparisonRow {

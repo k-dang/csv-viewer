@@ -253,6 +253,10 @@ export type ComparisonFailure = {
   retryable: boolean;
 };
 
+export type CloseComparisonResult =
+  | { status: 'closed' }
+  | { status: 'failed'; failure: ComparisonFailure };
+
 export type ComparisonView = {
   comparisonId: string;
   version: number;
@@ -347,9 +351,7 @@ export type CsvViewerApi = {
   cancelComparison: (comparisonId: string, operationId: string) => Promise<CancelComparisonResult>;
   getComparisonWindow: (request: ComparisonWindowRequest) => Promise<ComparisonWindowOutcome>;
   swapComparison: (comparisonId: string) => Promise<ComparisonMutationOutcome>;
-  closeComparison: (
-    comparisonId: string,
-  ) => Promise<{ status: 'closed' } | { status: 'failed'; failure: ComparisonFailure }>;
+  closeComparison: (comparisonId: string) => Promise<CloseComparisonResult>;
   onComparisonEvent: (callback: (event: ComparisonEvent) => void) => () => void;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;

@@ -64,13 +64,18 @@ export function TabStrip({
                 <span className="truncate">{label}</span>
                 {isDirty ? (
                   <Badge
+                    role="img"
                     variant="secondary"
                     className="size-1.5 shrink-0 rounded-full p-0"
                     aria-label="Unsaved changes"
                   />
                 ) : null}
                 {isOutdated ? (
-                  <Badge className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0" aria-label="Outdated comparison" />
+                  <Badge
+                    role="img"
+                    className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0"
+                    aria-label="Outdated comparison"
+                  />
                 ) : null}
               </TabsTrigger>
               <Button

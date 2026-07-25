@@ -45,6 +45,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     sessionId: string,
     key: string[],
   ): Promise<SourceKeyDiagnostics> {
+    if (key.length === 0) throw new Error('Comparison key requires at least one column.');
     const source = this.database.getSource(sessionId);
     const writer = await this.getWriter(operationId);
     const known = new Set(source.columns.map((column) => column.name));
@@ -188,6 +189,17 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   async readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
+    if (
+      !Number.isSafeInteger(request.offset) ||
+      request.offset < 0 ||
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 0 ||
+      request.limit > 1000
+    ) {
+      throw new Error(
+        'Comparison window requires a non-negative offset and a limit of at most 1,000.',
+      );
+    }
     this.acquireRead(request.artifactId);
     try {
       const connection = await this.database.getOwnerConnection();

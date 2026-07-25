@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ComparisonView, CsvSessionMetadata } from '../shared/ipc';
-import { initialRendererWorkspace, rendererWorkspaceReducer } from './workspace-tabs';
+import {
+  initialRendererWorkspace,
+  projectOpenTabs,
+  rendererWorkspaceReducer,
+} from './workspace-tabs';
 
 function csv(sessionId: string): CsvSessionMetadata {
   return {
@@ -67,5 +71,51 @@ describe('rendererWorkspaceReducer', () => {
       kind: 'comparison',
       presentation: { draftKey: ['id'], rows: 'all', columns: 'csv-order' },
     });
+  });
+
+  it('cycles through tabs in both directions with wraparound', () => {
+    let state = rendererWorkspaceReducer(initialRendererWorkspace, {
+      type: 'open-csv',
+      session: csv('a'),
+    });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('c') });
+
+    state = rendererWorkspaceReducer(state, { type: 'cycle', direction: 1 });
+    expect(state.activeTabId).toBe('csv:a');
+    state = rendererWorkspaceReducer(state, { type: 'cycle', direction: -1 });
+    expect(state.activeTabId).toBe('csv:c');
+  });
+
+  it('selects the next tab, then the previous tab, when the active CSV closes', () => {
+    let state = rendererWorkspaceReducer(initialRendererWorkspace, {
+      type: 'open-csv',
+      session: csv('a'),
+    });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('c') });
+    state = rendererWorkspaceReducer(state, { type: 'select', tabId: 'csv:b' });
+
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'b' });
+    expect(state.activeTabId).toBe('csv:c');
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'c' });
+    expect(state.activeTabId).toBe('csv:a');
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'a' });
+    expect(state.activeTabId).toBeNull();
+  });
+
+  it('omits an orphaned comparison tab from the rendered projection', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const state = rendererWorkspaceReducer(initialRendererWorkspace, {
+      type: 'open-comparison',
+      comparison: comparison(),
+    });
+    const orphaned = { ...state, comparisons: new Map<string, ComparisonView>() };
+
+    expect(projectOpenTabs(orphaned)).toEqual([]);
+    expect(error).toHaveBeenCalledWith(
+      'Renderer Comparison Tab comparison-1 has no projection.',
+    );
+    error.mockRestore();
   });
 });

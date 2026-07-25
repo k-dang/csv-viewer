@@ -65,6 +65,7 @@ export function buildColumnValueCountsQuery({
   filters: CsvFilterDescriptor[];
   search: string;
 }): { sql: string; values: QueryValues } {
+  assertKnownColumn(column, new Set(columns.map((knownColumn) => knownColumn.name)));
   const scope = buildCountScopeWhere({ columns, filters, search });
   const countedValueSql = quoteIdentifier(column);
 

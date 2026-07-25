@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField, type CsvRow } from '../shared/ipc';
 import { CsvDataService } from './csv-data-service';
 
@@ -92,6 +92,89 @@ describe('CsvDataService', () => {
     expect(reopened.dialect).toEqual({ delimiter: '|' });
     expect(reopened.columns.map((column) => column.name)).toEqual(['name', 'age']);
     expect(service.getSession(reopened.sessionId)).toEqual(reopened);
+  });
+
+  it('blocks every state mutator while a session close is reserved', async () => {
+    const filePath = await writeFixture('closing.csv', ['name', 'Ada'].join('\n'));
+    const session = await service.openCsv(filePath);
+    const request = { sessionId: session.sessionId };
+
+    expect(service.beginClose(session.sessionId)).toBe(true);
+    expect(service.beginClose(session.sessionId)).toBe(false);
+    expect(service.isClosing(session.sessionId)).toBe(true);
+
+    const mutations = [
+      service.reopenSession(session.sessionId),
+      service.editCell({ ...request, rowId: '1', column: 'name', value: 'Grace' }),
+      service.deleteRows({ ...request, rowIds: ['1'] }),
+      service.insertRow({ ...request, placement: 'append' as const, rowIds: [], hasActiveQuery: false }),
+      service.undoEdit(request),
+      service.redoEdit(request),
+      service.saveAs(request, path.join(tempDir, 'closing-copy.csv')),
+    ];
+    for (const mutation of mutations) await expect(mutation).rejects.toThrow('closing');
+
+    service.endClose(session.sessionId);
+    expect(service.isClosing(session.sessionId)).toBe(false);
+    await expect(
+      service.editCell({ ...request, rowId: '1', column: 'name', value: 'Grace' }),
+    ).resolves.toMatchObject({ dirty: true });
+  });
+
+  it('increments revisions and notifies subscribers for every committed data change', async () => {
+    const filePath = await writeFixture('revisions.csv', ['name', 'Ada', 'Grace'].join('\n'));
+    const session = await service.openCsv(filePath);
+    const revisions: number[] = [];
+    const unsubscribe = service.subscribeToDataChanges((sessionId) => {
+      revisions.push(service.getSession(sessionId)?.dataRevision ?? -1);
+    });
+
+    await service.editCell({
+      sessionId: session.sessionId,
+      rowId: '1',
+      column: 'name',
+      value: 'Augusta Ada',
+    });
+    await service.insertRow({
+      sessionId: session.sessionId,
+      placement: 'append',
+      rowIds: [],
+      hasActiveQuery: false,
+    });
+    const rows = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 10 });
+    await service.deleteRows({
+      sessionId: session.sessionId,
+      rowIds: [rows.rows.at(-1)?.[csvInternalRowIdField] ?? ''],
+    });
+    await service.undoEdit({ sessionId: session.sessionId });
+    await service.redoEdit({ sessionId: session.sessionId });
+    await service.reopenSession(session.sessionId);
+    unsubscribe();
+
+    expect(revisions).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('isolates data-change listeners so one failure cannot suppress later listeners', async () => {
+    const filePath = await writeFixture('listeners.csv', ['name', 'Ada'].join('\n'));
+    const session = await service.openCsv(filePath);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const received: string[] = [];
+    service.subscribeToDataChanges(() => {
+      throw new Error('listener failure');
+    });
+    service.subscribeToDataChanges((sessionId) => received.push(sessionId));
+
+    await service.editCell({
+      sessionId: session.sessionId,
+      rowId: '1',
+      column: 'name',
+      value: 'Grace',
+    });
+
+    expect(received).toEqual([session.sessionId]);
+    expect(service.getSession(session.sessionId)?.dataRevision).toBe(1);
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
   });
 
   it('rejects invalid delimiter choices before opening', async () => {

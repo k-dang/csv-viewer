@@ -110,9 +110,11 @@ export function ComparisonCandidateDialog({
               <button
                 key={candidate.workingCsv.sessionId}
                 type="button"
-                disabled={!compatible}
-                onClick={() => onChoose(candidate.workingCsv.sessionId)}
-                className="mb-2 flex w-full items-center gap-3 rounded-lg border p-3 text-left transition hover:border-primary/50 hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-55"
+                aria-disabled={!compatible}
+                onClick={() => {
+                  if (compatible) onChoose(candidate.workingCsv.sessionId);
+                }}
+                className="mb-2 flex w-full items-center gap-3 rounded-lg border p-3 text-left transition hover:border-primary/50 hover:bg-muted/50 aria-disabled:cursor-not-allowed aria-disabled:opacity-55"
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted">
                   <FileSpreadsheet className="size-4" />

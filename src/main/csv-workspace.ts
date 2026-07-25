@@ -44,7 +44,8 @@ export class CsvWorkspace {
       await this.comparisons.closeDependents(sessionId);
       await this.csvs.closeSession(sessionId);
       return { status: 'closed' };
-    } catch {
+    } catch (error) {
+      console.error(`Failed to close CSV session ${sessionId}.`, error);
       return {
         status: 'failed',
         message: 'Unable to close the Working CSV and all dependent Comparisons.',

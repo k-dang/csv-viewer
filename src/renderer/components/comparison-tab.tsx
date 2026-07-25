@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type HTMLAttributes } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -56,18 +56,35 @@ export function ComparisonTab({
 
   async function begin(kind: 'apply-key' | 'refresh') {
     setActionError(null);
-    const outcome = await window.csvViewer.beginComparison(
-      kind === 'apply-key'
-        ? { kind, comparisonId: comparison.comparisonId, key: presentation.draftKey }
-        : { kind, comparisonId: comparison.comparisonId },
-    );
-    if (outcome.status === 'rejected') setActionError(outcome.fault.message);
+    try {
+      const outcome = await window.csvViewer.beginComparison(
+        kind === 'apply-key'
+          ? { kind, comparisonId: comparison.comparisonId, key: presentation.draftKey }
+          : { kind, comparisonId: comparison.comparisonId },
+      );
+      if (outcome.status === 'rejected') setActionError(outcome.fault.message);
+    } catch (error) {
+      setActionError(actionFailureMessage(error, 'Unable to start comparison.'));
+    }
   }
 
   async function swap() {
     setActionError(null);
-    const outcome = await window.csvViewer.swapComparison(comparison.comparisonId);
-    if (outcome.status === 'rejected') setActionError(outcome.fault.message);
+    try {
+      const outcome = await window.csvViewer.swapComparison(comparison.comparisonId);
+      if (outcome.status === 'rejected') setActionError(outcome.fault.message);
+    } catch (error) {
+      setActionError(actionFailureMessage(error, 'Unable to swap comparison sides.'));
+    }
+  }
+
+  async function cancel(operationId: string) {
+    setActionError(null);
+    try {
+      await window.csvViewer.cancelComparison(comparison.comparisonId, operationId);
+    } catch (error) {
+      setActionError(actionFailureMessage(error, 'Unable to cancel comparison.'));
+    }
   }
 
   const attempt = comparison.lastAttempt;
@@ -190,9 +207,9 @@ export function ComparisonTab({
         </fieldset>
       </div>
 
-      <div aria-live="polite" aria-atomic="true">
+      <div>
         {operation ? (
-          <StatusBanner tone="progress">
+          <StatusBanner tone="progress" aria-live="polite">
             <Loader2 className="size-4 animate-spin" />
             <span className="font-semibold">{operationLabel}</span>
             <span className="text-sm">
@@ -205,18 +222,13 @@ export function ComparisonTab({
               size="sm"
               variant="outline"
               className="ml-auto"
-              onClick={() =>
-                void window.csvViewer.cancelComparison(
-                  comparison.comparisonId,
-                  operation.operationId,
-                )
-              }
+              onClick={() => void cancel(operation.operationId)}
             >
               Cancel
             </Button>
           </StatusBanner>
         ) : comparison.applied?.freshness.kind === 'outdated' ? (
-          <StatusBanner tone="warning">
+          <StatusBanner tone="warning" aria-live="polite">
             <AlertTriangle className="size-4" />
             <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh
             explicitly when you are ready.
@@ -225,7 +237,7 @@ export function ComparisonTab({
         {attempt?.status === 'cancelled' &&
         comparison.applied &&
         dismissedAttemptId !== attempt.attemptId ? (
-          <StatusBanner tone="neutral">
+          <StatusBanner tone="neutral" aria-live="polite">
             Comparison cancelled. The previous applied result was preserved.
             <Button
               type="button"
@@ -239,23 +251,21 @@ export function ComparisonTab({
           </StatusBanner>
         ) : null}
         {attempt?.status === 'sources-changed' ? (
-          <StatusBanner tone="warning">
+          <StatusBanner tone="warning" aria-live="polite">
             {comparison.applied
               ? 'Sources changed while comparing. The previous result was preserved.'
               : 'Sources changed while comparing. No result was applied.'}
           </StatusBanner>
         ) : null}
         {attempt?.status === 'failed' ? (
-          <div role="alert">
-            <StatusBanner tone="error">
-              <strong>Comparison failed.</strong> {attempt.failure.message}
-            </StatusBanner>
-          </div>
+          <StatusBanner tone="error" role="alert">
+            <strong>Comparison failed.</strong> {attempt.failure.message}
+          </StatusBanner>
         ) : null}
         {actionError ? (
-          <div role="alert">
-            <StatusBanner tone="error">{actionError}</StatusBanner>
-          </div>
+          <StatusBanner tone="error" role="alert">
+            {actionError}
+          </StatusBanner>
         ) : null}
       </div>
 
@@ -337,10 +347,11 @@ function SourceCard({ label, name, path }: { label: string; name: string; path: 
 function StatusBanner({
   tone,
   children,
+  ...attributes
 }: {
   tone: 'progress' | 'warning' | 'error' | 'neutral';
   children: React.ReactNode;
-}) {
+} & Omit<HTMLAttributes<HTMLDivElement>, 'children'>) {
   const colors =
     tone === 'warning'
       ? 'border-amber-400/50 bg-amber-100/60 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100'
@@ -350,10 +361,17 @@ function StatusBanner({
           ? 'border-blue-400/40 bg-blue-100/60 dark:bg-blue-950/40'
           : 'border-border bg-muted/40';
   return (
-    <div className={`flex flex-wrap items-center gap-2 border-b px-4 py-2 ${colors}`}>
+    <div
+      {...attributes}
+      className={`flex flex-wrap items-center gap-2 border-b px-4 py-2 ${colors}`}
+    >
       {children}
     </div>
   );
+}
+
+function actionFailureMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function KeyDiagnostics({

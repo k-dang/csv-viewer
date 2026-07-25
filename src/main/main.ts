@@ -18,6 +18,7 @@ import {
   type BeginComparisonRequest,
   type BeginComparisonResult,
   type CancelComparisonResult,
+  type CloseComparisonResult,
   type ComparisonCandidate,
   type ComparisonEvent,
   type ComparisonMutationOutcome,
@@ -270,8 +271,10 @@ function registerIpcHandlers() {
       csvComparisonService.swap(comparisonId),
   );
 
-  ipcMain.handle(ipcChannels.closeComparison, async (_event, comparisonId: string) =>
-    csvComparisonService.close(comparisonId),
+  ipcMain.handle(
+    ipcChannels.closeComparison,
+    async (_event, comparisonId: string): Promise<CloseComparisonResult> =>
+      csvComparisonService.close(comparisonId),
   );
 
   ipcMain.handle(ipcChannels.getRecentFiles, async (): Promise<RecentCsvFile[]> => {
@@ -510,6 +513,7 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   csvComparisonService.subscribe((event: ComparisonEvent) => {
     for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
       window.webContents.send(ipcChannels.comparisonStateChanged, event);
     }
   });
@@ -531,6 +535,7 @@ app.on('window-all-closed', () => {
 let workspaceDisposed = false;
 let workspaceDisposalStarted = false;
 const workspaceDisposalAttempts = 2;
+const workspaceDisposalTimeoutMs = 10_000;
 
 app.on('before-quit', (event) => {
   if (workspaceDisposed) return;
@@ -543,7 +548,11 @@ app.on('before-quit', (event) => {
 async function disposeWorkspaceBeforeQuit(): Promise<void> {
   for (let attempt = 1; attempt <= workspaceDisposalAttempts; attempt += 1) {
     try {
-      await workspace.dispose();
+      await withTimeout(
+        workspace.dispose(),
+        workspaceDisposalTimeoutMs,
+        'Workspace disposal timed out.',
+      );
       workspaceDisposed = true;
       app.quit();
       return;
@@ -552,4 +561,18 @@ async function disposeWorkspaceBeforeQuit(): Promise<void> {
     }
   }
   app.exit(1);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

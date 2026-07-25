@@ -56,6 +56,8 @@
   --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+  --comparison-baseline-accent: oklch(0.55 0.21 17);
+  --comparison-candidate-accent: oklch(0.5 0.16 154);
 }
 
 .dark {
@@ -69,6 +71,8 @@
   --primary-foreground: oklch(0.2050 0 0);
   --secondary: oklch(0.2690 0 0);
   --secondary-foreground: oklch(0.9850 0 0);
+  --comparison-baseline-accent: oklch(0.72 0.18 17);
+  --comparison-candidate-accent: oklch(0.72 0.16 154);
   --muted: oklch(0.2690 0 0);
   --muted-foreground: oklch(0.7080 0 0);
   --accent: oklch(0.3710 0 0);
@@ -251,13 +255,13 @@
 }
 
 .comparison-cell--changed-baseline {
-  background: color-mix(in srgb, #e11d48 13%, transparent);
-  box-shadow: inset 3px 0 #e11d48;
+  background: color-mix(in srgb, var(--comparison-baseline-accent) 15%, transparent);
+  box-shadow: inset 3px 0 var(--comparison-baseline-accent);
 }
 
 .comparison-cell--changed-candidate {
-  background: color-mix(in srgb, #059669 13%, transparent);
-  box-shadow: inset 3px 0 #059669;
+  background: color-mix(in srgb, var(--comparison-candidate-accent) 15%, transparent);
+  box-shadow: inset 3px 0 var(--comparison-candidate-accent);
 }
 
 .csv-cell-empty {

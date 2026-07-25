@@ -140,7 +140,10 @@ export function projectOpenTabs(state: RendererWorkspaceState): OpenRendererTab[
       continue;
     }
     const comparison = state.comparisons.get(tab.comparisonId);
-    if (!comparison) throw new Error('Renderer comparison Tab invariant violated.');
+    if (!comparison) {
+      console.error(`Renderer Comparison Tab ${tab.comparisonId} has no projection.`);
+      continue;
+    }
     openTabs.push({ kind: 'comparison', id: tab.id, comparison });
   }
   return openTabs;

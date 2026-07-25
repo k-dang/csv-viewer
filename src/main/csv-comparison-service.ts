@@ -3,6 +3,7 @@ import type {
   BeginComparisonRequest,
   BeginComparisonResult,
   CancelComparisonResult,
+  CloseComparisonResult,
   ComparisonCandidate,
   ComparisonEvent,
   ComparisonFault,
@@ -163,7 +164,7 @@ export class CsvComparisonService {
       phase: 'validating',
       cancelRequested: false,
     };
-    const completion = this.run(entity, operation, [...key]);
+    const completion = Promise.resolve().then(() => this.run(entity, operation, [...key]));
     entity.activity = { kind: 'running', operation, completion };
     this.publishChange(entity);
     return { status: 'accepted', operationId: operation.operationId };
@@ -286,12 +287,7 @@ export class CsvComparisonService {
     return { status: 'changed', comparison: this.project(entity) };
   }
 
-  async close(
-    comparisonId: string,
-  ): Promise<
-    | { status: 'closed' }
-    | { status: 'failed'; failure: { code: 'cleanup-failed'; message: string; retryable: boolean } }
-  > {
+  async close(comparisonId: string): Promise<CloseComparisonResult> {
     const entity = this.entities.get(comparisonId);
     if (!entity) return { status: 'closed' };
     if (entity.activity.kind === 'running') {
@@ -302,7 +298,8 @@ export class CsvComparisonService {
     }
     try {
       if (entity.snapshot) await this.executor.dropSnapshot(entity.snapshot.artifactId);
-    } catch {
+    } catch (error) {
+      console.error(`Failed to clean up Comparison ${comparisonId}.`, error);
       return {
         status: 'failed',
         failure: {
@@ -338,12 +335,24 @@ export class CsvComparisonService {
 
   async dispose(): Promise<void> {
     this.unsubscribeFromDataChanges();
+    const failures: Error[] = [];
     for (const comparisonId of [...this.entities.keys()]) {
-      const result = await this.close(comparisonId);
-      if (result.status === 'failed') throw new Error(result.failure.message);
+      try {
+        const result = await this.close(comparisonId);
+        if (result.status === 'failed') failures.push(new Error(result.failure.message));
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      }
     }
-    await this.executor.dispose();
+    try {
+      await this.executor.dispose();
+    } catch (error) {
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+    }
     this.listeners.clear();
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Unable to dispose all Comparison resources.');
+    }
   }
 
   private async run(entity: ComparisonRecord, operation: Operation, key: string[]): Promise<void> {
@@ -427,6 +436,7 @@ export class CsvComparisonService {
       }
 
       const previousArtifactId = entity.snapshot?.artifactId ?? null;
+      if (previousArtifactId) await this.executor.dropSnapshot(previousArtifactId);
       entity.snapshot = {
         artifactId: stagingArtifactId,
         resultToken: stagingArtifactId,
@@ -439,8 +449,8 @@ export class CsvComparisonService {
       };
       stagingArtifactId = null;
       this.settle(entity, operation, { attemptId: operation.operationId, status: 'applied' });
-      if (previousArtifactId) await this.executor.dropSnapshot(previousArtifactId);
-    } catch {
+    } catch (error) {
+      console.error(`Comparison operation ${operation.operationId} failed.`, error);
       if (stagingArtifactId)
         await this.executor.dropSnapshot(stagingArtifactId).catch(() => undefined);
       if (operation.cancelRequested) this.finishCancelled(entity, operation);
@@ -564,6 +574,10 @@ export class CsvComparisonService {
   }
 
   private publishChange(entity: ComparisonRecord): void {
+    if (!this.csvs.getSession(entity.baselineId) || !this.csvs.getSession(entity.candidateId)) {
+      console.error(`Comparison ${entity.comparisonId} has an unavailable source projection.`);
+      return;
+    }
     entity.version += 1;
     this.emit({ kind: 'changed', comparison: this.project(entity) });
   }
