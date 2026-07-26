@@ -11,6 +11,26 @@ async function rows(connection, sql, values = undefined) {
   return result.getRowObjectsJS();
 }
 
+async function expectInterrupted(connection, query, timeoutMs = 2_000) {
+  let timeout;
+  const retries = setInterval(() => connection.interrupt(), 5);
+  connection.interrupt();
+  try {
+    await Promise.race([
+      assert.rejects(query),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`DuckDB query did not stop within ${timeoutMs} ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearInterval(retries);
+    clearTimeout(timeout);
+  }
+}
+
 async function sourceDiagnostics(connection, tableName, key) {
   const table = quoteIdentifier(tableName);
   const active = '__deleted = false';
@@ -204,9 +224,7 @@ try {
 
   worker = await database.connect();
   const expensiveQuery = worker.runAndReadAll(`SELECT sum(sin(a.i::DOUBLE + b.j::DOUBLE)) FROM range(100000000) a(i), range(1000) b(j)`);
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  worker.interrupt();
-  await assert.rejects(expensiveQuery);
+  await expectInterrupted(worker, expensiveQuery);
   assert.equal(numberValue((await rows(owner, 'SELECT 42 AS answer'))[0].answer), 42);
 
   await owner.run('DROP VIEW prototype_live_view');

@@ -191,9 +191,12 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   async release(operationId: string): Promise<void> {
     const worker = this.workers.get(operationId);
     if (!worker) return;
-    const connection = await worker.connection;
-    connection.closeSync();
-    if (this.workers.get(operationId) === worker) this.workers.delete(operationId);
+    try {
+      const connection = await worker.connection;
+      connection.closeSync();
+    } finally {
+      if (this.workers.get(operationId) === worker) this.workers.delete(operationId);
+    }
   }
 
   async readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
@@ -268,9 +271,25 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   async dispose(): Promise<void> {
+    const failures: Error[] = [];
     for (const operationId of [...this.workers.keys()]) this.cancel(operationId);
-    for (const operationId of [...this.workers.keys()]) await this.release(operationId);
-    for (const artifactId of [...this.artifacts]) await this.dropSnapshot(artifactId);
+    for (const operationId of [...this.workers.keys()]) {
+      try {
+        await this.release(operationId);
+      } catch (error) {
+        failures.push(normalizeError(error));
+      }
+    }
+    for (const artifactId of [...this.artifacts]) {
+      try {
+        await this.dropSnapshot(artifactId);
+      } catch (error) {
+        failures.push(normalizeError(error));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Unable to dispose all Comparison executor resources.');
+    }
   }
 
   private async getWriter(operationId: string): Promise<DuckDBConnection> {
@@ -364,4 +383,8 @@ function flipClassification(
   if (classification === 'baseline-only') return 'candidate-only';
   if (classification === 'candidate-only') return 'baseline-only';
   return classification;
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

@@ -74,7 +74,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   deferReleases = false;
   failWindowReads = false;
   dropFailuresRemaining = 0;
-  releaseCount = 0;
+  releaseAttemptCount = 0;
   disposeCalled = false;
   readonly droppedArtifacts: string[] = [];
   private readonly pendingSnapshots = new Map<string, (error: Error) => void>();
@@ -114,7 +114,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   }
 
   async release(): Promise<void> {
-    this.releaseCount += 1;
+    this.releaseAttemptCount += 1;
     if (this.deferReleases) {
       await new Promise<void>((resolve) => this.pendingReleases.push(resolve));
     }
@@ -170,15 +170,15 @@ async function waitForArtifactDrop(
   throw new Error(`Comparison artifact ${artifactId} was not retired.`);
 }
 
-async function waitForReleaseCount(
+async function waitForReleaseAttemptCount(
   executor: ScriptedComparisonExecutor,
   expectedCount: number,
 ): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (executor.releaseCount >= expectedCount) return;
+    if (executor.releaseAttemptCount >= expectedCount) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  throw new Error(`Comparison worker release count did not reach ${expectedCount}.`);
+  throw new Error(`Comparison worker release attempt count did not reach ${expectedCount}.`);
 }
 
 async function disposeRealFixture(
@@ -517,7 +517,7 @@ describe('CsvComparisonService interaction contract', () => {
     if (!firstToken) throw new Error('result not applied');
     executor.deferDrops = true;
     executor.deferReleases = true;
-    const releaseCountBeforeRefresh = executor.releaseCount;
+    const releaseAttemptCountBeforeRefresh = executor.releaseAttemptCount;
 
     service.begin({ kind: 'refresh', comparisonId: opened.comparison.comparisonId });
     await waitForPhase(service, opened.comparison.comparisonId, 'summarizing');
@@ -531,7 +531,7 @@ describe('CsvComparisonService interaction contract', () => {
 
     executor.deferDrops = false;
     executor.releaseDrops();
-    await waitForReleaseCount(executor, releaseCountBeforeRefresh + 1);
+    await waitForReleaseAttemptCount(executor, releaseAttemptCountBeforeRefresh + 1);
     expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe(
       'summarizing',
     );

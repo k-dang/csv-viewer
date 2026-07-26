@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
 import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
 
+async function waitWithTimeout(
+  promise: Promise<void>,
+  timeoutMs: number,
+  message: string,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<void>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('interrupts an active operation before releasing its dedicated connection', async () => {
     let interrupted = false;
@@ -105,6 +123,102 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     await executor.release('operation');
   });
 
+  it('unregisters a worker even when closing its connection fails', async () => {
+    let closeAttempts = 0;
+    const connection = {
+      runAndReadAll: (sql: string) =>
+        Promise.resolve({
+          getRowObjectsJS: () => (sql.includes('AS count') ? [{ count: 0n }] : []),
+        }),
+      closeSync: () => {
+        closeAttempts += 1;
+        throw new Error('close failed');
+      },
+    } as unknown as DuckDBConnection;
+    const executor = new DuckDbComparisonExecutor({
+      getSource: () => ({
+        tableName: 'source',
+        columns: [{ name: 'id', type: 'VARCHAR' }],
+      }),
+      getOwnerConnection: async () => connection,
+      connectWorker: async () => connection,
+    });
+
+    await executor.validateKey('operation', 'source', ['id']);
+    await expect(executor.release('operation')).rejects.toThrow('close failed');
+    await expect(executor.release('operation')).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(1);
+  });
+
+  it('continues disposal after a worker release fails', async () => {
+    const droppedTables: string[] = [];
+    let workerIndex = 0;
+    let secondWorkerClosed = false;
+    const summaryResult = {
+      getRowObjectsJS: () => [
+        {
+          changed: 0n,
+          baseline_only: 0n,
+          candidate_only: 0n,
+          unchanged: 0n,
+          total: 0n,
+          changed_count_0: 0n,
+        },
+      ],
+    };
+    const workers = [
+      {
+        run: () => Promise.resolve(),
+        runAndReadAll: () => Promise.resolve(summaryResult),
+        interrupt: () => undefined,
+        closeSync: () => {
+          throw new Error('first close failed');
+        },
+      },
+      {
+        run: () => Promise.resolve(),
+        runAndReadAll: () => Promise.resolve(summaryResult),
+        interrupt: () => undefined,
+        closeSync: () => {
+          secondWorkerClosed = true;
+        },
+      },
+    ] as unknown as DuckDBConnection[];
+    const owner = {
+      run: (sql: string) => {
+        droppedTables.push(sql);
+        return Promise.resolve();
+      },
+    } as unknown as DuckDBConnection;
+    const executor = new DuckDbComparisonExecutor({
+      getSource: (sessionId) => ({
+        tableName: sessionId,
+        columns: [
+          { name: 'id', type: 'VARCHAR' },
+          { name: 'value', type: 'VARCHAR' },
+        ],
+      }),
+      getOwnerConnection: async () => owner,
+      connectWorker: async () => workers[workerIndex++],
+    });
+
+    for (const artifactId of ['first', 'second']) {
+      await executor.createSnapshot({
+        artifactId,
+        baselineId: 'baseline',
+        candidateId: 'candidate',
+        key: ['id'],
+        valueColumns: ['value'],
+      });
+    }
+
+    await expect(executor.dispose()).rejects.toThrow(
+      'Unable to dispose all Comparison executor resources',
+    );
+    expect(secondWorkerClosed).toBe(true);
+    expect(droppedTables).toHaveLength(2);
+  });
+
   it('interrupts real snapshot work without disrupting the owner connection or leaving staging', async () => {
     const database = await DuckDBInstance.create(':memory:');
     const owner = await database.connect();
@@ -122,6 +236,10 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       'c' || i::VARCHAR AS "__csvViewerRowId", i AS "__csvViewerSourceOrder",
       false AS "__csvViewerDeleted", i::VARCHAR AS id, cos(i::DOUBLE)::VARCHAR AS value
       FROM range(100000000) source(i)`);
+    let markSnapshotRunIssued: (() => void) | null = null;
+    const snapshotRunIssued = new Promise<void>((resolve) => {
+      markSnapshotRunIssued = resolve;
+    });
     const executor = new DuckDbComparisonExecutor({
       getSource: (sessionId) => ({
         tableName: sessionId,
@@ -131,7 +249,24 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         ],
       }),
       getOwnerConnection: async () => owner,
-      connectWorker: () => database.connect(),
+      connectWorker: async () => {
+        const connection = await database.connect();
+        return new Proxy(connection, {
+          get(target, property) {
+            if (property === 'run') {
+              return (sql: string) => {
+                const query = target.run(sql);
+                if (sql.includes('csv_comparison_real_interruption')) {
+                  markSnapshotRunIssued?.();
+                }
+                return query;
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      },
     });
 
     try {
@@ -164,7 +299,11 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         key: ['id'],
         valueColumns: ['value'],
       });
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await waitWithTimeout(
+        snapshotRunIssued,
+        2_000,
+        'Comparison snapshot query was not issued within 2 seconds.',
+      );
       executor.cancel('real-interruption');
 
       await expect(snapshot).rejects.toThrow();
