@@ -17,7 +17,7 @@ The comparison always uses the complete non-deleted Working CSVs, including unsa
 
 The renderer receives metadata, bounded diagnostics, summaries, and bounded result windows only. Complete Working CSVs and complete comparison results remain in main-process DuckDB storage.
 
-The first version does not edit or export results, infer a key, match by row position, coerce incompatible schemas, add arbitrary result filters/search, compare more than two CSVs, restore Comparison Tabs after process restart, or compare directly from source files on disk.
+The first version does not edit or export results, infer a key, match by row position, coerce incompatible schemas, add arbitrary result filters/search, expose a row-level action/Source rows column, navigate from a result to source rows, compare more than two CSVs, restore Comparison Tabs after process restart, or compare directly from source files on disk.
 
 Canonical product language is defined in [CONTEXT.md](../../CONTEXT.md). Implementations and UI copy use Baseline, Candidate, Comparison Key, Valid Comparison Key, Comparison-Compatible CSVs, Comparison Tab, Outdated Comparison, Changed Row, Unchanged Row, Baseline-only Row, Candidate-only Row, and Working CSV.
 
@@ -67,7 +67,7 @@ At the application minimum width, header controls wrap while remaining reachable
 
 ### 3.3 Result presentation
 
-Summary counts include Changed, Baseline-only, Candidate-only, Unchanged, and total rows plus the Changed Row count for each non-key column.
+The summary bar includes Changed, Baseline-only, Candidate-only, Unchanged, and total row counts. Each non-key column group header includes that column's Changed Row count.
 
 The renderer owns two per-Comparison toggles:
 
@@ -76,9 +76,9 @@ The renderer owns two per-Comparison toggles:
 
 Key columns appear once in applied-key order. Every non-key column appears as an adjacent Baseline/Candidate pair. Changed-first orders positive-count columns by changed-row count descending, using current Baseline column order for ties, followed by zero-change columns in Baseline order. All-in-CSV-order uses current Baseline order. A side swap may therefore change tied/all-column order without recomputing the snapshot.
 
-Rows use composite Comparison Key ascending in exact binary text order. Changed cells use complementary Baseline/Candidate styling plus non-color indicators and accessible text. Equal pairs are neutral. A missing row side is labelled explicitly and is never rendered as a null or empty cell. Null and empty string use distinct labels.
+Rows use composite Comparison Key ascending in exact binary text order. Result classification is compact plain text rather than a pill; the Changed classification cell uses a subtle full-cell background. Changed value cells use complementary Baseline/Candidate styling plus non-color indicators and accessible text. Equal pairs are neutral. A missing row side is labelled explicitly and is never rendered as a null or empty cell. Null and empty string use distinct labels.
 
-No edit, Save, export, arbitrary search, or arbitrary filter controls appear in a Comparison Tab.
+Cell copy actions copy displayed exact values. No row-level action column, edit, Save, export, arbitrary search, or arbitrary filter controls appear in a Comparison Tab.
 
 ### 3.4 Outdated, failure, and cancellation
 
@@ -86,11 +86,11 @@ Successful edit, insert, delete, undo, redo, or Working CSV replacement immediat
 
 An initial failure is a retryable empty error state. A replacement failure is an inline error above the preserved result. Cancellation returns to setup when no result exists; otherwise it preserves the result and presents a dismissible cancellation confirmation.
 
-### 3.5 Swap and source-row navigation
+### 3.5 Swap sides
 
-Disable Swap while an operation runs. Otherwise Swap reorients the active snapshot without recomputation: exchange Baseline/Candidate references and paired values, flip Baseline-only/Candidate-only classification and summary labels, remap source actions, increment the Comparison version, and mint a new result token. Preserve applied key and freshness by source identity.
+Disable Swap while an operation runs. Otherwise Swap reorients the active snapshot without recomputation: exchange Baseline/Candidate references and paired values, flip Baseline-only/Candidate-only classification and summary labels, increment the Comparison version, and mint a new result token. Preserve applied key and freshness by source identity.
 
-Each row exposes **Open Baseline row** and/or **Open Candidate row**. Activate the source CSV Tab without changing its query state. If that query hides the row, show **Clear query and reveal row** as an explicit follow-up. If an Outdated row no longer exists, report that and leave source state unchanged.
+The first version does not expose a **Source rows** column, row-level copy, or navigation from a Comparison result to its source CSV rows.
 
 ## 4. Ownership and state model
 
@@ -572,8 +572,7 @@ Rename current serialized `sessionId` to `workingCsvId` in one mechanical shared
 1. Convert App/TabStrip to the discriminated Tab union without changing current CSV rendering.
 2. Add Compare Candidate dialog and pair focus/reuse.
 3. Add Comparison configuration/status/summary/grid views and event reconciliation.
-4. Add source-row navigation and hidden-row reveal prompt.
-5. Apply accessibility behavior and responsive/wide-grid styling.
+4. Apply accessibility behavior and responsive/wide-grid styling.
 
 ### Phase 5 — release verification
 

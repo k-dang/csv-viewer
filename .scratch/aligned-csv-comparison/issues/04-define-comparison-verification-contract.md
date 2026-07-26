@@ -79,7 +79,7 @@ This internal seam is not a public database port and does not expose SQL/table m
 
 The Comparison workflow targets WCAG 2.2 AA. Automated renderer checks plus a Windows keyboard and NVDA smoke pass verify:
 
-- Compare, Candidate selection, key selection, Apply, Refresh, Cancel, Swap, row/column toggles, source-row actions, and close confirmation are keyboard operable;
+- Compare, Candidate selection, key selection, Apply, Refresh, Cancel, Swap, row/column toggles, cell-copy actions, and close confirmation are keyboard operable;
 - Candidate and close dialogs have names/descriptions, trap focus, support safe Escape cancellation, and restore focus to the invoker;
 - initial setup focuses the key selector, while invalid Apply focuses its diagnostic summary without hiding reachable examples;
 - progress phase changes use a polite live region, failures use an alert, and updates do not flood announcements;
@@ -106,7 +106,7 @@ A blank row has at least one null or empty-string key part. Duplicate grouping c
 
 Manual release validation has three focused passes rather than replaying every automated edge case:
 
-1. **Functional golden journey** — Candidate compatibility and pair reuse; initial setup; invalid then valid composite key; all classifications and exact null/empty display; summaries/toggles; unapplied draft; Outdated preservation and Refresh; Cancel/retry; Swap; visible/hidden source-row navigation; direct Comparison close; and combined dirty/dependent source close.
+1. **Functional golden journey** — Candidate compatibility and pair reuse; initial setup; invalid then valid composite key; all classifications and exact null/empty display; result-cell emphasis and cell copy; summaries/toggles; unapplied draft; Outdated preservation and Refresh; Cancel/retry; Swap; direct Comparison close; and combined dirty/dependent source close.
 2. **Visual and accessibility** — light/dark, narrow/wide CSVs, horizontal grid scrolling, 200% zoom, reduced motion, keyboard-only completion, focused NVDA coverage, and non-color-only differences.
 3. **Stress and lifecycle** — million-row fixture, distant bounded windows, concurrent source use, cancellation latency, five Refresh cycles and settled memory, close during work, and final quit with no live operations/connections/artifacts.
 

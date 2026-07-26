@@ -7,7 +7,7 @@ Blocked by: None
 
 ## Question
 
-What exact layout, controls, and transitions should the Comparison Tab expose for initial key setup, key validation, applying a new key, comparing, results, outdated results, refresh, cancellation, failure, swapping sides, source-row navigation, and dependent-close warnings?
+What exact layout, controls, and transitions should the Comparison Tab expose for initial key setup, key validation, applying a new key, comparing, results, outdated results, refresh, cancellation, failure, swapping sides, and dependent-close warnings?
 
 Use a throwaway UI prototype against the existing populated application surface. Preserve the selected Aligned Comparison direction and the agreed presentation toggles, but stress-test narrow and wide CSVs plus the interaction between current results and pending key changes.
 
@@ -15,7 +15,7 @@ Use a throwaway UI prototype against the existing populated application surface.
 
 ### Resolution
 
-The throwaway prototype is [comparison-tab-prototype.html](../prototypes/comparison-tab-prototype.html). It models initial setup, validation, comparison, results, outdated results, invalid-key recovery, refresh failure, and cancellation against the current header, tab strip, cards, and horizontally scrolling grid. Browser automation was unavailable in this workspace, so the contract below is based on the interactive prototype source and existing rendered application structure rather than automated screenshot assertions.
+The throwaway prototype is [comparison-tab-prototype.html](../prototypes/comparison-tab-prototype.html). It models initial setup, validation, comparison, results, outdated results, invalid-key recovery, refresh failure, and cancellation against the current header, tab strip, cards, and horizontally scrolling grid. Browser automation was unavailable in this workspace, so the contract below is based on the interactive prototype source and existing rendered application structure rather than automated screenshot assertions. The result-classification and row-action details below were revised after implementation review of the populated grid.
 
 #### Entry and Tab identity
 
@@ -44,24 +44,24 @@ Controls wrap below the file cards at the application's minimum width. The resul
 - Key diagnostics identify Baseline versus Candidate and report blank-row and duplicate-group counts, with bounded example keys/row references. They appear under the selector and remain until the draft changes or Apply key is retried.
 - **Refresh comparison** always uses the applied key, never an unapplied draft. It is disabled until a result has been applied.
 - If no prior result exists, progress replaces the empty state. If a prior result exists, it stays readable while a progress banner says that a replacement is being prepared.
-- **Cancel** is shown only during validation/comparison. Cancellation returns to setup when there is no prior result; otherwise it preserves the prior result and shows a dismissible confirmation.
+- **Cancel** is shown while an operation is active, including its summarizing phase. Cancellation returns to setup when there is no prior result; otherwise it preserves the prior result and shows a dismissible confirmation.
 - Initial failure presents a retryable empty error state. Replacement failure presents an inline error while preserving the prior result.
 
 #### Results and presentation toggles
 
-- The summary reports Changed, Baseline-only, Candidate-only, Unchanged, and total row counts plus per-column changed-row counts.
+- The summary bar reports Changed, Baseline-only, Candidate-only, Unchanged, and total row counts. Each non-key column group header reports that column's changed-row count.
 - The rows toggle is **Differences** (default: Changed + Baseline-only + Candidate-only) or **All rows**.
 - The columns toggle is **Changed first** (default) or **All in CSV order**. It changes ordering, not membership: key columns appear once and all non-key columns remain available. Changed first orders columns with changes by changed-row count descending, then preserves Baseline column order for ties; columns with zero changes follow in Baseline order.
-- Grid order is deterministic Comparison Key ascending using exact binary text order. A result row contains classification, the key columns once, and a Baseline/Candidate subcolumn pair for every non-key column.
+- Grid order is deterministic Comparison Key ascending using exact binary text order. A result row contains classification, the key columns once, and a Baseline/Candidate subcolumn pair for every non-key column. Classification is compact plain text rather than a pill; the Changed classification cell uses a subtle full-cell background.
 - Changed paired cells receive complementary, non-color-only old/new treatment. Equal paired cells remain neutral. The missing side of a Baseline-only or Candidate-only row is explicitly labelled, never rendered as an empty value. Null and empty string retain distinct renderings.
-- Row and cell copy actions copy displayed exact values. Editing and export actions are absent.
+- Cell copy actions copy displayed exact values. A Comparison result has no row-level action column. Editing and export actions are absent.
 
-#### Outdated results and source navigation
+#### Outdated results and Swap sides
 
 - Any successful Working CSV edit, insert, delete, undo, redo, or session replacement marks dependent results Outdated immediately. Current results, applied key, draft key, and toggles remain usable.
 - The outdated banner names which source changed. **Refresh comparison** is always explicit; switching tabs or changing source query state never refreshes.
-- **Swap sides** is disabled during background work. Otherwise it immediately reorients the active snapshot and summary without recomputation: Baseline-only/Candidate-only labels flip, paired columns flip, and source actions remap. It does not clear Outdated state or alter key/toggle state.
-- Each result row exposes **Open Baseline row** and/or **Open Candidate row** in a row action menu. It focuses the source CSV Tab and row without changing that Tab's query state. If the row is hidden by its current query, the CSV Tab shows a banner offering the explicit action **Clear query and reveal row**. If an outdated row no longer exists, the app reports that fact and leaves source state unchanged.
+- **Swap sides** is disabled during background work. Otherwise it immediately reorients the active snapshot and summary without recomputation: Baseline-only/Candidate-only labels and paired columns flip. It does not clear Outdated state or alter key/toggle state.
+- The first version does not expose a **Source rows** column, row-level copy, or source-row navigation from a Comparison result.
 
 #### Dependent close
 
