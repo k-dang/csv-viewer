@@ -86,11 +86,9 @@ Successful edit, insert, delete, undo, redo, or Working CSV replacement immediat
 
 An initial failure is a retryable empty error state. A replacement failure is an inline error above the preserved result. Cancellation returns to setup when no result exists; otherwise it preserves the result and presents a dismissible cancellation confirmation.
 
-### 3.5 Swap and source-row navigation
+### 3.5 Swap
 
-Disable Swap while an operation runs. Otherwise Swap reorients the active snapshot without recomputation: exchange Baseline/Candidate references and paired values, flip Baseline-only/Candidate-only classification and summary labels, remap source actions, increment the Comparison version, and mint a new result token. Preserve applied key and freshness by source identity.
-
-Each row exposes **Open Baseline row** and/or **Open Candidate row**. Activate the source CSV Tab without changing its query state. If that query hides the row, show **Clear query and reveal row** as an explicit follow-up. If an Outdated row no longer exists, report that and leave source state unchanged.
+Disable Swap while an operation runs. Otherwise Swap reorients the active snapshot without recomputation: exchange Baseline/Candidate references and paired values, flip Baseline-only/Candidate-only classification and summary labels, increment the Comparison version, and mint a new result token. Preserve applied key and freshness by source identity.
 
 ## 4. Ownership and state model
 
@@ -572,8 +570,7 @@ Rename current serialized `sessionId` to `workingCsvId` in one mechanical shared
 1. Convert App/TabStrip to the discriminated Tab union without changing current CSV rendering.
 2. Add Compare Candidate dialog and pair focus/reuse.
 3. Add Comparison configuration/status/summary/grid views and event reconciliation.
-4. Add source-row navigation and hidden-row reveal prompt.
-5. Apply accessibility behavior and responsive/wide-grid styling.
+4. Apply accessibility behavior and responsive/wide-grid styling.
 
 ### Phase 5 — release verification
 
