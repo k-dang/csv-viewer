@@ -31,9 +31,14 @@ export type DuckDbComparisonAccess = {
   connectWorker(): Promise<DuckDBConnection>;
 };
 
+type ComparisonWorker = {
+  connection: Promise<DuckDBConnection>;
+  cancelled: boolean;
+};
+
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private readonly artifacts = new Set<string>();
-  private readonly writers = new Map<string, Promise<DuckDBConnection>>();
+  private readonly workers = new Map<string, ComparisonWorker>();
   private readonly readCounts = new Map<string, number>();
   private readonly readWaiters = new Map<string, Array<() => void>>();
   private readonly retirements = new Map<string, Promise<void>>();
@@ -64,7 +69,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       .map((column, index) => `${quoteIdentifier(column)} AS ${quoteIdentifier(`key_${index}`)}`)
       .join(', ');
     const keyGroup = key.map(quoteIdentifier).join(', ');
-    const keyOrder = key.map((column) => `${quoteIdentifier(column)} ASC`).join(', ');
+    const keyOrder = key
+      .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
+      .join(', ');
     const blankCountResult = await writer.runAndReadAll(
       `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
     );
@@ -135,57 +142,61 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       ]),
     ].join(', ');
     const writer = await this.getWriter(request.artifactId);
-    try {
-      await this.dropSnapshot(request.artifactId);
-      await writer.run(
-        `CREATE TABLE ${table} AS SELECT ${projection}
-         FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
-         FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
-      );
-      this.artifacts.add(request.artifactId);
-      const changedSums = request.valueColumns
-        .map(
-          (_column, index) =>
-            `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
-        )
-        .join(', ');
-      const summaryResult = await writer.runAndReadAll(
-        `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
-          coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
-          coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
-          coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
-          count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
-      );
-      const row = summaryResult.getRowObjectsJS()[0];
-      return {
-        rows: {
-          changed: normalizeCount(row.changed),
-          baselineOnly: normalizeCount(row.baseline_only),
-          candidateOnly: normalizeCount(row.candidate_only),
-          unchanged: normalizeCount(row.unchanged),
-          total: normalizeCount(row.total),
-        },
-        changedColumns: request.valueColumns.map((name, index) => ({
-          name,
-          changedRowCount: normalizeCount(row[`changed_count_${index}`]),
-        })),
-      };
-    } finally {
-      if (this.writers.has(request.artifactId)) {
-        this.writers.delete(request.artifactId);
-        writer.closeSync();
-      }
-    }
+    await this.dropSnapshot(request.artifactId);
+    await writer.run(
+      `CREATE TABLE ${table} AS SELECT ${projection}
+       FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
+       FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
+    );
+    this.artifacts.add(request.artifactId);
+    const changedSums = request.valueColumns
+      .map(
+        (_column, index) =>
+          `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
+      )
+      .join(', ');
+    const summaryResult = await writer.runAndReadAll(
+      `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
+        coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
+        coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
+        coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
+        count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
+    );
+    const row = summaryResult.getRowObjectsJS()[0];
+    return {
+      rows: {
+        changed: normalizeCount(row.changed),
+        baselineOnly: normalizeCount(row.baseline_only),
+        candidateOnly: normalizeCount(row.candidate_only),
+        unchanged: normalizeCount(row.unchanged),
+        total: normalizeCount(row.total),
+      },
+      changedColumns: request.valueColumns.map((name, index) => ({
+        name,
+        changedRowCount: normalizeCount(row[`changed_count_${index}`]),
+      })),
+    };
   }
 
   cancel(operationId: string): void {
-    const writer = this.writers.get(operationId);
-    if (!writer) return;
-    this.writers.delete(operationId);
-    void writer.then(
-      (connection) => connection.closeSync(),
+    const worker = this.workers.get(operationId);
+    if (!worker) return;
+    worker.cancelled = true;
+    void worker.connection.then(
+      (connection) => connection.interrupt(),
       () => undefined,
     );
+  }
+
+  async release(operationId: string): Promise<void> {
+    const worker = this.workers.get(operationId);
+    if (!worker) return;
+    try {
+      const connection = await worker.connection;
+      connection.closeSync();
+    } finally {
+      if (this.workers.get(operationId) === worker) this.workers.delete(operationId);
+    }
   }
 
   async readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
@@ -206,7 +217,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
       const where = request.differencesOnly ? ` WHERE classification <> 'unchanged'` : '';
       const order = Array.from({ length: request.keyCount }, (_value, index) =>
-        quoteIdentifier(`key_${index}`),
+        `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
       ).join(', ');
       const countResult = await connection.runAndReadAll(
         `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
@@ -260,25 +271,52 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   async dispose(): Promise<void> {
-    for (const operationId of [...this.writers.keys()]) this.cancel(operationId);
-    for (const artifactId of [...this.artifacts]) await this.dropSnapshot(artifactId);
+    const failures: Error[] = [];
+    for (const operationId of [...this.workers.keys()]) this.cancel(operationId);
+    for (const operationId of [...this.workers.keys()]) {
+      try {
+        await this.release(operationId);
+      } catch (error) {
+        failures.push(normalizeError(error));
+      }
+    }
+    for (const artifactId of [...this.artifacts]) {
+      try {
+        await this.dropSnapshot(artifactId);
+      } catch (error) {
+        failures.push(normalizeError(error));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Unable to dispose all Comparison executor resources.');
+    }
   }
 
   private async getWriter(operationId: string): Promise<DuckDBConnection> {
-    const existing = this.writers.get(operationId);
-    if (existing) return existing;
-    const pending = this.database.connectWorker();
-    this.writers.set(operationId, pending);
-    try {
-      const writer = await pending;
-      if (this.writers.get(operationId) !== pending) {
+    const existing = this.workers.get(operationId);
+    if (existing) {
+      const connection = await existing.connection;
+      if (this.workers.get(operationId) !== existing || existing.cancelled) {
         throw new Error('Comparison operation was cancelled.');
       }
-      return writer;
+      return connection;
+    }
+    const worker: ComparisonWorker = {
+      connection: this.database.connectWorker(),
+      cancelled: false,
+    };
+    this.workers.set(operationId, worker);
+    let writer: DuckDBConnection;
+    try {
+      writer = await worker.connection;
     } catch (error) {
-      if (this.writers.get(operationId) === pending) this.writers.delete(operationId);
+      if (this.workers.get(operationId) === worker) this.workers.delete(operationId);
       throw error;
     }
+    if (this.workers.get(operationId) !== worker || worker.cancelled) {
+      throw new Error('Comparison operation was cancelled.');
+    }
+    return writer;
   }
 
   private acquireRead(artifactId: string): void {
@@ -345,4 +383,8 @@ function flipClassification(
   if (classification === 'baseline-only') return 'candidate-only';
   if (classification === 'candidate-only') return 'baseline-only';
   return classification;
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

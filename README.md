@@ -78,4 +78,4 @@ Recent files are stored in Electron's per-user `userData` directory as `recent-f
 - Only one active CSV session is supported.
 - Recent files store local file paths only and do not track moved or deleted files until reopening fails.
 - Advanced spreadsheet features such as formulas, pivot tables, charts, joins, and SQL editing are out of scope.
-- Long-running DuckDB work can be superseded at the renderer request level, but active database queries are not forcibly killed.
+- Long-running general CSV queries can be superseded at the renderer request level but are not forcibly killed. Comparison generations use dedicated workers that are interrupted when cancelled.

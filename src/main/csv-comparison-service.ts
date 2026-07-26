@@ -62,6 +62,7 @@ export class CsvComparisonService {
   private readonly entities = new Map<string, ComparisonRecord>();
   private readonly pairIndex = new Map<string, string>();
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
+  private readonly pendingRetirements = new Set<string>();
   private readonly unsubscribeFromDataChanges: () => void;
 
   constructor(
@@ -359,12 +360,28 @@ export class CsvComparisonService {
     let stagingArtifactId: string | null = null;
     try {
       await yieldToEventLoop();
-      if (!this.operationIsCurrent(entity, operation))
-        return this.finishCancelled(entity, operation);
+      if (!this.operationIsCurrent(entity, operation)) {
+        await this.settleAfterRelease(entity, operation, {
+          attemptId: operation.operationId,
+          status: 'cancelled',
+        });
+        return;
+      }
+      await this.retryPendingRetirements();
+      if (!this.operationIsCurrent(entity, operation)) {
+        await this.settleAfterRelease(entity, operation, {
+          attemptId: operation.operationId,
+          status: 'cancelled',
+        });
+        return;
+      }
       const baseline = this.csvs.getSession(entity.baselineId);
       const candidate = this.csvs.getSession(entity.candidateId);
-      if (!baseline || !candidate)
-        return this.finishFailed(entity, operation, 'source-unavailable');
+      if (!baseline || !candidate) {
+        await this.releaseWorker(operation.operationId);
+        this.finishFailed(entity, operation, 'source-unavailable');
+        return;
+      }
       const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
       const baselineDiagnostics = await this.executor.validateKey(
         operation.operationId,
@@ -376,8 +393,13 @@ export class CsvComparisonService {
         entity.candidateId,
         key,
       );
-      if (!this.operationIsCurrent(entity, operation))
-        return this.finishCancelled(entity, operation);
+      if (!this.operationIsCurrent(entity, operation)) {
+        await this.settleAfterRelease(entity, operation, {
+          attemptId: operation.operationId,
+          status: 'cancelled',
+        });
+        return;
+      }
 
       const diagnostics: ComparisonKeyDiagnostics = {
         key,
@@ -386,7 +408,7 @@ export class CsvComparisonService {
       };
       if (hasInvalidKeys(diagnostics)) {
         this.executor.cancel(operation.operationId);
-        this.settle(entity, operation, {
+        await this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'invalid-key',
           diagnostics,
@@ -397,8 +419,13 @@ export class CsvComparisonService {
       operation.phase = 'comparing';
       this.publishChange(entity);
       await yieldToEventLoop();
-      if (!this.operationIsCurrent(entity, operation))
-        return this.finishCancelled(entity, operation);
+      if (!this.operationIsCurrent(entity, operation)) {
+        await this.settleAfterRelease(entity, operation, {
+          attemptId: operation.operationId,
+          status: 'cancelled',
+        });
+        return;
+      }
       const valueColumns = baseline.columns
         .map((column) => column.name)
         .filter((column) => !key.includes(column));
@@ -415,8 +442,12 @@ export class CsvComparisonService {
       this.publishChange(entity);
       await yieldToEventLoop();
       if (!this.operationIsCurrent(entity, operation)) {
-        await this.executor.dropSnapshot(stagingArtifactId);
-        return this.finishCancelled(entity, operation);
+        await this.retireSnapshot(stagingArtifactId);
+        await this.settleAfterRelease(entity, operation, {
+          attemptId: operation.operationId,
+          status: 'cancelled',
+        });
+        return;
       }
       const currentBaseline = this.csvs.getSession(entity.baselineId);
       const currentCandidate = this.csvs.getSession(entity.candidateId);
@@ -426,8 +457,8 @@ export class CsvComparisonService {
       if (!currentCandidate || currentCandidate.dataRevision !== captured.candidate)
         changedSides.push('candidate');
       if (changedSides.length > 0) {
-        await this.executor.dropSnapshot(stagingArtifactId);
-        this.settle(entity, operation, {
+        await this.retireSnapshot(stagingArtifactId);
+        await this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'sources-changed',
           changedSides,
@@ -436,7 +467,6 @@ export class CsvComparisonService {
       }
 
       const previousArtifactId = entity.snapshot?.artifactId ?? null;
-      if (previousArtifactId) await this.executor.dropSnapshot(previousArtifactId);
       entity.snapshot = {
         artifactId: stagingArtifactId,
         resultToken: stagingArtifactId,
@@ -448,13 +478,51 @@ export class CsvComparisonService {
         freshness: { kind: 'current' },
       };
       stagingArtifactId = null;
-      this.settle(entity, operation, { attemptId: operation.operationId, status: 'applied' });
+      this.publishChange(entity);
+      if (previousArtifactId) await this.retireSnapshot(previousArtifactId);
+      await this.settleAfterRelease(entity, operation, {
+        attemptId: operation.operationId,
+        status: 'applied',
+      });
     } catch (error) {
       console.error(`Comparison operation ${operation.operationId} failed.`, error);
-      if (stagingArtifactId)
-        await this.executor.dropSnapshot(stagingArtifactId).catch(() => undefined);
+      if (stagingArtifactId) await this.retireSnapshot(stagingArtifactId);
+      await this.releaseWorker(operation.operationId);
       if (operation.cancelRequested) this.finishCancelled(entity, operation);
       else this.finishFailed(entity, operation, 'query-failed');
+    } finally {
+      await this.releaseWorker(operation.operationId);
+    }
+  }
+
+  private async settleAfterRelease(
+    entity: ComparisonRecord,
+    operation: Operation,
+    lastAttempt: ComparisonView['lastAttempt'],
+  ): Promise<void> {
+    await this.releaseWorker(operation.operationId);
+    this.settle(entity, operation, lastAttempt);
+  }
+
+  private async releaseWorker(operationId: string): Promise<void> {
+    await this.executor.release(operationId).catch((error) => {
+      console.error(`Failed to release Comparison worker ${operationId}.`, error);
+    });
+  }
+
+  private async retireSnapshot(artifactId: string): Promise<void> {
+    try {
+      await this.executor.dropSnapshot(artifactId);
+      this.pendingRetirements.delete(artifactId);
+    } catch (error) {
+      this.pendingRetirements.add(artifactId);
+      console.error(`Failed to retire Comparison snapshot ${artifactId}.`, error);
+    }
+  }
+
+  private async retryPendingRetirements(): Promise<void> {
+    for (const artifactId of [...this.pendingRetirements]) {
+      await this.retireSnapshot(artifactId);
     }
   }
 
