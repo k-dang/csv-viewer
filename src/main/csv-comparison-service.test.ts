@@ -70,11 +70,16 @@ const emptySummary: ComparisonSummary = {
 
 class ScriptedComparisonExecutor implements ComparisonExecutor {
   deferSnapshots = false;
+  deferDrops = false;
+  deferReleases = false;
   failWindowReads = false;
   dropFailuresRemaining = 0;
+  releaseAttemptCount = 0;
   disposeCalled = false;
   readonly droppedArtifacts: string[] = [];
   private readonly pendingSnapshots = new Map<string, (error: Error) => void>();
+  private readonly pendingDrops: Array<() => void> = [];
+  private readonly pendingReleases: Array<() => void> = [];
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
     return validDiagnostics;
@@ -99,13 +104,33 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
 
   async dropSnapshot(artifactId: string): Promise<void> {
     this.droppedArtifacts.push(artifactId);
+    if (this.deferDrops) {
+      await new Promise<void>((resolve) => this.pendingDrops.push(resolve));
+    }
     if (this.dropFailuresRemaining > 0) {
       this.dropFailuresRemaining -= 1;
       throw new Error('scripted drop failure');
     }
   }
 
+  async release(): Promise<void> {
+    this.releaseAttemptCount += 1;
+    if (this.deferReleases) {
+      await new Promise<void>((resolve) => this.pendingReleases.push(resolve));
+    }
+  }
+
+  releaseDrops(): void {
+    for (const resolve of this.pendingDrops.splice(0)) resolve();
+  }
+
+  releaseWorkers(): void {
+    for (const resolve of this.pendingReleases.splice(0)) resolve();
+  }
+
   async dispose(): Promise<void> {
+    this.releaseDrops();
+    this.releaseWorkers();
     this.disposeCalled = true;
     for (const reject of this.pendingSnapshots.values()) reject(new Error('disposed'));
     this.pendingSnapshots.clear();
@@ -132,6 +157,28 @@ async function waitForPhase(
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`Comparison did not reach ${phase}.`);
+}
+
+async function waitForArtifactDrop(
+  executor: ScriptedComparisonExecutor,
+  artifactId: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (executor.droppedArtifacts.includes(artifactId)) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Comparison artifact ${artifactId} was not retired.`);
+}
+
+async function waitForReleaseAttemptCount(
+  executor: ScriptedComparisonExecutor,
+  expectedCount: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (executor.releaseAttemptCount >= expectedCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Comparison worker release attempt count did not reach ${expectedCount}.`);
 }
 
 async function disposeRealFixture(
@@ -425,7 +472,7 @@ describe('CsvComparisonService interaction contract', () => {
     await service.dispose();
   });
 
-  it('keeps the applied snapshot when retiring it for a replacement fails', async () => {
+  it('keeps the published replacement when retiring the prior snapshot fails', async () => {
     const store = new FakeCsvStore();
     store.sessions.set('a', session('a', 'a.csv'));
     store.sessions.set('b', session('b', 'b.csv'));
@@ -443,10 +490,56 @@ describe('CsvComparisonService interaction contract', () => {
     service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
     const replacement = await waitForIdle(service, opened.comparison.comparisonId);
 
-    expect(replacement?.lastAttempt?.status).toBe('failed');
-    expect(replacement?.applied?.resultToken).toBe(firstToken);
+    expect(replacement?.lastAttempt?.status).toBe('applied');
+    expect(replacement?.applied?.resultToken).not.toBe(firstToken);
     expect(executor.droppedArtifacts).toContain(firstToken);
+
+    service.begin({ kind: 'refresh', comparisonId: opened.comparison.comparisonId });
+    await waitForIdle(service, opened.comparison.comparisonId);
+    expect(executor.droppedArtifacts.filter((artifactId) => artifactId === firstToken)).toHaveLength(
+      2,
+    );
     error.mockRestore();
+    await service.dispose();
+  });
+
+  it('publishes a replacement atomically before retiring the prior snapshot', async () => {
+    const store = new FakeCsvStore();
+    store.sessions.set('a', session('a', 'a.csv'));
+    store.sessions.set('b', session('b', 'b.csv'));
+    const executor = new ScriptedComparisonExecutor();
+    const service = new CsvComparisonService(store, executor);
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    const first = await waitForIdle(service, opened.comparison.comparisonId);
+    const firstToken = first?.applied?.resultToken;
+    if (!firstToken) throw new Error('result not applied');
+    executor.deferDrops = true;
+    executor.deferReleases = true;
+    const releaseAttemptCountBeforeRefresh = executor.releaseAttemptCount;
+
+    service.begin({ kind: 'refresh', comparisonId: opened.comparison.comparisonId });
+    await waitForPhase(service, opened.comparison.comparisonId, 'summarizing');
+    await waitForArtifactDrop(executor, firstToken);
+
+    const published = service.getState(opened.comparison.comparisonId);
+    expect(executor.droppedArtifacts).toContain(firstToken);
+    expect(published?.operation?.phase).toBe('summarizing');
+    expect(published?.lastAttempt).toBeNull();
+    expect(published?.applied?.resultToken).not.toBe(firstToken);
+
+    executor.deferDrops = false;
+    executor.releaseDrops();
+    await waitForReleaseAttemptCount(executor, releaseAttemptCountBeforeRefresh + 1);
+    expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe(
+      'summarizing',
+    );
+    executor.deferReleases = false;
+    executor.releaseWorkers();
+    const completed = await waitForIdle(service, opened.comparison.comparisonId);
+    expect(completed?.operation).toBeNull();
+    expect(completed?.lastAttempt?.status).toBe('applied');
     await service.dispose();
   });
 

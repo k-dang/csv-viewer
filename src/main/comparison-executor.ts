@@ -27,6 +27,7 @@ export interface ComparisonExecutor {
   validateKey(operationId: string, sessionId: string, key: string[]): Promise<SourceKeyDiagnostics>;
   createSnapshot(request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary>;
   cancel(operationId: string): void;
+  release(operationId: string): Promise<void>;
   readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow>;
   dropSnapshot(artifactId: string): Promise<void>;
   dispose(): Promise<void>;

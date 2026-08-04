@@ -34,6 +34,8 @@ class ControlledExecutor implements ComparisonExecutor {
 
   cancel(): void {}
 
+  async release(): Promise<void> {}
+
   releaseCancellation(): void {
     this.rejectSnapshot?.(new Error('cancelled'));
     this.rejectSnapshot = null;
