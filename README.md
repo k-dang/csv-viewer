@@ -27,7 +27,7 @@ CSV files are opened from disk by the Electron main process, queried through Duc
 ## Requirements
 
 - Node.js 24 or newer
-- pnpm 10.19.0 or newer
+- pnpm 10.34.2
 
 ## Scripts
 
