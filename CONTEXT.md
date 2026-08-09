@@ -1,8 +1,28 @@
 # CSV Viewer
 
-This context describes the language used for exploring, querying, editing, and summarizing tabular CSV data in the desktop viewer.
+This context describes the language used for exploring, querying, editing, and summarizing tabular CSV data in CSV Viewer.
 
 ## Language
+
+**Local Processing**:
+CSV data and derived Working CSV data remain on the user's device throughout opening, querying, editing, comparison, and export.
+_Avoid_: Server-side processing, uploaded processing, cloud processing
+
+**CSV Source**:
+A user-selected CSV, TSV, or text file from which a Working CSV is opened. Two selections are the same CSV Source only when CSV Viewer can establish that they refer to the same local file; resemblance does not establish identity.
+_Avoid_: Source file, input file, uploaded file
+
+**Recent CSV Source**:
+A previously opened CSV Source that CSV Viewer can attempt to reopen without requiring the user to locate it again. Renewing permission for a known CSV Source does not make it a new selection.
+_Avoid_: Recent file, file history, remembered filename
+
+**Export CSV**:
+The operation that delivers a Working CSV as a separate output. Export CSV never overwrites or replaces the Working CSV's CSV Source, and a successful export preserves edit history while establishing the current state as exported.
+_Avoid_: Save, Save As, overwrite, write back
+
+**Unexported Changes**:
+Changes in a Working CSV that are not represented by its latest successful Export CSV or, before any export, by its CSV Source. Unexported Changes determine whether closing would discard work, independently of undo and redo availability.
+_Avoid_: Dirty state, unsaved changes, pending edits
 
 **Aligned Comparison**:
 A comparison of two CSVs that places corresponding Baseline and Candidate rows on the same visual line and distinguishes changed cells, added rows, and removed rows.
@@ -81,11 +101,11 @@ The CSV column selected for statistics in the Stats Panel. When the Stats Panel 
 _Avoid_: Active column, target column
 
 **Tab**:
-One persistent workspace in the viewer: either a Working CSV or an Aligned Comparison. Opening a file always creates and focuses a CSV Tab; a file (identified by its path) can be open in at most one CSV Tab, and opening an already-open file focuses its existing CSV Tab instead of duplicating it.
+One persistent workspace in the viewer: either a Working CSV or an Aligned Comparison. Opening a CSV Source always creates and focuses a CSV Tab; a CSV Source whose identity is known can be open in at most one CSV Tab, and opening it again focuses its existing CSV Tab. When identity cannot be established, a new selection is a new CSV Source.
 _Avoid_: Document, window, temporary view
 
 **Working CSV**:
-The CSV data of one CSV Tab, including unsaved cell edits, inserted rows, and deleted rows. Each CSV Tab has its own Working CSV, independent of other Tabs. Column Value Counts are calculated from the Working CSV, not from the original file on disk.
+The CSV data of one CSV Tab, including cell edits, inserted rows, and deleted rows. Each CSV Tab has its own Working CSV, independent of other Tabs. Column Value Counts are calculated from the Working CSV, not from its CSV Source.
 _Avoid_: Original CSV, source file
 
 **Active Tab**:
