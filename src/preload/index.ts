@@ -6,8 +6,8 @@ const api: CsvViewerApi = {
   openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
   openRecentCsv: (filePath, options) =>
     ipcRenderer.invoke(ipcChannels.openRecentCsv, filePath, options),
-  reopenCsv: (sessionId, options) => ipcRenderer.invoke(ipcChannels.reopenCsv, sessionId, options),
-  closeCsv: (sessionId) => ipcRenderer.invoke(ipcChannels.closeCsv, sessionId),
+  reopenCsv: (workingCsvId, options) => ipcRenderer.invoke(ipcChannels.reopenCsv, workingCsvId, options),
+  closeCsv: (request) => ipcRenderer.invoke(ipcChannels.closeCsv, request),
   getComparisonCandidates: (baselineId) =>
     ipcRenderer.invoke(ipcChannels.getComparisonCandidates, baselineId),
   openComparison: (baselineId, candidateId) =>
@@ -15,8 +15,7 @@ const api: CsvViewerApi = {
   getComparisonState: (comparisonId) =>
     ipcRenderer.invoke(ipcChannels.getComparisonState, comparisonId),
   beginComparison: (request) => ipcRenderer.invoke(ipcChannels.beginComparison, request),
-  cancelComparison: (comparisonId, operationId) =>
-    ipcRenderer.invoke(ipcChannels.cancelComparison, comparisonId, operationId),
+  cancelComparison: (request) => ipcRenderer.invoke(ipcChannels.cancelComparison, request),
   getComparisonWindow: (request) => ipcRenderer.invoke(ipcChannels.getComparisonWindow, request),
   swapComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.swapComparison, comparisonId),
   closeComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.closeComparison, comparisonId),

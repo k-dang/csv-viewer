@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ComparisonSummary, CsvSessionMetadata, SourceKeyDiagnostics } from '../shared/ipc';
+import type {
+  ComparisonOperationId,
+  ComparisonSummary,
+  WorkingCsvView,
+  SourceKeyDiagnostics,
+} from '../shared/ipc';
 import { CsvComparisonService } from './csv-comparison-service';
 import type {
   ComparisonExecutor,
@@ -10,32 +15,33 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import { CsvDataService } from './csv-data-service';
+import { WorkingCsvStore } from './working-csv-store';
 
 function session(
-  sessionId: string,
+  workingCsvId: string,
   name: string,
   columns = ['id', 'name', 'status'],
-): CsvSessionMetadata {
+): WorkingCsvView {
   return {
-    sessionId,
+    workingCsvId,
     dataRevision: 0,
     file: { path: `C:/fixtures/${name}`, name, sizeBytes: 10 },
     columns: columns.map((column) => ({ name: column, type: 'VARCHAR' })),
     rowCount: 0,
     dialect: {},
+    editState: { workingCsvId, dirty: false, canUndo: false, canRedo: false },
   };
 }
 
 class FakeCsvStore {
-  readonly sessions = new Map<string, CsvSessionMetadata>();
-  private listeners = new Set<(sessionId: string) => void>();
+  readonly sessions = new Map<string, WorkingCsvView>();
+  private listeners = new Set<(workingCsvId: string) => void>();
 
-  getSession(sessionId: string) {
-    return this.sessions.get(sessionId) ?? null;
+  getState(workingCsvId: string) {
+    return this.sessions.get(workingCsvId) ?? null;
   }
 
-  listSessions() {
+  list() {
     return [...this.sessions.values()];
   }
 
@@ -43,16 +49,16 @@ class FakeCsvStore {
     return false;
   }
 
-  subscribeToDataChanges(listener: (sessionId: string) => void) {
+  subscribeToDataChanges(listener: (workingCsvId: string) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  change(sessionId: string) {
-    const current = this.sessions.get(sessionId);
+  change(workingCsvId: string) {
+    const current = this.sessions.get(workingCsvId);
     if (current)
-      this.sessions.set(sessionId, { ...current, dataRevision: current.dataRevision + 1 });
-    for (const listener of this.listeners) listener(sessionId);
+      this.sessions.set(workingCsvId, { ...current, dataRevision: current.dataRevision + 1 });
+    for (const listener of this.listeners) listener(workingCsvId);
   }
 }
 
@@ -91,6 +97,8 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
       this.pendingSnapshots.set(request.artifactId, reject);
     });
   }
+
+  activateSnapshot(_artifactId: ComparisonOperationId): void {}
 
   cancel(operationId: string): void {
     this.pendingSnapshots.get(operationId)?.(new Error('cancelled'));
@@ -183,14 +191,14 @@ async function waitForReleaseAttemptCount(
 
 async function disposeRealFixture(
   service: CsvComparisonService,
-  store: CsvDataService,
+  store: WorkingCsvStore,
   tempDir: string,
 ): Promise<void> {
   try {
     await service.dispose();
   } finally {
     try {
-      await store.closeAllSessions();
+      await store.disposeStore();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -207,11 +215,11 @@ describe('CsvComparisonService interaction contract', () => {
 
     expect(service.candidatesFor('a')).toEqual([
       expect.objectContaining({
-        workingCsv: expect.objectContaining({ sessionId: 'b' }),
+        workingCsv: expect.objectContaining({ workingCsvId: 'b' }),
         compatibility: { kind: 'compatible' },
       }),
       expect.objectContaining({
-        workingCsv: expect.objectContaining({ sessionId: 'c' }),
+        workingCsv: expect.objectContaining({ workingCsvId: 'c' }),
         compatibility: {
           kind: 'incompatible',
           missingFromBaseline: ['title'],
@@ -234,26 +242,98 @@ describe('CsvComparisonService interaction contract', () => {
     expect(reversed).toMatchObject({
       status: 'existing',
       comparison: {
-        baseline: { sessionId: 'a' },
-        candidate: { sessionId: 'b' },
+        baseline: { workingCsvId: 'a' },
+        candidate: { workingCsvId: 'b' },
       },
+    });
+  });
+
+  it('resolves source-unavailable when a source disappears before generation starts', async () => {
+    const store = new FakeCsvStore();
+    store.sessions.set('a', session('a', 'a.csv'));
+    store.sessions.set('b', session('b', 'b.csv'));
+    const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+
+    const begun = service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    store.sessions.delete('a');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(begun.completion).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'source-unavailable', retryable: false },
+      comparison: null,
+    });
+    await expect(service.close(opened.comparison.comparisonId)).resolves.toEqual({
+      status: 'closed',
+      comparisonId: opened.comparison.comparisonId,
+    });
+
+    error.mockRestore();
+    await service.dispose();
+  });
+
+  it('publishes a replacement before retiring the prior snapshot', async () => {
+    const store = new FakeCsvStore();
+    store.sessions.set('a', session('a', 'a.csv'));
+    store.sessions.set('b', session('b', 'b.csv'));
+    const executor = new ScriptedComparisonExecutor();
+    const service = new CsvComparisonService(store, executor);
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+
+    const first = service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
+    if (first.status !== 'accepted') throw new Error('apply rejected');
+    await first.completion;
+
+    executor.deferDrops = true;
+    const refresh = service.begin({
+      kind: 'refresh',
+      comparisonId: opened.comparison.comparisonId,
+    });
+    if (refresh.status !== 'accepted') throw new Error('refresh rejected');
+    while (executor.droppedArtifacts.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    store.change('a');
+    expect(service.getState(opened.comparison.comparisonId)?.applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
+    executor.releaseDrops();
+    const outcome = await refresh.completion;
+    expect(outcome.status).toBe('applied');
+    expect(outcome.comparison.applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
     });
   });
 
   it('keeps the old result readable while a draft key fails validation, then marks it outdated', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-service-'));
-    const store = new CsvDataService();
+    const store = new WorkingCsvStore();
     const service = new CsvComparisonService(store, store.createComparisonExecutor());
     try {
       const baselinePath = path.join(tempDir, 'a.csv');
       const candidatePath = path.join(tempDir, 'b.csv');
       await writeFile(baselinePath, 'id,name,status\n1,Ada,active\n2,Bob,old\n');
       await writeFile(candidatePath, 'id,name,status\n1,Ada,active\n2,Bob,new\n');
-      const baseline = await store.openCsv(baselinePath);
-      const candidate = await store.openCsv(candidatePath);
+      const baseline = await store.openOrThrow(baselinePath);
+      const candidate = await store.openOrThrow(candidatePath);
       const opened = service.open({
-        baselineId: baseline.sessionId,
-        candidateId: candidate.sessionId,
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
 
@@ -275,7 +355,7 @@ describe('CsvComparisonService interaction contract', () => {
       const resultToken = applied?.applied?.resultToken;
 
       await store.editCell({
-        sessionId: baseline.sessionId,
+        workingCsvId: baseline.workingCsvId,
         rowId: '2',
         column: 'id',
         value: '1',
@@ -302,18 +382,18 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('serves bounded presentation windows and invalidates the old token after Swap sides', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-window-'));
-    const store = new CsvDataService();
+    const store = new WorkingCsvStore();
     const service = new CsvComparisonService(store, store.createComparisonExecutor());
     try {
       const baselinePath = path.join(tempDir, 'a.csv');
       const candidatePath = path.join(tempDir, 'b.csv');
       await writeFile(baselinePath, 'id,name,status\n1,Ada,old\n2,Bob,same\n');
       await writeFile(candidatePath, 'id,status,name\n1,new,Ada\n3,added,Cat\n');
-      const baseline = await store.openCsv(baselinePath);
-      const candidate = await store.openCsv(candidatePath);
+      const baseline = await store.openOrThrow(baselinePath);
+      const candidate = await store.openOrThrow(candidatePath);
       const opened = service.open({
-        baselineId: baseline.sessionId,
-        candidateId: candidate.sessionId,
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
       service.begin({
@@ -348,7 +428,7 @@ describe('CsvComparisonService interaction contract', () => {
       const swapped = service.swap(opened.comparison.comparisonId);
       expect(swapped).toMatchObject({
         status: 'changed',
-        comparison: { baseline: { sessionId: candidate.sessionId } },
+        comparison: { baseline: { workingCsvId: candidate.workingCsvId } },
       });
       if (swapped.status !== 'changed' || !swapped.comparison.applied) {
         throw new Error('comparison not swapped');
@@ -388,18 +468,18 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('awaits active work and emits no changed state after closing a Comparison', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-close-'));
-    const store = new CsvDataService();
+    const store = new WorkingCsvStore();
     const service = new CsvComparisonService(store, store.createComparisonExecutor());
     try {
       const baselinePath = path.join(tempDir, 'a.csv');
       const candidatePath = path.join(tempDir, 'b.csv');
       await writeFile(baselinePath, 'id,value\n1,a\n2,b\n');
       await writeFile(candidatePath, 'id,value\n1,a\n2,c\n');
-      const baseline = await store.openCsv(baselinePath);
-      const candidate = await store.openCsv(candidatePath);
+      const baseline = await store.openOrThrow(baselinePath);
+      const candidate = await store.openOrThrow(candidatePath);
       const opened = service.open({
-        baselineId: baseline.sessionId,
-        candidateId: candidate.sessionId,
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
       const events: string[] = [];
@@ -441,7 +521,10 @@ describe('CsvComparisonService interaction contract', () => {
     });
 
     expect(close).not.toBeNull();
-    await expect(close).resolves.toEqual({ status: 'closed' });
+    await expect(close).resolves.toEqual({
+      status: 'closed',
+      comparisonId: opened.comparison.comparisonId,
+    });
     expect(service.getState(opened.comparison.comparisonId)).toBeNull();
     await service.dispose();
   });
@@ -463,7 +546,12 @@ describe('CsvComparisonService interaction contract', () => {
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
     await waitForPhase(service, opened.comparison.comparisonId, 'comparing');
-    expect(service.cancel(opened.comparison.comparisonId, begun.operationId)).toEqual({
+    await expect(
+      service.cancel({
+        comparisonId: opened.comparison.comparisonId,
+        operationId: begun.operationId,
+      }),
+    ).resolves.toEqual({
       status: 'requested',
     });
 

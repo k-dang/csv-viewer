@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 import { FieldError } from '@/components/ui/field';
-import type { CsvSessionMetadata } from '../../shared/ipc';
+import type { WorkingCsvView } from '../../shared/ipc';
 import { CsvGrid } from './csv-grid';
 
 export function CsvMetadataView({
@@ -9,7 +9,7 @@ export function CsvMetadataView({
   themeMode,
   onDirtyChange,
 }: {
-  session: CsvSessionMetadata;
+  session: WorkingCsvView;
   dialectError: string | null;
   themeMode: 'light' | 'dark';
   onDirtyChange?: (dirty: boolean) => void;

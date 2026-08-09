@@ -3,10 +3,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { ComparisonView, CsvSessionMetadata } from '../../shared/ipc';
+import type { ComparisonView, WorkingCsvView } from '../../shared/ipc';
 
 export type OpenRendererTab =
-  | { kind: 'csv'; id: string; csv: CsvSessionMetadata }
+  | { kind: 'csv'; id: string; csv: WorkingCsvView }
   | { kind: 'comparison'; id: string; comparison: ComparisonView };
 
 export function TabStrip({
@@ -44,7 +44,7 @@ export function TabStrip({
           const label = isCsv
             ? tab.csv.file.name
             : `${tab.comparison.baseline.file.name} ⇄ ${tab.comparison.candidate.file.name}`;
-          const isDirty = isCsv && dirtySessionIds.has(tab.csv.sessionId);
+          const isDirty = isCsv && dirtySessionIds.has(tab.csv.workingCsvId);
           const isOutdated = !isCsv && tab.comparison.applied?.freshness.kind === 'outdated';
 
           return (

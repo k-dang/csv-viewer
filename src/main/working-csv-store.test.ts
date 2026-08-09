@@ -3,29 +3,62 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField, type CsvRow } from '../shared/ipc';
-import { CsvDataService } from './csv-data-service';
+import { WorkingCsvStore } from './working-csv-store';
+import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 
 let tempDir: string;
-let service: CsvDataService;
+let service: WorkingCsvStore;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-viewer-'));
-  service = new CsvDataService();
+  service = new WorkingCsvStore();
 });
 
 afterEach(async () => {
-  await service.closeAllSessions();
-  await rm(tempDir, { recursive: true, force: true });
+  try {
+    await service.disposeStore();
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
-describe('CsvDataService', () => {
+describe('WorkingCsvStore', () => {
+  it('closes database handles when disposal validation fails', async () => {
+    const filePath = await writeFixture('dispose-failure.csv', ['id', '1'].join('\n'));
+    await service.openOrThrow(filePath);
+    const internals = service as unknown as {
+      artifactRegistry: WorkspaceArtifactRegistry;
+      connection: { closeSync(): void } | null;
+      instance: { closeSync(): void } | null;
+      lifecycle: string;
+    };
+    const connectionClose = vi.spyOn(internals.connection!, 'closeSync');
+    const instanceClose = vi.spyOn(internals.instance!, 'closeSync');
+    internals.artifactRegistry.register({
+      tableName: 'unexpected_artifact',
+      owner: { kind: 'working-csv', workingCsvId: 'missing' },
+      role: 'current',
+    });
+
+    await expect(service.disposeStore()).rejects.toThrow(
+      'Workspace artifact invariant violated',
+    );
+    expect(connectionClose).toHaveBeenCalledOnce();
+    expect(instanceClose).toHaveBeenCalledOnce();
+    expect(internals.connection).toBeNull();
+    expect(internals.instance).toBeNull();
+    expect(internals.lifecycle).toBe('disposed');
+
+    internals.artifactRegistry.remove('unexpected_artifact');
+  });
+
   it('opens a CSV and returns file metadata, inferred columns, and row count', async () => {
     const filePath = await writeFixture(
       'people.csv',
       ['name,age,joined', 'Ada,37,2024-01-10', 'Grace,41,2024-02-12'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     expect(session.file.name).toBe('people.csv');
     expect(session.file.path).toBe(filePath);
@@ -33,7 +66,7 @@ describe('CsvDataService', () => {
     expect(session.rowCount).toBe(2);
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'age', 'joined']);
     expect(session.columns.map((column) => column.type)).toEqual(['VARCHAR', 'VARCHAR', 'VARCHAR']);
-    expect(service.getSession(session.sessionId)?.sessionId).toBe(session.sessionId);
+    expect(service.getState(session.workingCsvId)?.workingCsvId).toBe(session.workingCsvId);
   });
 
   it('handles quoted fields and escaped delimiters through DuckDB CSV parsing', async () => {
@@ -44,7 +77,7 @@ describe('CsvDataService', () => {
       ),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     expect(session.rowCount).toBe(2);
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'note']);
@@ -53,8 +86,8 @@ describe('CsvDataService', () => {
   it('opens files with a delimiter override', async () => {
     const filePath = await writeFixture('pipe.csv', ['name|age', 'Ada|37', 'Grace|41'].join('\n'));
 
-    const session = await service.openCsv(filePath, { delimiter: '|' });
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const session = await service.openOrThrow(filePath, { delimiter: '|' });
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 2 });
 
     expect(session.dialect).toEqual({ delimiter: '|' });
     expect(session.columns.map((column) => column.name)).toEqual(['name', 'age']);
@@ -68,8 +101,8 @@ describe('CsvDataService', () => {
   it('opens files with a header override', async () => {
     const filePath = await writeFixture('no-header.csv', ['Ada,37', 'Grace,41'].join('\n'));
 
-    const session = await service.openCsv(filePath, { header: false });
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const session = await service.openOrThrow(filePath, { header: false });
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 2 });
 
     expect(session.dialect).toEqual({ header: false });
     expect(session.columns.map((column) => column.name)).toEqual(['column0', 'column1']);
@@ -83,39 +116,39 @@ describe('CsvDataService', () => {
   it('reopens a Working CSV behind its stable identity with a new revision', async () => {
     const filePath = await writeFixture('reopen.txt', ['name|age', 'Ada|37'].join('\n'));
 
-    const auto = await service.openCsv(filePath);
-    const reopened = await service.reopenSession(auto.sessionId, { delimiter: '|' });
+    const auto = await service.openOrThrow(filePath);
+    const reopened = await service.replaceOrThrow(auto.workingCsvId, { delimiter: '|' });
 
-    expect(reopened.sessionId).toBe(auto.sessionId);
+    expect(reopened.workingCsvId).toBe(auto.workingCsvId);
     expect(reopened.dataRevision).toBe(auto.dataRevision + 1);
     expect(reopened.file.path).toBe(filePath);
     expect(reopened.dialect).toEqual({ delimiter: '|' });
     expect(reopened.columns.map((column) => column.name)).toEqual(['name', 'age']);
-    expect(service.getSession(reopened.sessionId)).toEqual(reopened);
+    expect(service.getState(reopened.workingCsvId)).toEqual(reopened);
   });
 
   it('blocks every state mutator while a session close is reserved', async () => {
     const filePath = await writeFixture('closing.csv', ['name', 'Ada'].join('\n'));
-    const session = await service.openCsv(filePath);
-    const request = { sessionId: session.sessionId };
+    const session = await service.openOrThrow(filePath);
+    const request = { workingCsvId: session.workingCsvId };
 
-    expect(service.beginClose(session.sessionId)).toBe(true);
-    expect(service.beginClose(session.sessionId)).toBe(false);
-    expect(service.isClosing(session.sessionId)).toBe(true);
+    expect(service.beginClose(session.workingCsvId)).toBe(true);
+    expect(service.beginClose(session.workingCsvId)).toBe(false);
+    expect(service.isClosing(session.workingCsvId)).toBe(true);
 
     const mutations = [
-      service.reopenSession(session.sessionId),
+      service.replaceOrThrow(session.workingCsvId),
       service.editCell({ ...request, rowId: '1', column: 'name', value: 'Grace' }),
       service.deleteRows({ ...request, rowIds: ['1'] }),
       service.insertRow({ ...request, placement: 'append' as const, rowIds: [], hasActiveQuery: false }),
-      service.undoEdit(request),
-      service.redoEdit(request),
-      service.saveAs(request, path.join(tempDir, 'closing-copy.csv')),
+      service.undo(request.workingCsvId),
+      service.redo(request.workingCsvId),
+      service.saveAs(request.workingCsvId, path.join(tempDir, 'closing-copy.csv')),
     ];
     for (const mutation of mutations) await expect(mutation).rejects.toThrow('closing');
 
-    service.endClose(session.sessionId);
-    expect(service.isClosing(session.sessionId)).toBe(false);
+    service.endClose(session.workingCsvId);
+    expect(service.isClosing(session.workingCsvId)).toBe(false);
     await expect(
       service.editCell({ ...request, rowId: '1', column: 'name', value: 'Grace' }),
     ).resolves.toMatchObject({ dirty: true });
@@ -123,32 +156,32 @@ describe('CsvDataService', () => {
 
   it('increments revisions and notifies subscribers for every committed data change', async () => {
     const filePath = await writeFixture('revisions.csv', ['name', 'Ada', 'Grace'].join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const revisions: number[] = [];
-    const unsubscribe = service.subscribeToDataChanges((sessionId) => {
-      revisions.push(service.getSession(sessionId)?.dataRevision ?? -1);
+    const unsubscribe = service.subscribeToDataChanges((workingCsvId) => {
+      revisions.push(service.getState(workingCsvId)?.dataRevision ?? -1);
     });
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '1',
       column: 'name',
       value: 'Augusta Ada',
     });
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'append',
       rowIds: [],
       hasActiveQuery: false,
     });
-    const rows = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 10 });
+    const rows = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 10 });
     await service.deleteRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowIds: [rows.rows.at(-1)?.[csvInternalRowIdField] ?? ''],
     });
-    await service.undoEdit({ sessionId: session.sessionId });
-    await service.redoEdit({ sessionId: session.sessionId });
-    await service.reopenSession(session.sessionId);
+    await service.undo(session.workingCsvId);
+    await service.redo(session.workingCsvId);
+    await service.replaceOrThrow(session.workingCsvId);
     unsubscribe();
 
     expect(revisions).toEqual([1, 2, 3, 4, 5, 6]);
@@ -156,23 +189,23 @@ describe('CsvDataService', () => {
 
   it('isolates data-change listeners so one failure cannot suppress later listeners', async () => {
     const filePath = await writeFixture('listeners.csv', ['name', 'Ada'].join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const received: string[] = [];
     service.subscribeToDataChanges(() => {
       throw new Error('listener failure');
     });
-    service.subscribeToDataChanges((sessionId) => received.push(sessionId));
+    service.subscribeToDataChanges((workingCsvId) => received.push(workingCsvId));
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '1',
       column: 'name',
       value: 'Grace',
     });
 
-    expect(received).toEqual([session.sessionId]);
-    expect(service.getSession(session.sessionId)?.dataRevision).toBe(1);
+    expect(received).toEqual([session.workingCsvId]);
+    expect(service.getState(session.workingCsvId)?.dataRevision).toBe(1);
     expect(error).toHaveBeenCalledOnce();
     error.mockRestore();
   });
@@ -180,35 +213,35 @@ describe('CsvDataService', () => {
   it('rejects invalid delimiter choices before opening', async () => {
     const filePath = await writeFixture('invalid-delimiter.csv', ['name,age', 'Ada,37'].join('\n'));
 
-    await expect(service.openCsv(filePath, { delimiter: '||' })).rejects.toThrow(
+    await expect(service.openOrThrow(filePath, { delimiter: '||' })).rejects.toThrow(
       'Delimiter must be exactly one character',
     );
   });
 
   it('keeps the existing session when a reopen option is invalid', async () => {
     const filePath = await writeFixture('keep-active.csv', ['name,age', 'Ada,37'].join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
-    await expect(service.reopenSession(session.sessionId, { delimiter: '||' })).rejects.toThrow(
+    await expect(service.replaceOrThrow(session.workingCsvId, { delimiter: '||' })).rejects.toThrow(
       'Delimiter must be exactly one character',
     );
 
-    expect(service.getSession(session.sessionId)).toEqual(session);
+    expect(service.getState(session.workingCsvId)).toEqual(session);
   });
 
   it('keeps multiple sessions open with independent data', async () => {
     const firstPath = await writeFixture('first.csv', ['a', '1'].join('\n'));
     const secondPath = await writeFixture('second.csv', ['b,c', '2,3', '4,5'].join('\n'));
 
-    const first = await service.openCsv(firstPath);
-    const second = await service.openCsv(secondPath);
+    const first = await service.openOrThrow(firstPath);
+    const second = await service.openOrThrow(secondPath);
 
-    expect(second.sessionId).not.toBe(first.sessionId);
-    expect(service.getSession(first.sessionId)).toEqual(first);
-    expect(service.getSession(second.sessionId)).toEqual(second);
+    expect(second.workingCsvId).not.toBe(first.workingCsvId);
+    expect(service.getState(first.workingCsvId)).toEqual(first);
+    expect(service.getState(second.workingCsvId)).toEqual(second);
 
-    const firstRows = await service.getRows({ sessionId: first.sessionId, offset: 0, limit: 10 });
-    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+    const firstRows = await service.getRows({ workingCsvId: first.workingCsvId, offset: 0, limit: 10 });
+    const secondRows = await service.getRows({ workingCsvId: second.workingCsvId, offset: 0, limit: 10 });
 
     expect(firstRows.filteredRowCount).toBe(1);
     expect(secondRows.filteredRowCount).toBe(2);
@@ -218,58 +251,58 @@ describe('CsvDataService', () => {
   it('rejects opening a file that is already open and finds it by path', async () => {
     const filePath = await writeFixture('dedupe.csv', ['a', '1'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
-    expect(service.findSessionByPath(filePath)).toEqual(session);
-    await expect(service.openCsv(filePath)).rejects.toThrow('CSV file is already open');
-    expect(service.findSessionByPath(path.join(tempDir, 'other.csv'))).toBeNull();
+    expect(service.findByPath(filePath)).toEqual(session);
+    await expect(service.openOrThrow(filePath)).rejects.toThrow('CSV file is already open');
+    expect(service.findByPath(path.join(tempDir, 'other.csv'))).toBeNull();
   });
 
-  it('keeps edit journals independent per session', async () => {
+  it('keeps edit journals independent per Working CSV', async () => {
     const firstPath = await writeFixture('journal-first.csv', ['name', 'Ada'].join('\n'));
     const secondPath = await writeFixture('journal-second.csv', ['name', 'Grace'].join('\n'));
 
-    const first = await service.openCsv(firstPath);
-    const second = await service.openCsv(secondPath);
+    const first = await service.openOrThrow(firstPath);
+    const second = await service.openOrThrow(secondPath);
 
     await service.editCell({
-      sessionId: first.sessionId,
+      workingCsvId: first.workingCsvId,
       rowId: '1',
       column: 'name',
       value: 'Edited',
     });
 
-    expect(service.isDirty(first.sessionId)).toBe(true);
-    expect(service.isDirty(second.sessionId)).toBe(false);
-    expect(service.getDirtySessions().map((session) => session.sessionId)).toEqual([
-      first.sessionId,
+    expect(service.isDirty(first.workingCsvId)).toBe(true);
+    expect(service.isDirty(second.workingCsvId)).toBe(false);
+    expect(service.getDirty().map((workingCsv) => workingCsv.workingCsvId)).toEqual([
+      first.workingCsvId,
     ]);
-    expect(service.getEditState({ sessionId: second.sessionId }).canUndo).toBe(false);
+    expect(service.getEditState({ workingCsvId: second.workingCsvId }).canUndo).toBe(false);
 
-    await expect(service.undoEdit({ sessionId: second.sessionId })).rejects.toThrow(
+    await expect(service.undo(second.workingCsvId)).rejects.toThrow(
       'No CSV edit is available to undo',
     );
 
-    await service.undoEdit({ sessionId: first.sessionId });
-    expect(service.getDirtySessions()).toEqual([]);
+    await service.undo(first.workingCsvId);
+    expect(service.getDirty()).toEqual([]);
   });
 
   it('closes a session and leaves other sessions untouched', async () => {
     const firstPath = await writeFixture('close-first.csv', ['a', '1'].join('\n'));
     const secondPath = await writeFixture('close-second.csv', ['b', '2'].join('\n'));
 
-    const first = await service.openCsv(firstPath);
-    const second = await service.openCsv(secondPath);
+    const first = await service.openOrThrow(firstPath);
+    const second = await service.openOrThrow(secondPath);
 
-    await service.closeSession(first.sessionId);
+    await service.closeWorkingCsv(first.workingCsvId);
 
-    expect(service.getSession(first.sessionId)).toBeNull();
-    expect(service.findSessionByPath(firstPath)).toBeNull();
+    expect(service.getState(first.workingCsvId)).toBeNull();
+    expect(service.findByPath(firstPath)).toBeNull();
     await expect(
-      service.getRows({ sessionId: first.sessionId, offset: 0, limit: 1 }),
-    ).rejects.toThrow('CSV session is no longer active');
+      service.getRows({ workingCsvId: first.workingCsvId, offset: 0, limit: 1 }),
+    ).rejects.toThrow('Working CSV is no longer active');
 
-    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+    const secondRows = await service.getRows({ workingCsvId: second.workingCsvId, offset: 0, limit: 10 });
     expect(secondRows.filteredRowCount).toBe(1);
   });
 
@@ -283,21 +316,21 @@ describe('CsvDataService', () => {
       ['name,score', 'Grace,20'].join('\n'),
     );
 
-    const first = await service.openCsv(firstPath);
-    const second = await service.openCsv(secondPath);
-    const reopenedFirst = await service.reopenSession(first.sessionId, { delimiter: '|' });
+    const first = await service.openOrThrow(firstPath);
+    const second = await service.openOrThrow(secondPath);
+    const reopenedFirst = await service.replaceOrThrow(first.workingCsvId, { delimiter: '|' });
 
-    expect(reopenedFirst.sessionId).toBe(first.sessionId);
+    expect(reopenedFirst.workingCsvId).toBe(first.workingCsvId);
     expect(reopenedFirst.dataRevision).toBe(first.dataRevision + 1);
-    expect(service.getSession(reopenedFirst.sessionId)).toEqual(reopenedFirst);
-    expect(service.getSession(second.sessionId)).toEqual(second);
+    expect(service.getState(reopenedFirst.workingCsvId)).toEqual(reopenedFirst);
+    expect(service.getState(second.workingCsvId)).toEqual(second);
 
     const reopenedRows = await service.getRows({
-      sessionId: reopenedFirst.sessionId,
+      workingCsvId: reopenedFirst.workingCsvId,
       offset: 0,
       limit: 10,
     });
-    const secondRows = await service.getRows({ sessionId: second.sessionId, offset: 0, limit: 10 });
+    const secondRows = await service.getRows({ workingCsvId: second.workingCsvId, offset: 0, limit: 10 });
 
     expectVisibleRows(reopenedRows.rows).toEqual([{ name: 'Ada', score: '10' }]);
     expectVisibleRows(secondRows.rows).toEqual([{ name: 'Grace', score: '20' }]);
@@ -309,11 +342,11 @@ describe('CsvDataService', () => {
       ['name,age,note', 'Ada,37,first', 'Grace,41,second', 'Linus,54,third'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 1, limit: 1 });
+    const session = await service.openOrThrow(filePath);
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 1, limit: 1 });
 
     expect(window).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 1,
       filteredRowCount: 3,
       rows: [{ [csvInternalRowIdField]: '2', name: 'Grace', age: '41', note: 'second' }],
@@ -326,8 +359,8 @@ describe('CsvDataService', () => {
       ['name,note,score,identifier', 'Ada,,10,00123', 'Grace,NULL,,00042'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const session = await service.openOrThrow(filePath);
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 2 });
 
     expectVisibleRows(window.rows).toEqual([
       { name: 'Ada', note: null, score: '10', identifier: '00123' },
@@ -342,15 +375,15 @@ describe('CsvDataService', () => {
       ['name,age', 'Ada,37', 'Grace,41', 'Linus,54'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const sorted = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
       sort: [{ column: 'age', direction: 'desc' }],
     });
     const originalOrder = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
     });
@@ -371,22 +404,22 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
-    const firstPage = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const session = await service.openOrThrow(filePath);
+    const firstPage = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 2 });
     const sorted = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 4,
       sort: [{ column: 'name', direction: 'desc' }],
     });
     const filtered = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 4,
       filters: [{ column: 'team', kind: 'text', operator: 'contains', value: 'compiler' }],
     });
     const searched = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 4,
       search: 'Grace',
@@ -411,9 +444,9 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const window = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       filters: [
@@ -432,9 +465,9 @@ describe('CsvDataService', () => {
       ['name,joined', 'Ada,2024-01-10', 'Grace,2024-02-12', 'Linus,2024-03-20'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const window = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       filters: [
@@ -461,9 +494,9 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const window = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       sort: [{ column: 'full name', direction: 'desc' }],
@@ -488,9 +521,9 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const window = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'comp',
@@ -514,14 +547,14 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const counts = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
     });
 
     expect(counts).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       scopeRowCount: 6,
       values: [
@@ -539,15 +572,15 @@ describe('CsvDataService', () => {
       ['status,note', 'Open,one', ',edited empty', 'NULL,literal null', ',parsed null'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '2',
       column: 'status',
       value: '',
     });
     const counts = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
     });
 
@@ -568,9 +601,9 @@ describe('CsvDataService', () => {
     }
 
     const filePath = await writeFixture('value-counts-top-50.csv', rows.join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const counts = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'code',
     });
 
@@ -593,15 +626,15 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const counts = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
       search: 'a',
     });
     const sortedRows = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       sort: [{ column: 'score', direction: 'desc' }],
@@ -623,15 +656,15 @@ describe('CsvDataService', () => {
       ['status', 'Open'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const counts = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       search: 'missing',
     });
 
     expect(counts).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       scopeRowCount: 0,
       values: [],
@@ -644,50 +677,50 @@ describe('CsvDataService', () => {
       ['status,team', 'Open,compiler', 'Closed,compiler', 'Open,kernel'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '2',
       column: 'status',
       value: 'Open',
     });
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'append',
       rowIds: [],
       hasActiveQuery: false,
     });
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '4',
       column: 'status',
       value: 'Pending',
     });
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '4',
       column: 'team',
       value: 'compiler',
     });
-    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['1'] });
+    await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['1'] });
 
     const afterChanges = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
 
-    await service.undoEdit({ sessionId: session.sessionId });
+    await service.undo(session.workingCsvId);
     const afterUndo = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
 
-    await service.redoEdit({ sessionId: session.sessionId });
+    await service.redo(session.workingCsvId);
     const afterRedo = await service.getColumnValueCounts({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       column: 'status',
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
@@ -709,14 +742,14 @@ describe('CsvDataService', () => {
       ['name,team', 'Ada,compiler', 'Grace,navy'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const noResults = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'missing',
     });
-    const cleared = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 10 });
+    const cleared = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 10 });
 
     expect(noResults.filteredRowCount).toBe(0);
     expect(noResults.rows).toEqual([]);
@@ -735,16 +768,16 @@ describe('CsvDataService', () => {
       ].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const filteredSearch = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'compiler',
       filters: [{ column: 'age', kind: 'number', operator: 'greaterThan', value: 40 }],
     });
     const parameterizedSearch = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: `compiler%' OR 1=1 --`,
@@ -763,26 +796,26 @@ describe('CsvDataService', () => {
       ['name,code', 'Ada,001', 'Grace,002'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const firstWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 2,
     });
     const result = await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: firstWindow.rows[1][csvInternalRowIdField],
       column: 'code',
       value: '00042',
     });
     const editedWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 2,
     });
 
     expect(result).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '2',
       column: 'code',
       dirty: true,
@@ -801,22 +834,22 @@ describe('CsvDataService', () => {
       ['name,score', 'Ada,10', 'Grace,30', 'Linus,20'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const sorted = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
       sort: [{ column: 'score', direction: 'desc' }],
     });
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: sorted.rows[0][csvInternalRowIdField],
       column: 'name',
       value: 'Rear Admiral Grace',
     });
     const sourceOrder = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
     });
@@ -832,28 +865,28 @@ describe('CsvDataService', () => {
       ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const searched = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'navy',
     });
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: searched.rows[0][csvInternalRowIdField],
       column: 'team',
       value: 'compiler',
     });
     const filtered = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
     const searchedAgain = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'navy',
@@ -867,45 +900,45 @@ describe('CsvDataService', () => {
   it('undoes and redoes the most recent cell edit while updating dirty state', async () => {
     const filePath = await writeFixture('edit-history.csv', ['name,code', 'Ada,001'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const firstWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 1,
     });
     const rowId = firstWindow.rows[0][csvInternalRowIdField];
 
-    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
-      sessionId: session.sessionId,
+    expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: false,
     });
 
-    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '007' });
-    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
-      sessionId: session.sessionId,
+    await service.editCell({ workingCsvId: session.workingCsvId, rowId, column: 'code', value: '007' });
+    expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
     });
 
-    const undone = await service.undoEdit({ sessionId: session.sessionId });
-    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+    const undone = await service.undo(session.workingCsvId);
+    const afterUndo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 1 });
 
     expect(undone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: true,
     });
     expect(afterUndo.rows[0].code).toBe('001');
 
-    const redone = await service.redoEdit({ sessionId: session.sessionId });
-    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+    const redone = await service.redo(session.workingCsvId);
+    const afterRedo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 1 });
 
     expect(redone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -916,25 +949,25 @@ describe('CsvDataService', () => {
   it('clears redo history when a new cell edit is made after undo', async () => {
     const filePath = await writeFixture('edit-redo-clear.csv', ['name,code', 'Ada,001'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const firstWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 1,
     });
     const rowId = firstWindow.rows[0][csvInternalRowIdField];
 
-    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '002' });
-    await service.undoEdit({ sessionId: session.sessionId });
-    await service.editCell({ sessionId: session.sessionId, rowId, column: 'code', value: '003' });
+    await service.editCell({ workingCsvId: session.workingCsvId, rowId, column: 'code', value: '002' });
+    await service.undo(session.workingCsvId);
+    await service.editCell({ workingCsvId: session.workingCsvId, rowId, column: 'code', value: '003' });
 
-    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
-      sessionId: session.sessionId,
+    expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
     });
-    await expect(service.redoEdit({ sessionId: session.sessionId })).rejects.toThrow(
+    await expect(service.redo(session.workingCsvId)).rejects.toThrow(
       'No CSV edit is available to redo',
     );
   });
@@ -945,24 +978,24 @@ describe('CsvDataService', () => {
       ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const firstWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
     });
     const result = await service.deleteRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowIds: [firstWindow.rows[1][csvInternalRowIdField]],
     });
     const afterDelete = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
     });
 
     expect(result).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -981,20 +1014,20 @@ describe('CsvDataService', () => {
       ['name,score', 'Ada,10', 'Grace,30', 'Linus,20', 'Margaret,40'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const sorted = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 4,
       sort: [{ column: 'score', direction: 'desc' }],
     });
 
     await service.deleteRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowIds: [sorted.rows[0][csvInternalRowIdField], sorted.rows[2][csvInternalRowIdField]],
     });
     const sourceOrder = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 4,
     });
@@ -1011,26 +1044,26 @@ describe('CsvDataService', () => {
       ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel', 'Margaret,compiler'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const filtered = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
 
     await service.deleteRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowIds: [filtered.rows[0][csvInternalRowIdField]],
     });
     const filteredAgain = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
     });
     const searched = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'Ada',
@@ -1049,23 +1082,23 @@ describe('CsvDataService', () => {
       ['name,code', 'Ada,001', 'Grace,002', 'Linus,003'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
-    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['1', '3'] });
+    const session = await service.openOrThrow(filePath);
+    await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['1', '3'] });
 
-    const undone = await service.undoEdit({ sessionId: session.sessionId });
-    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
-    const redone = await service.redoEdit({ sessionId: session.sessionId });
-    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const undone = await service.undo(session.workingCsvId);
+    const afterUndo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 3 });
+    const redone = await service.redo(session.workingCsvId);
+    const afterRedo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 3 });
 
     expect(undone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: true,
     });
     expect(rowIds(afterUndo.rows)).toEqual(['1', '2', '3']);
     expect(redone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -1076,13 +1109,13 @@ describe('CsvDataService', () => {
   it('rejects row deletion when no valid selected row identifiers are provided', async () => {
     const filePath = await writeFixture('delete-invalid.csv', ['name', 'Ada'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
-    await expect(service.deleteRows({ sessionId: session.sessionId, rowIds: [] })).rejects.toThrow(
+    await expect(service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: [] })).rejects.toThrow(
       'At least one CSV row must be selected for deletion',
     );
     await expect(
-      service.deleteRows({ sessionId: session.sessionId, rowIds: ['missing'] }),
+      service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['missing'] }),
     ).rejects.toThrow('CSV row no longer exists: missing');
   });
 
@@ -1092,21 +1125,21 @@ describe('CsvDataService', () => {
       ['name,code', 'Ada,001', 'Grace,002', 'Linus,003'].join('\n'),
     );
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'above',
       rowIds: ['2'],
       hasActiveQuery: false,
     });
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'below',
       rowIds: ['2'],
       hasActiveQuery: false,
     });
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 5 });
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 5 });
 
     expect(window.filteredRowCount).toBe(5);
     expect(rowIds(window.rows)).toEqual(['1', '4', '2', '5', '3']);
@@ -1117,8 +1150,8 @@ describe('CsvDataService', () => {
       { name: '', code: '' },
       { name: 'Linus', code: '003' },
     ]);
-    expect(service.getEditState({ sessionId: session.sessionId })).toEqual({
-      sessionId: session.sessionId,
+    expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -1128,17 +1161,17 @@ describe('CsvDataService', () => {
   it('appends an empty row when no row is selected', async () => {
     const filePath = await writeFixture('insert-append.csv', ['name,code', 'Ada,001'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const result = await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'append',
       rowIds: [],
       hasActiveQuery: false,
     });
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 2 });
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 2 });
 
     expect(result).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -1153,11 +1186,11 @@ describe('CsvDataService', () => {
   it('rejects ambiguous insert requests below the UI boundary', async () => {
     const filePath = await writeFixture('insert-invalid.csv', ['name', 'Ada', 'Grace'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     await expect(
       service.insertRow({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         placement: 'above',
         rowIds: ['1'],
         hasActiveQuery: true,
@@ -1165,7 +1198,7 @@ describe('CsvDataService', () => {
     ).rejects.toThrow('cannot be inserted while sort, filter, or search is active');
     await expect(
       service.insertRow({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         placement: 'below',
         rowIds: ['1', '2'],
         hasActiveQuery: false,
@@ -1173,7 +1206,7 @@ describe('CsvDataService', () => {
     ).rejects.toThrow('requires exactly one selected CSV row');
     await expect(
       service.insertRow({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         placement: 'append',
         rowIds: ['1'],
         hasActiveQuery: false,
@@ -1181,7 +1214,7 @@ describe('CsvDataService', () => {
     ).rejects.toThrow('Append row requires no selected CSV rows');
     await expect(
       service.insertRow({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         placement: 'above',
         rowIds: ['missing'],
         hasActiveQuery: false,
@@ -1192,34 +1225,34 @@ describe('CsvDataService', () => {
   it('undoes and redoes row insertion', async () => {
     const filePath = await writeFixture('insert-history.csv', ['name', 'Ada', 'Grace'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'below',
       rowIds: ['1'],
       hasActiveQuery: false,
     });
 
     const afterInsert = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 3,
     });
-    const undone = await service.undoEdit({ sessionId: session.sessionId });
-    const afterUndo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
-    const redone = await service.redoEdit({ sessionId: session.sessionId });
-    const afterRedo = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 3 });
+    const undone = await service.undo(session.workingCsvId);
+    const afterUndo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 3 });
+    const redone = await service.redo(session.workingCsvId);
+    const afterRedo = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 3 });
 
     expect(rowIds(afterInsert.rows)).toEqual(['1', '3', '2']);
     expect(undone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: true,
     });
     expect(rowIds(afterUndo.rows)).toEqual(['1', '2']);
     expect(redone).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: true,
       canUndo: true,
       canRedo: false,
@@ -1234,28 +1267,28 @@ describe('CsvDataService', () => {
     );
     const outputPath = path.join(tempDir, 'saved.csv');
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '2',
       column: 'code',
       value: '00042',
     });
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'below',
       rowIds: ['1'],
       hasActiveQuery: false,
     });
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '4',
       column: 'name',
       value: 'New, Person',
     });
-    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['3'] });
+    await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['3'] });
 
-    const state = await service.saveAs({ sessionId: session.sessionId }, outputPath);
+    const state = await service.saveAs(session.workingCsvId, outputPath);
     const saved = await readFile(outputPath, 'utf8');
 
     expect(saved).toBe(
@@ -1263,26 +1296,26 @@ describe('CsvDataService', () => {
     );
     expect(saved).not.toContain(csvInternalRowIdField);
     expect(state).toEqual({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: false,
     });
-    expect(service.isDirty(session.sessionId)).toBe(false);
+    expect(service.isDirty(session.workingCsvId)).toBe(false);
   });
 
   it('saves delimiter and header settings from the active dialect', async () => {
     const filePath = await writeFixture('save-no-header.txt', ['Ada|37', 'Grace|41'].join('\n'));
     const outputPath = path.join(tempDir, 'saved-no-header.txt');
 
-    const session = await service.openCsv(filePath, { delimiter: '|', header: false });
+    const session = await service.openOrThrow(filePath, { delimiter: '|', header: false });
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '1',
       column: 'column1',
       value: '38',
     });
-    await service.saveAs({ sessionId: session.sessionId }, outputPath);
+    await service.saveAs(session.workingCsvId, outputPath);
 
     await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });
@@ -1290,21 +1323,21 @@ describe('CsvDataService', () => {
   it('rejects unknown sessions and oversized row windows', async () => {
     const filePath = await writeFixture('windows.csv', ['value', '1'].join('\n'));
 
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     await expect(
-      service.getRows({ sessionId: 'unknown-session', offset: 0, limit: 1 }),
-    ).rejects.toThrow('CSV session is no longer active');
+      service.getRows({ workingCsvId: 'unknown-session', offset: 0, limit: 1 }),
+    ).rejects.toThrow('Working CSV is no longer active');
     await expect(
-      service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1001 }),
+      service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 1001 }),
     ).rejects.toThrow('1000 or less');
   });
 
   it('returns a clear error for missing files without keeping a session', async () => {
     const missingPath = path.join(tempDir, 'missing.csv');
 
-    await expect(service.openCsv(missingPath)).rejects.toThrow('Unable to open CSV');
-    expect(service.findSessionByPath(missingPath)).toBeNull();
+    await expect(service.openOrThrow(missingPath)).rejects.toThrow('Unable to open CSV');
+    expect(service.findByPath(missingPath)).toBeNull();
   });
 
   it('validates large-file access through bounded row windows', async () => {
@@ -1315,14 +1348,14 @@ describe('CsvDataService', () => {
     }
 
     const filePath = await writeFixture('large.csv', rows.join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
     const firstWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       limit: 100,
     });
     const laterWindow = await service.getRows({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 4500,
       limit: 75,
     });
@@ -1346,23 +1379,23 @@ describe('CsvDataService', () => {
     }
 
     const filePath = await writeFixture('large-edited.csv', rows.join('\n'));
-    const session = await service.openCsv(filePath);
+    const session = await service.openOrThrow(filePath);
 
     await service.editCell({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       rowId: '4901',
       column: 'name',
       value: 'Edited Person',
     });
     await service.insertRow({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       placement: 'below',
       rowIds: ['4901'],
       hasActiveQuery: false,
     });
-    await service.deleteRows({ sessionId: session.sessionId, rowIds: ['4902', '4903'] });
+    await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['4902', '4903'] });
 
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 4899, limit: 5 });
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 4899, limit: 5 });
 
     expect(window.filteredRowCount).toBe(4999);
     expect(window.rows).toHaveLength(5);
@@ -1376,8 +1409,8 @@ describe('CsvDataService', () => {
     const row = headers.map((_header, index) => String(index));
     const filePath = await writeFixture('wide.csv', [headers.join(','), row.join(',')].join('\n'));
 
-    const session = await service.openCsv(filePath);
-    const window = await service.getRows({ sessionId: session.sessionId, offset: 0, limit: 1 });
+    const session = await service.openOrThrow(filePath);
+    const window = await service.getRows({ workingCsvId: session.workingCsvId, offset: 0, limit: 1 });
 
     expect(session.columns).toHaveLength(120);
     expect(window.rows).toHaveLength(1);
@@ -1388,7 +1421,7 @@ describe('CsvDataService', () => {
   it('returns a distinct error for unsupported files', async () => {
     const filePath = await writeFixture('people.json', '{"name":"Ada"}');
 
-    await expect(service.openCsv(filePath)).rejects.toThrow('Unsupported file type');
+    await expect(service.openOrThrow(filePath)).rejects.toThrow('Unsupported file type');
   });
 });
 

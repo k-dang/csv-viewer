@@ -13,7 +13,7 @@ import { HealthBadge, type HealthState } from '@/components/health-badge';
 import { TabStrip, type OpenRendererTab } from '@/components/tab-strip';
 import type {
   ComparisonCandidate,
-  CsvSessionMetadata,
+  WorkingCsvView,
   OpenCsvResult,
   RecentCsvFile,
 } from '../shared/ipc';
@@ -43,7 +43,7 @@ export function App() {
   );
   const [dirtySessionIds, setDirtySessionIds] = useState<ReadonlySet<string>>(new Set());
   const [candidatePicker, setCandidatePicker] = useState<{
-    baseline: CsvSessionMetadata;
+    baseline: WorkingCsvView;
     candidates: ComparisonCandidate[];
   } | null>(null);
   const [isOpening, setIsOpening] = useState(false);
@@ -147,12 +147,16 @@ export function App() {
 
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
+    if (result.status === 'failed') {
+      setOpenError(result.message);
+      return;
+    }
     const session = result.session;
     dispatchWorkspace({ type: 'open-csv', session });
     setDirtySessionIds((current) => {
-      if (!current.has(session.sessionId) || result.status === 'already-open') return current;
+      if (!current.has(session.workingCsvId) || result.status === 'already-open') return current;
       const next = new Set(current);
-      next.delete(session.sessionId);
+      next.delete(session.workingCsvId);
       return next;
     });
     setOpenError(null);
@@ -207,7 +211,7 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await window.csvViewer.reopenCsv(activeCsv.sessionId, options);
+      const result = await window.csvViewer.reopenCsv(activeCsv.workingCsvId, options);
       applyOpenResult(result);
       if (result.status === 'opened') await refreshRecentFiles();
     } catch (error: unknown) {
@@ -222,7 +226,7 @@ export function App() {
     try {
       setCandidatePicker({
         baseline: activeCsv,
-        candidates: await window.csvViewer.getComparisonCandidates(activeCsv.sessionId),
+        candidates: await window.csvViewer.getComparisonCandidates(activeCsv.workingCsvId),
       });
     } catch (error: unknown) {
       setOpenError(
@@ -234,7 +238,7 @@ export function App() {
   async function chooseCandidate(candidateId: string) {
     if (!candidatePicker) return;
     const result = await window.csvViewer.openComparison(
-      candidatePicker.baseline.sessionId,
+      candidatePicker.baseline.workingCsvId,
       candidateId,
     );
     if (result.status === 'rejected') {
@@ -253,13 +257,41 @@ export function App() {
         if (result.status === 'failed') setOpenError(result.failure.message);
         return;
       }
-      const result = await window.csvViewer.closeCsv(tab.csv.sessionId);
+      let result = await window.csvViewer.closeCsv({ workingCsvId: tab.csv.workingCsvId });
+      while (result.status === 'confirmation-required') {
+        const dependentNames = result.impact.dependentComparisons.map(
+          (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
+        );
+        const impact = [
+          result.impact.dirty ? 'Unsaved CSV edits will be lost.' : null,
+          dependentNames.length > 0
+            ? `These dependent Comparison Tabs will also close:\n${dependentNames.join('\n')}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+        if (!window.confirm(`Close ${tab.csv.file.name}?\n\n${impact}`)) return;
+        result = await window.csvViewer.closeCsv({
+          workingCsvId: tab.csv.workingCsvId,
+          confirmedImpact: result.impact,
+        });
+      }
+      if (result.status === 'failed') {
+        setOpenError(result.failure.message);
+        return;
+      }
       if (result.status !== 'closed') return;
-      dispatchWorkspace({ type: 'close-csv', sessionId: tab.csv.sessionId });
+      for (const comparisonId of result.closedComparisonIds) {
+        dispatchWorkspace({
+          type: 'comparison-event',
+          event: { kind: 'closed', comparisonId },
+        });
+      }
+      dispatchWorkspace({ type: 'close-csv', workingCsvId: tab.csv.workingCsvId });
       setDirtySessionIds((current) => {
-        if (!current.has(tab.csv.sessionId)) return current;
+        if (!current.has(tab.csv.workingCsvId)) return current;
         const next = new Set(current);
-        next.delete(tab.csv.sessionId);
+        next.delete(tab.csv.workingCsvId);
         return next;
       });
     } catch (error: unknown) {
@@ -271,12 +303,12 @@ export function App() {
     dispatchWorkspace({ type: 'cycle', direction });
   }
 
-  function handleDirtyChange(sessionId: string, dirty: boolean) {
+  function handleDirtyChange(workingCsvId: string, dirty: boolean) {
     setDirtySessionIds((current) => {
-      if (current.has(sessionId) === dirty) return current;
+      if (current.has(workingCsvId) === dirty) return current;
       const next = new Set(current);
-      if (dirty) next.add(sessionId);
-      else next.delete(sessionId);
+      if (dirty) next.add(workingCsvId);
+      else next.delete(workingCsvId);
       return next;
     });
   }
@@ -379,7 +411,7 @@ export function App() {
               const session = tab.csv;
               return (
                 <div
-                  key={session.sessionId}
+                  key={session.workingCsvId}
                   className={cn(
                     'col-start-1 row-start-1 grid min-h-0 min-w-0',
                     tab.id !== activeTabId && 'hidden',
@@ -389,7 +421,7 @@ export function App() {
                     session={session}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
-                    onDirtyChange={(dirty) => handleDirtyChange(session.sessionId, dirty)}
+                    onDirtyChange={(dirty) => handleDirtyChange(session.workingCsvId, dirty)}
                   />
                 </div>
               );

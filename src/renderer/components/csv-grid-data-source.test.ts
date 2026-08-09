@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CsvSessionMetadata } from '../../shared/ipc';
+import type { WorkingCsvView } from '../../shared/ipc';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
-const session: CsvSessionMetadata = {
-  sessionId: 'session-1',
+const session: WorkingCsvView = {
+  workingCsvId: 'session-1',
   dataRevision: 0,
   file: {
     path: 'C:\\data\\people.csv',
@@ -16,12 +16,13 @@ const session: CsvSessionMetadata = {
   ],
   rowCount: 250,
   dialect: {},
+  editState: { workingCsvId: 'session-1', dirty: false, canUndo: false, canRedo: false },
 };
 
 describe('createCsvGridDataSource', () => {
   it('requests only the AG Grid row window from the preload API', async () => {
     const getCsvRows = vi.fn().mockResolvedValue({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 100,
       filteredRowCount: 250,
       rows: [{ name: 'Ada', age: 37 }],
@@ -56,7 +57,7 @@ describe('createCsvGridDataSource', () => {
     });
 
     expect(getCsvRows).toHaveBeenCalledWith({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 100,
       limit: 25,
       sort: [{ column: 'age', direction: 'desc' }],
@@ -113,7 +114,7 @@ describe('createCsvGridDataSource', () => {
       .fn()
       .mockReturnValueOnce(firstRequest)
       .mockResolvedValueOnce({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         offset: 0,
         filteredRowCount: 1,
         rows: [{ name: 'Grace', age: 41 }],
@@ -160,7 +161,7 @@ describe('createCsvGridDataSource', () => {
     });
 
     resolveFirst({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       offset: 0,
       filteredRowCount: 1,
       rows: [{ name: 'Ada', age: 37 }],

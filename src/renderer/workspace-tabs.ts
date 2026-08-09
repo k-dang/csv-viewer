@@ -1,9 +1,11 @@
 import type {
   ComparisonColumnsMode,
   ComparisonEvent,
+  ComparisonId,
   ComparisonRowsMode,
   ComparisonView,
-  CsvSessionMetadata,
+  WorkingCsvView,
+  WorkingCsvId,
 } from '../shared/ipc';
 import type { OpenRendererTab } from './components/tab-strip';
 
@@ -14,28 +16,28 @@ export type ComparisonTabPresentation = {
 };
 
 export type RendererTab =
-  | { kind: 'csv'; id: string; csv: CsvSessionMetadata }
+  | { kind: 'csv'; id: string; csv: WorkingCsvView }
   | {
       kind: 'comparison';
       id: string;
-      comparisonId: string;
+      comparisonId: ComparisonId;
       presentation: ComparisonTabPresentation;
     };
 
 export type RendererWorkspaceState = {
   tabs: RendererTab[];
-  comparisons: ReadonlyMap<string, ComparisonView>;
+  comparisons: ReadonlyMap<ComparisonId, ComparisonView>;
   activeTabId: string | null;
 };
 
 export type RendererWorkspaceAction =
-  | { type: 'open-csv'; session: CsvSessionMetadata }
-  | { type: 'close-csv'; sessionId: string }
+  | { type: 'open-csv'; session: WorkingCsvView }
+  | { type: 'close-csv'; workingCsvId: WorkingCsvId }
   | { type: 'open-comparison'; comparison: ComparisonView }
   | { type: 'comparison-event'; event: ComparisonEvent }
   | {
       type: 'update-comparison-presentation';
-      comparisonId: string;
+      comparisonId: ComparisonId;
       presentation: ComparisonTabPresentation;
     }
   | { type: 'select'; tabId: string }
@@ -47,8 +49,8 @@ export const initialRendererWorkspace: RendererWorkspaceState = {
   activeTabId: null,
 };
 
-export const csvTabId = (sessionId: string) => `csv:${sessionId}`;
-export const comparisonTabId = (comparisonId: string) => `comparison:${comparisonId}`;
+export const csvTabId = (workingCsvId: WorkingCsvId) => `csv:${workingCsvId}`;
+export const comparisonTabId = (comparisonId: ComparisonId) => `comparison:${comparisonId}`;
 
 export function rendererWorkspaceReducer(
   state: RendererWorkspaceState,
@@ -56,11 +58,11 @@ export function rendererWorkspaceReducer(
 ): RendererWorkspaceState {
   switch (action.type) {
     case 'open-csv': {
-      const id = csvTabId(action.session.sessionId);
+      const id = csvTabId(action.session.workingCsvId);
       const existingIndex = state.tabs.findIndex(
         (tab) =>
           tab.kind === 'csv' &&
-          (tab.csv.sessionId === action.session.sessionId ||
+          (tab.csv.workingCsvId === action.session.workingCsvId ||
             tab.csv.file.path === action.session.file.path),
       );
       const tabs = [...state.tabs];
@@ -69,7 +71,7 @@ export function rendererWorkspaceReducer(
       return { ...state, tabs, activeTabId: id };
     }
     case 'close-csv':
-      return removeTab(state, csvTabId(action.sessionId));
+      return removeTab(state, csvTabId(action.workingCsvId));
     case 'open-comparison': {
       const comparison = action.comparison;
       const id = comparisonTabId(comparison.comparisonId);
@@ -150,9 +152,9 @@ export function projectOpenTabs(state: RendererWorkspaceState): OpenRendererTab[
 }
 
 function withComparison(
-  comparisons: ReadonlyMap<string, ComparisonView>,
+  comparisons: ReadonlyMap<ComparisonId, ComparisonView>,
   comparison: ComparisonView,
-): ReadonlyMap<string, ComparisonView> {
+): ReadonlyMap<ComparisonId, ComparisonView> {
   const next = new Map(comparisons);
   next.set(comparison.comparisonId, comparison);
   return next;

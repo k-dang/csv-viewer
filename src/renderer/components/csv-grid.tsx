@@ -42,7 +42,7 @@ import type {
   CsvEditState,
   CsvFilterDescriptor,
   CsvRow,
-  CsvSessionMetadata,
+  WorkingCsvView,
 } from '../../shared/ipc';
 import { csvInternalRowIdField } from '../../shared/ipc';
 import {
@@ -123,7 +123,7 @@ export function CsvGrid({
   themeMode,
   onDirtyChange,
 }: {
-  session: CsvSessionMetadata;
+  session: WorkingCsvView;
   themeMode: 'light' | 'dark';
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -134,7 +134,7 @@ export function CsvGrid({
   const hasActiveQueryRef = useRef(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
   const [editState, setEditState] = useState<CsvEditState>({
-    sessionId: session.sessionId,
+    workingCsvId: session.workingCsvId,
     dirty: false,
     canUndo: false,
     canRedo: false,
@@ -182,7 +182,7 @@ export function CsvGrid({
 
   useEffect(() => {
     setEditState({
-      sessionId: session.sessionId,
+      workingCsvId: session.workingCsvId,
       dirty: false,
       canUndo: false,
       canRedo: false,
@@ -199,7 +199,7 @@ export function CsvGrid({
     setStatsFilters([]);
     setStatsRefreshKey((current) => current + 1);
     void refreshEditState();
-  }, [session.dataRevision, session.sessionId]);
+  }, [session.dataRevision, session.workingCsvId]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
@@ -298,7 +298,7 @@ export function CsvGrid({
     try {
       setEditError(null);
       const result = await window.csvViewer.editCsvCell({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         rowId,
         column,
         value: String(event.newValue ?? ''),
@@ -318,7 +318,7 @@ export function CsvGrid({
 
   async function refreshEditState() {
     try {
-      setEditState(await window.csvViewer.getCsvEditState({ sessionId: session.sessionId }));
+      setEditState(await window.csvViewer.getCsvEditState({ workingCsvId: session.workingCsvId }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to read edit state.';
       setEditError(message);
@@ -332,8 +332,8 @@ export function CsvGrid({
       setEditError(null);
       const nextEditState =
         action === 'undo'
-          ? await window.csvViewer.undoCsvEdit({ sessionId: session.sessionId })
-          : await window.csvViewer.redoCsvEdit({ sessionId: session.sessionId });
+          ? await window.csvViewer.undoCsvEdit({ workingCsvId: session.workingCsvId })
+          : await window.csvViewer.redoCsvEdit({ workingCsvId: session.workingCsvId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
       setStatsRefreshKey((current) => current + 1);
@@ -355,7 +355,7 @@ export function CsvGrid({
       setEditError(null);
       setEditState(
         await window.csvViewer.deleteCsvRows({
-          sessionId: session.sessionId,
+          workingCsvId: session.workingCsvId,
           rowIds: selectedRowIds,
         }),
       );
@@ -376,7 +376,7 @@ export function CsvGrid({
       setEditError(null);
       setEditState(
         await window.csvViewer.insertCsvRow({
-          sessionId: session.sessionId,
+          workingCsvId: session.workingCsvId,
           placement,
           rowIds: selectedRowIds,
           hasActiveQuery,
@@ -395,7 +395,7 @@ export function CsvGrid({
   async function saveAs() {
     try {
       setEditError(null);
-      const result = await window.csvViewer.saveCsvAs({ sessionId: session.sessionId });
+      const result = await window.csvViewer.saveCsvAs({ workingCsvId: session.workingCsvId });
 
       if (isCancelledSaveResult(result)) {
         return;
@@ -607,7 +607,7 @@ export function CsvGrid({
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           <AgGridReact<CsvRow>
-            key={session.sessionId}
+            key={session.workingCsvId}
             theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
             columnDefs={columnDefs}
             defaultColDef={{

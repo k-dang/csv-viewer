@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ArrowLeftRight, FileSpreadsheet, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { ComparisonCandidate, CsvSessionMetadata } from '../../shared/ipc';
+import type { ComparisonCandidate, WorkingCsvView } from '../../shared/ipc';
 
 export function ComparisonCandidateDialog({
   baseline,
@@ -9,7 +9,7 @@ export function ComparisonCandidateDialog({
   onChoose,
   onClose,
 }: {
-  baseline: CsvSessionMetadata;
+  baseline: WorkingCsvView;
   candidates: ComparisonCandidate[];
   onChoose: (candidateId: string) => void;
   onClose: () => void;
@@ -108,11 +108,11 @@ export function ComparisonCandidateDialog({
                     .join(' · ');
             return (
               <button
-                key={candidate.workingCsv.sessionId}
+                key={candidate.workingCsv.workingCsvId}
                 type="button"
                 aria-disabled={!compatible}
                 onClick={() => {
-                  if (compatible) onChoose(candidate.workingCsv.sessionId);
+                  if (compatible) onChoose(candidate.workingCsv.workingCsvId);
                 }}
                 className="mb-2 flex w-full items-center gap-3 rounded-lg border p-3 text-left transition hover:border-primary/50 hover:bg-muted/50 aria-disabled:cursor-not-allowed aria-disabled:opacity-55"
               >
