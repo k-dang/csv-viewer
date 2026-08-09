@@ -52,7 +52,7 @@ const csvDataService = workspace.csvs;
 const csvComparisonService = workspace.comparisons;
 const maxRecentFiles = 8;
 let workspaceCloseAuthorizedImpact: WorkspaceCloseImpact | undefined;
-let workspaceCloseConfirmationRunning = false;
+let workspaceCloseConfirmation: Promise<WorkspaceCloseImpact | null> | null = null;
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -104,18 +104,12 @@ function createWindow() {
     if (initial.status === 'ready') return;
 
     event.preventDefault();
-    if (workspaceCloseConfirmationRunning) return;
-    workspaceCloseConfirmationRunning = true;
     void (async () => {
-      try {
-        const confirmedImpact = await confirmCurrentWorkspaceImpact(mainWindow, initial.impact);
-        if (confirmedImpact) {
-          workspaceCloseAuthorizedImpact = confirmedImpact;
-          closeAllowed = true;
-          mainWindow.close();
-        }
-      } finally {
-        workspaceCloseConfirmationRunning = false;
+      const confirmedImpact = await confirmWorkspaceCloseOnce(mainWindow, initial.impact);
+      if (confirmedImpact) {
+        workspaceCloseAuthorizedImpact = confirmedImpact;
+        closeAllowed = true;
+        if (!mainWindow.isDestroyed()) mainWindow.close();
       }
     })();
   });
@@ -438,6 +432,18 @@ async function confirmCurrentWorkspaceImpact(
   return null;
 }
 
+function confirmWorkspaceCloseOnce(
+  ownerWindow: BrowserWindow | undefined,
+  impact: WorkspaceCloseImpact,
+): Promise<WorkspaceCloseImpact | null> {
+  if (!workspaceCloseConfirmation) {
+    workspaceCloseConfirmation = confirmCurrentWorkspaceImpact(ownerWindow, impact).finally(() => {
+      workspaceCloseConfirmation = null;
+    });
+  }
+  return workspaceCloseConfirmation;
+}
+
 async function saveCsvAsForSession(
   ownerWindow: BrowserWindow | undefined,
   request: CsvSaveAsRequest,
@@ -565,27 +571,21 @@ app.on('before-quit', (event) => {
   if (workspaceDisposed) return;
   event.preventDefault();
   if (workspaceDisposalStarted) return;
-  if (workspaceCloseConfirmationRunning && !workspaceCloseAuthorizedImpact) return;
   const impact = workspace.confirmWindowClose(workspaceCloseAuthorizedImpact);
   if (impact.status === 'ready') {
     workspaceDisposalStarted = true;
     void disposeWorkspaceBeforeQuit();
     return;
   }
-  workspaceCloseConfirmationRunning = true;
   void (async () => {
-    try {
-      const confirmedImpact = await confirmCurrentWorkspaceImpact(
-        BrowserWindow.getFocusedWindow() ?? undefined,
-        impact.impact,
-      );
-      if (!confirmedImpact) return;
-      workspaceCloseAuthorizedImpact = confirmedImpact;
-      workspaceDisposalStarted = true;
-      await disposeWorkspaceBeforeQuit();
-    } finally {
-      workspaceCloseConfirmationRunning = false;
-    }
+    const confirmedImpact = await confirmWorkspaceCloseOnce(
+      BrowserWindow.getFocusedWindow() ?? undefined,
+      impact.impact,
+    );
+    if (!confirmedImpact || workspaceDisposalStarted || workspaceDisposed) return;
+    workspaceCloseAuthorizedImpact = confirmedImpact;
+    workspaceDisposalStarted = true;
+    await disposeWorkspaceBeforeQuit();
   })();
 });
 

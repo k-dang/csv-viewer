@@ -29,6 +29,7 @@ function session(
     columns: columns.map((column) => ({ name: column, type: 'VARCHAR' })),
     rowCount: 0,
     dialect: {},
+    editState: { workingCsvId, dirty: false, canUndo: false, canRedo: false },
   };
 }
 
@@ -245,6 +246,37 @@ describe('CsvComparisonService interaction contract', () => {
         candidate: { workingCsvId: 'b' },
       },
     });
+  });
+
+  it('resolves source-unavailable when a source disappears before generation starts', async () => {
+    const store = new FakeCsvStore();
+    store.sessions.set('a', session('a', 'a.csv'));
+    store.sessions.set('b', session('b', 'b.csv'));
+    const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+
+    const begun = service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    store.sessions.delete('a');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(begun.completion).resolves.toMatchObject({
+      status: 'failed',
+      failure: { code: 'source-unavailable', retryable: false },
+      comparison: null,
+    });
+    await expect(service.close(opened.comparison.comparisonId)).resolves.toEqual({
+      status: 'closed',
+      comparisonId: opened.comparison.comparisonId,
+    });
+
+    error.mockRestore();
+    await service.dispose();
   });
 
   it('publishes a replacement before retiring the prior snapshot', async () => {

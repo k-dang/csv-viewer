@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField, type CsvRow } from '../shared/ipc';
 import { WorkingCsvStore } from './working-csv-store';
+import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 
 let tempDir: string;
 let service: WorkingCsvStore;
@@ -14,11 +15,43 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await service.disposeStore();
-  await rm(tempDir, { recursive: true, force: true });
+  try {
+    await service.disposeStore();
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 describe('WorkingCsvStore', () => {
+  it('closes database handles when disposal validation fails', async () => {
+    const filePath = await writeFixture('dispose-failure.csv', ['id', '1'].join('\n'));
+    await service.openOrThrow(filePath);
+    const internals = service as unknown as {
+      artifactRegistry: WorkspaceArtifactRegistry;
+      connection: { closeSync(): void } | null;
+      instance: { closeSync(): void } | null;
+      lifecycle: string;
+    };
+    const connectionClose = vi.spyOn(internals.connection!, 'closeSync');
+    const instanceClose = vi.spyOn(internals.instance!, 'closeSync');
+    internals.artifactRegistry.register({
+      tableName: 'unexpected_artifact',
+      owner: { kind: 'working-csv', workingCsvId: 'missing' },
+      role: 'current',
+    });
+
+    await expect(service.disposeStore()).rejects.toThrow(
+      'Workspace artifact invariant violated',
+    );
+    expect(connectionClose).toHaveBeenCalledOnce();
+    expect(instanceClose).toHaveBeenCalledOnce();
+    expect(internals.connection).toBeNull();
+    expect(internals.instance).toBeNull();
+    expect(internals.lifecycle).toBe('disposed');
+
+    internals.artifactRegistry.remove('unexpected_artifact');
+  });
+
   it('opens a CSV and returns file metadata, inferred columns, and row count', async () => {
     const filePath = await writeFixture(
       'people.csv',

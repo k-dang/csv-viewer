@@ -173,8 +173,15 @@ export class WorkingCsvStore {
           acquireSource: (workingCsvId) => this.acquireComparisonSource(workingCsvId),
           getOwnerConnection: () => this.getConnection(),
           connectWorker: async () => {
-            await this.getConnection();
-            return this.instance!.connect();
+            const releaseWork = this.acquireWorkspaceWork();
+            try {
+              await this.getConnection();
+              const instance = this.instance;
+              if (!instance) throw new Error('CSV workspace is disposing.');
+              return await instance.connect();
+            } finally {
+              releaseWork();
+            }
           },
         },
         this.artifactRegistry,
@@ -244,26 +251,46 @@ export class WorkingCsvStore {
 
   async disposeStore(): Promise<void> {
     this.beginDisposal();
-    await this.waitForWorkspaceWork();
-    for (const workingCsvId of this.workingCsvs.keys()) this.beginClose(workingCsvId);
-    for (const workingCsvId of [...this.workingCsvs.keys()]) {
-      await this.closeWorkingCsv(workingCsvId);
+    let disposalFailure: Error | null = null;
+    const teardownFailures: Error[] = [];
+    try {
+      await this.waitForWorkspaceWork();
+      for (const workingCsvId of this.workingCsvs.keys()) this.beginClose(workingCsvId);
+      for (const workingCsvId of [...this.workingCsvs.keys()]) {
+        await this.closeWorkingCsv(workingCsvId);
+      }
+
+      if (this.sourceLeaseCounts.size > 0) {
+        throw new Error('Working CSV source lease invariant violated during disposal.');
+      }
+      for (const tableName of [...this.retiredSourceTables]) {
+        await this.dropRetiredSourceTable(tableName);
+      }
+
+      this.artifactRegistry.assertEmpty();
+    } catch (error) {
+      disposalFailure = asError(error);
+    } finally {
+      try {
+        this.connection?.closeSync();
+      } catch (error) {
+        teardownFailures.push(asError(error));
+      }
+      this.connection = null;
+      try {
+        this.instance?.closeSync();
+      } catch (error) {
+        teardownFailures.push(asError(error));
+      }
+      this.instance = null;
+      this.lifecycle = 'disposed';
     }
 
-    if (this.sourceLeaseCounts.size > 0) {
-      throw new Error('Working CSV source lease invariant violated during disposal.');
+    const failures = disposalFailure ? [disposalFailure, ...teardownFailures] : teardownFailures;
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Unable to dispose all Working CSV resources.');
     }
-    for (const tableName of [...this.retiredSourceTables]) {
-      await this.dropRetiredSourceTable(tableName);
-    }
-
-    this.artifactRegistry.assertEmpty();
-
-    this.connection?.closeSync();
-    this.connection = null;
-    this.instance?.closeSync();
-    this.instance = null;
-    this.lifecycle = 'disposed';
   }
 
   isDirty(workingCsvId: WorkingCsvId): boolean {
@@ -1100,6 +1127,10 @@ function unavailableWorkingCsvFailure(code: WorkingCsvFailure['code']): WorkingC
     message: 'The CSV workspace is closing.',
     retryable: false,
   };
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function serializeCsvField(value: string, delimiter: string): string {

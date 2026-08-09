@@ -72,7 +72,7 @@ export type ComparisonAttemptOutcome =
   | {
       status: 'failed';
       failure: Extract<ComparisonView['lastAttempt'], { status: 'failed' }>['failure'];
-      comparison: ComparisonView;
+      comparison: ComparisonView | null;
     };
 
 export type BeginComparisonResult =
@@ -741,8 +741,17 @@ export class CsvComparisonService {
     }
     entity.activity = { kind: 'idle', lastAttempt };
     this.publishChange(entity);
-    const comparison = this.project(entity);
     if (!lastAttempt) throw new Error('Comparison terminal outcome invariant violated.');
+    if (lastAttempt.status === 'failed') {
+      const baseline = this.csvs.getState(entity.baselineId);
+      const candidate = this.csvs.getState(entity.candidateId);
+      return {
+        status: 'failed',
+        failure: lastAttempt.failure,
+        comparison: baseline && candidate ? this.project(entity) : null,
+      };
+    }
+    const comparison = this.project(entity);
     switch (lastAttempt.status) {
       case 'applied':
         return { status: 'applied', comparison };
@@ -752,8 +761,6 @@ export class CsvComparisonService {
         return { status: 'cancelled', comparison };
       case 'sources-changed':
         return { status: 'sources-changed', changedSides: lastAttempt.changedSides, comparison };
-      case 'failed':
-        return { status: 'failed', failure: lastAttempt.failure, comparison };
     }
   }
 
