@@ -39,9 +39,10 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      getSource: () => ({
+      acquireSource: async () => ({
         tableName: 'source',
         columns: [{ name: 'id', type: 'VARCHAR' }],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => connection,
       connectWorker: async () => connection,
@@ -68,9 +69,10 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      getSource: () => ({
+      acquireSource: async () => ({
         tableName: 'source',
         columns: [{ name: 'id', type: 'VARCHAR' }],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => connection,
       connectWorker: () =>
@@ -80,6 +82,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     });
 
     const validation = executor.validateKey('operation', 'source', ['id']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     executor.cancel('operation');
     resolveConnection?.(connection);
 
@@ -102,9 +105,10 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       closeSync: () => undefined,
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      getSource: () => ({
+      acquireSource: async () => ({
         tableName: 'source',
         columns: [{ name: 'id', type: 'VARCHAR' }],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => connection,
       connectWorker: async () => connection,
@@ -136,9 +140,10 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      getSource: () => ({
+      acquireSource: async () => ({
         tableName: 'source',
         columns: [{ name: 'id', type: 'VARCHAR' }],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => connection,
       connectWorker: async () => connection,
@@ -191,12 +196,13 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      getSource: (sessionId) => ({
+      acquireSource: async (sessionId) => ({
         tableName: sessionId,
         columns: [
           { name: 'id', type: 'VARCHAR' },
           { name: 'value', type: 'VARCHAR' },
         ],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => owner,
       connectWorker: async () => workers[workerIndex++],
@@ -241,12 +247,13 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       markSnapshotRunIssued = resolve;
     });
     const executor = new DuckDbComparisonExecutor({
-      getSource: (sessionId) => ({
+      acquireSource: async (sessionId) => ({
         tableName: sessionId,
         columns: [
           { name: 'id', type: 'VARCHAR' },
           { name: 'value', type: 'VARCHAR' },
         ],
+        release: async () => undefined,
       }),
       getOwnerConnection: async () => owner,
       connectWorker: async () => {

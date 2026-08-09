@@ -16,7 +16,7 @@ import {
 import type {
   CsvColumnValueCounts,
   CsvFilterDescriptor,
-  CsvSessionMetadata,
+  WorkingCsvView,
 } from '../../shared/ipc';
 import { formatCellValue, formatNumber } from './csv-format';
 
@@ -34,7 +34,7 @@ export function CsvStatsPanel({
   onColumnChange,
   onClose,
 }: {
-  session: CsvSessionMetadata;
+  session: WorkingCsvView;
   selectedColumn: string;
   filters: CsvFilterDescriptor[];
   search: string;
@@ -50,7 +50,7 @@ export function CsvStatsPanel({
     setStatsState({ status: 'loading' });
     window.csvViewer
       .getCsvColumnValueCounts({
-        sessionId: session.sessionId,
+        workingCsvId: session.workingCsvId,
         column: selectedColumn,
         filters,
         search,
@@ -72,7 +72,7 @@ export function CsvStatsPanel({
     return () => {
       cancelled = true;
     };
-  }, [session.sessionId, selectedColumn, filters, search, refreshKey]);
+  }, [session.workingCsvId, selectedColumn, filters, search, refreshKey]);
 
   return (
     <aside className="grid min-h-0 w-full min-w-0 grid-rows-[auto_1fr] border-l bg-card md:w-[320px]" aria-label="Stats Panel">

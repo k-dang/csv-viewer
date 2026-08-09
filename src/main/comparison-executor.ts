@@ -1,15 +1,23 @@
-import type { ComparisonRow, ComparisonSummary, SourceKeyDiagnostics } from '../shared/ipc';
+import type {
+  ComparisonId,
+  ComparisonOperationId,
+  ComparisonRow,
+  ComparisonSummary,
+  SourceKeyDiagnostics,
+  WorkingCsvId,
+} from '../shared/ipc';
 
 export type CreateComparisonSnapshotRequest = {
-  artifactId: string;
-  baselineId: string;
-  candidateId: string;
+  artifactId: ComparisonOperationId;
+  comparisonId: ComparisonId;
+  baselineId: WorkingCsvId;
+  candidateId: WorkingCsvId;
   key: string[];
   valueColumns: string[];
 };
 
 export type ReadComparisonSnapshotWindowRequest = {
-  artifactId: string;
+  artifactId: ComparisonOperationId;
   keyCount: number;
   columnIndexes: number[];
   offset: number;
@@ -24,11 +32,16 @@ export type StoredComparisonWindow = {
 };
 
 export interface ComparisonExecutor {
-  validateKey(operationId: string, sessionId: string, key: string[]): Promise<SourceKeyDiagnostics>;
+  validateKey(
+    operationId: ComparisonOperationId,
+    workingCsvId: WorkingCsvId,
+    key: string[],
+  ): Promise<SourceKeyDiagnostics>;
   createSnapshot(request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary>;
-  cancel(operationId: string): void;
-  release(operationId: string): Promise<void>;
+  activateSnapshot(artifactId: ComparisonOperationId): void;
+  cancel(operationId: ComparisonOperationId): void;
+  release(operationId: ComparisonOperationId): Promise<void>;
   readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow>;
-  dropSnapshot(artifactId: string): Promise<void>;
+  dropSnapshot(artifactId: ComparisonOperationId): Promise<void>;
   dispose(): Promise<void>;
 }

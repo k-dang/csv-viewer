@@ -3,14 +3,14 @@ import type {
   CsvDateFilterOperator,
   CsvFilterDescriptor,
   CsvNumberFilterOperator,
-  CsvSessionMetadata,
+  WorkingCsvView,
   CsvSortDescriptor,
   CsvTextFilterOperator,
   CsvViewerApi,
 } from '../../shared/ipc';
 
 export function createCsvGridDataSource(
-  session: CsvSessionMetadata,
+  session: WorkingCsvView,
   api: Pick<CsvViewerApi, 'getCsvRows'>,
   onFilteredRowCount?: (rowCount: number) => void,
   search = '',
@@ -33,7 +33,7 @@ export function createCsvGridDataSource(
       onQueryState?.('querying');
 
       api
-        .getCsvRows({ sessionId: session.sessionId, offset, limit, ...query })
+        .getCsvRows({ workingCsvId: session.workingCsvId, offset, limit, ...query })
         .then((window) => {
           if (requestId !== requestState.latestRequestId) {
             return;

@@ -1,9 +1,11 @@
 import type { DuckDBConnection } from '@duckdb/node-api';
 import type {
   ComparisonRow,
+  ComparisonOperationId,
   ComparisonSummary,
   CsvColumn,
   SourceKeyDiagnostics,
+  WorkingCsvId,
 } from '../shared/ipc';
 import { csvInternalRowIdField } from '../shared/ipc';
 import type {
@@ -19,14 +21,16 @@ import {
   quoteIdentifier,
 } from './csv-query';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
+import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 
 export type ComparisonSource = {
   tableName: string;
   columns: CsvColumn[];
+  release(): Promise<void>;
 };
 
 export type DuckDbComparisonAccess = {
-  getSource(sessionId: string): ComparisonSource;
+  acquireSource(workingCsvId: WorkingCsvId): Promise<ComparisonSource>;
   getOwnerConnection(): Promise<DuckDBConnection>;
   connectWorker(): Promise<DuckDBConnection>;
 };
@@ -37,25 +41,29 @@ type ComparisonWorker = {
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
-  private readonly artifacts = new Set<string>();
-  private readonly workers = new Map<string, ComparisonWorker>();
-  private readonly readCounts = new Map<string, number>();
-  private readonly readWaiters = new Map<string, Array<() => void>>();
-  private readonly retirements = new Map<string, Promise<void>>();
+  private readonly artifacts = new Set<ComparisonOperationId>();
+  private readonly workers = new Map<ComparisonOperationId, ComparisonWorker>();
+  private readonly readCounts = new Map<ComparisonOperationId, number>();
+  private readonly readWaiters = new Map<ComparisonOperationId, Array<() => void>>();
+  private readonly retirements = new Map<ComparisonOperationId, Promise<void>>();
 
-  constructor(private readonly database: DuckDbComparisonAccess) {}
+  constructor(
+    private readonly database: DuckDbComparisonAccess,
+    private readonly artifactRegistry = new WorkspaceArtifactRegistry(),
+  ) {}
 
   async validateKey(
-    operationId: string,
-    sessionId: string,
+    operationId: ComparisonOperationId,
+    workingCsvId: WorkingCsvId,
     key: string[],
   ): Promise<SourceKeyDiagnostics> {
     if (key.length === 0) throw new Error('Comparison key requires at least one column.');
-    const source = this.database.getSource(sessionId);
-    const writer = await this.getWriter(operationId);
-    const known = new Set(source.columns.map((column) => column.name));
-    key.forEach((column) => assertKnownColumn(column, known));
-    const table = quoteIdentifier(source.tableName);
+    const source = await this.database.acquireSource(workingCsvId);
+    try {
+      const writer = await this.getWriter(operationId);
+      const known = new Set(source.columns.map((column) => column.name));
+      key.forEach((column) => assertKnownColumn(column, known));
+      const table = quoteIdentifier(source.tableName);
     const active = `${quoteIdentifier(csvDeletedField)} = false`;
     const blank = key
       .map((column) => `(${quoteIdentifier(column)} IS NULL OR ${quoteIdentifier(column)} = '')`)
@@ -103,21 +111,25 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         rowIds: rowIdsResult.getRowObjectsJS().map((row) => String(row.row_id)),
       });
     }
-    return {
-      blankRowCount: normalizeCount(blankCountResult.getRowObjectsJS()[0].count),
-      duplicateGroupCount: normalizeCount(duplicateCountResult.getRowObjectsJS()[0].count),
-      blankExamples: blankExamplesResult.getRowObjectsJS().map((row) => ({
-        rowId: String(row.row_id),
-        keyValues: key.map((_column, index) => normalizeCellValue(row[`key_${index}`])),
-      })),
-      duplicateExamples,
-    };
+      return {
+        blankRowCount: normalizeCount(blankCountResult.getRowObjectsJS()[0].count),
+        duplicateGroupCount: normalizeCount(duplicateCountResult.getRowObjectsJS()[0].count),
+        blankExamples: blankExamplesResult.getRowObjectsJS().map((row) => ({
+          rowId: String(row.row_id),
+          keyValues: key.map((_column, index) => normalizeCellValue(row[`key_${index}`])),
+        })),
+        duplicateExamples,
+      };
+    } finally {
+      await source.release();
+    }
   }
 
   async createSnapshot(request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary> {
-    const baseline = this.database.getSource(request.baselineId);
-    const candidate = this.database.getSource(request.candidateId);
-    const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
+    const sources = await this.acquireSources([request.baselineId, request.candidateId]);
+    const [baseline, candidate] = sources;
+    const tableName = buildComparisonTableName(request.artifactId);
+    const table = quoteIdentifier(tableName);
     const join = request.key
       .map((column) => `b.${quoteIdentifier(column)} = c.${quoteIdentifier(column)}`)
       .join(' AND ');
@@ -141,44 +153,68 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         `(b.${quoteIdentifier(csvInternalRowIdField)} IS NOT NULL AND c.${quoteIdentifier(csvInternalRowIdField)} IS NOT NULL AND b.${quoteIdentifier(column)} IS DISTINCT FROM c.${quoteIdentifier(column)}) AS ${quoteIdentifier(`changed_${index}`)}`,
       ]),
     ].join(', ');
-    const writer = await this.getWriter(request.artifactId);
-    await this.dropSnapshot(request.artifactId);
-    await writer.run(
-      `CREATE TABLE ${table} AS SELECT ${projection}
-       FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
-       FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
-    );
-    this.artifacts.add(request.artifactId);
-    const changedSums = request.valueColumns
-      .map(
-        (_column, index) =>
-          `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
-      )
-      .join(', ');
-    const summaryResult = await writer.runAndReadAll(
-      `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
-        coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
-        coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
-        coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
-        count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
-    );
-    const row = summaryResult.getRowObjectsJS()[0];
-    return {
-      rows: {
-        changed: normalizeCount(row.changed),
-        baselineOnly: normalizeCount(row.baseline_only),
-        candidateOnly: normalizeCount(row.candidate_only),
-        unchanged: normalizeCount(row.unchanged),
-        total: normalizeCount(row.total),
-      },
-      changedColumns: request.valueColumns.map((name, index) => ({
-        name,
-        changedRowCount: normalizeCount(row[`changed_count_${index}`]),
-      })),
-    };
+    try {
+      const writer = await this.getWriter(request.artifactId);
+      try {
+        await this.dropSnapshot(request.artifactId);
+        this.artifactRegistry.register({
+          tableName,
+          owner: { kind: 'comparison', comparisonId: request.comparisonId },
+          role: 'staging',
+          operationId: request.artifactId,
+        });
+        this.artifacts.add(request.artifactId);
+        await writer.run(
+          `CREATE TABLE ${table} AS SELECT ${projection}
+           FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
+           FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
+        );
+        const changedSums = request.valueColumns
+          .map(
+            (_column, index) =>
+              `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
+          )
+          .join(', ');
+        const summaryResult = await writer.runAndReadAll(
+          `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
+            coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
+            coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
+            coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
+            count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
+        );
+        const row = summaryResult.getRowObjectsJS()[0];
+        return {
+          rows: {
+            changed: normalizeCount(row.changed),
+            baselineOnly: normalizeCount(row.baseline_only),
+            candidateOnly: normalizeCount(row.candidate_only),
+            unchanged: normalizeCount(row.unchanged),
+            total: normalizeCount(row.total),
+          },
+          changedColumns: request.valueColumns.map((name, index) => ({
+            name,
+            changedRowCount: normalizeCount(row[`changed_count_${index}`]),
+          })),
+        };
+      } catch (error) {
+        await this.cleanupFailedSnapshot(request.artifactId).catch((cleanupError) => {
+          console.error('Unable to clean a failed Comparison staging artifact.', cleanupError);
+        });
+        throw error;
+      }
+    } finally {
+      await Promise.all(sources.map((source) => source.release()));
+    }
   }
 
-  cancel(operationId: string): void {
+  activateSnapshot(artifactId: ComparisonOperationId): void {
+    if (!this.artifacts.has(artifactId) || this.retirements.has(artifactId)) {
+      throw new Error('Comparison staging snapshot is no longer available.');
+    }
+    this.artifactRegistry.transition(buildComparisonTableName(artifactId), 'active');
+  }
+
+  cancel(operationId: ComparisonOperationId): void {
     const worker = this.workers.get(operationId);
     if (!worker) return;
     worker.cancelled = true;
@@ -188,7 +224,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     );
   }
 
-  async release(operationId: string): Promise<void> {
+  async release(operationId: ComparisonOperationId): Promise<void> {
     const worker = this.workers.get(operationId);
     if (!worker) return;
     try {
@@ -261,7 +297,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     }
   }
 
-  async dropSnapshot(artifactId: string): Promise<void> {
+  async dropSnapshot(artifactId: ComparisonOperationId): Promise<void> {
     const existing = this.retirements.get(artifactId);
     if (existing) return existing;
     if (!this.artifacts.has(artifactId)) return;
@@ -287,12 +323,17 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         failures.push(normalizeError(error));
       }
     }
+    try {
+      this.artifactRegistry.assertNoArtifactsOwnedBy('comparison');
+    } catch (error) {
+      failures.push(normalizeError(error));
+    }
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Unable to dispose all Comparison executor resources.');
     }
   }
 
-  private async getWriter(operationId: string): Promise<DuckDBConnection> {
+  private async getWriter(operationId: ComparisonOperationId): Promise<DuckDBConnection> {
     const existing = this.workers.get(operationId);
     if (existing) {
       const connection = await existing.connection;
@@ -319,14 +360,27 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     return writer;
   }
 
-  private acquireRead(artifactId: string): void {
+  private async acquireSources(workingCsvIds: WorkingCsvId[]): Promise<ComparisonSource[]> {
+    const sources: ComparisonSource[] = [];
+    try {
+      for (const workingCsvId of workingCsvIds) {
+        sources.push(await this.database.acquireSource(workingCsvId));
+      }
+      return sources;
+    } catch (error) {
+      await Promise.all(sources.map((source) => source.release()));
+      throw error;
+    }
+  }
+
+  private acquireRead(artifactId: ComparisonOperationId): void {
     if (!this.artifacts.has(artifactId) || this.retirements.has(artifactId)) {
       throw new Error('Comparison snapshot is no longer available.');
     }
     this.readCounts.set(artifactId, (this.readCounts.get(artifactId) ?? 0) + 1);
   }
 
-  private releaseRead(artifactId: string): void {
+  private releaseRead(artifactId: ComparisonOperationId): void {
     const next = (this.readCounts.get(artifactId) ?? 1) - 1;
     if (next > 0) {
       this.readCounts.set(artifactId, next);
@@ -338,7 +392,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     waiters.forEach((resolve) => resolve());
   }
 
-  private async waitForReaders(artifactId: string): Promise<void> {
+  private async waitForReaders(artifactId: ComparisonOperationId): Promise<void> {
     if ((this.readCounts.get(artifactId) ?? 0) === 0) return;
     await new Promise<void>((resolve) => {
       const waiters = this.readWaiters.get(artifactId) ?? [];
@@ -347,17 +401,27 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     });
   }
 
-  private async retireSnapshot(artifactId: string): Promise<void> {
+  private async retireSnapshot(artifactId: ComparisonOperationId): Promise<void> {
     try {
+      const tableName = buildComparisonTableName(artifactId);
+      this.artifactRegistry.transition(tableName, 'retired');
       await this.waitForReaders(artifactId);
       const connection = await this.database.getOwnerConnection();
-      await connection.run(
-        `DROP TABLE IF EXISTS ${quoteIdentifier(buildComparisonTableName(artifactId))}`,
-      );
+      await connection.run(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`);
       this.artifacts.delete(artifactId);
+      this.artifactRegistry.remove(tableName);
     } finally {
       this.retirements.delete(artifactId);
     }
+  }
+
+  private async cleanupFailedSnapshot(artifactId: ComparisonOperationId): Promise<void> {
+    if (!this.artifacts.has(artifactId)) return;
+    const tableName = buildComparisonTableName(artifactId);
+    const connection = await this.database.getOwnerConnection();
+    await connection.run(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`);
+    this.artifacts.delete(artifactId);
+    this.artifactRegistry.remove(tableName);
   }
 }
 
@@ -373,7 +437,7 @@ function parseClassification(value: unknown): ComparisonRow['classification'] {
   throw new Error('Comparison snapshot contains an invalid classification.');
 }
 
-function buildComparisonTableName(artifactId: string): string {
+function buildComparisonTableName(artifactId: ComparisonOperationId): string {
   return `csv_comparison_${artifactId.replaceAll('-', '_')}`;
 }
 

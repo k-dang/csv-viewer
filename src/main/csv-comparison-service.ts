@@ -1,35 +1,41 @@
 import { randomUUID } from 'node:crypto';
 import type {
   BeginComparisonRequest,
-  BeginComparisonResult,
+  CancelComparisonRequest,
   CancelComparisonResult,
   CloseComparisonResult,
   ComparisonCandidate,
   ComparisonEvent,
   ComparisonFault,
+  ComparisonId,
   ComparisonKeyDiagnostics,
   ComparisonMutationOutcome,
+  ComparisonOperationId,
+  ComparisonResultToken,
   ComparisonSide,
   ComparisonSummary,
   ComparisonView,
   ComparisonWindowOutcome,
   ComparisonWindowRequest,
-  CsvSessionMetadata,
+  WorkingCsvView,
+  WorkingCsvRef,
+  WorkingCsvId,
   OpenComparisonResult,
+  OpenComparisonRequest,
 } from '../shared/ipc';
 import { orderComparisonValueColumns } from '../shared/comparison-presentation';
 import type { ComparisonExecutor } from './comparison-executor';
 
 export interface ComparisonCsvStore {
-  getSession(sessionId: string): CsvSessionMetadata | null;
-  listSessions(): CsvSessionMetadata[];
-  isClosing(sessionId: string): boolean;
-  subscribeToDataChanges(listener: (sessionId: string) => void): () => void;
+  getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
+  list(): WorkingCsvView[];
+  isClosing(workingCsvId: WorkingCsvId): boolean;
+  subscribeToDataChanges(listener: (workingCsvId: WorkingCsvId) => void): () => void;
 }
 
 type Snapshot = {
-  artifactId: string;
-  resultToken: string;
+  artifactId: ComparisonOperationId;
+  resultToken: ComparisonResultToken;
   key: string[];
   valueColumns: string[];
   summary: ComparisonSummary;
@@ -39,49 +45,87 @@ type Snapshot = {
 };
 
 type Operation = {
-  operationId: string;
+  operationId: ComparisonOperationId;
   intent: 'apply-key' | 'refresh';
   phase: 'validating' | 'comparing' | 'summarizing';
   cancelRequested: boolean;
+  changedSides: ComparisonSide[];
 };
 
 type ComparisonActivity =
   | { kind: 'idle'; lastAttempt: ComparisonView['lastAttempt'] }
-  | { kind: 'running'; operation: Operation; completion: Promise<void> };
+  | { kind: 'running'; operation: Operation; completion: Promise<ComparisonAttemptOutcome> };
+
+export type ComparisonAttemptOutcome =
+  | { status: 'applied'; comparison: ComparisonView }
+  | {
+      status: 'invalid-key';
+      diagnostics: ComparisonKeyDiagnostics;
+      comparison: ComparisonView;
+    }
+  | { status: 'cancelled'; comparison: ComparisonView }
+  | {
+      status: 'sources-changed';
+      changedSides: ComparisonSide[];
+      comparison: ComparisonView;
+    }
+  | {
+      status: 'failed';
+      failure: Extract<ComparisonView['lastAttempt'], { status: 'failed' }>['failure'];
+      comparison: ComparisonView;
+    };
+
+export type BeginComparisonResult =
+  | {
+      status: 'accepted';
+      operationId: ComparisonOperationId;
+      completion: Promise<ComparisonAttemptOutcome>;
+    }
+  | { status: 'busy'; activeOperationId: string }
+  | { status: 'rejected'; fault: ComparisonFault };
 
 type ComparisonRecord = {
-  comparisonId: string;
+  comparisonId: ComparisonId;
   version: number;
-  baselineId: string;
-  candidateId: string;
+  baselineId: WorkingCsvId;
+  candidateId: WorkingCsvId;
   snapshot: Snapshot | null;
   activity: ComparisonActivity;
 };
 
 export class CsvComparisonService {
-  private readonly entities = new Map<string, ComparisonRecord>();
-  private readonly pairIndex = new Map<string, string>();
+  private readonly entities = new Map<ComparisonId, ComparisonRecord>();
+  private readonly pairIndex = new Map<string, ComparisonId>();
+  private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
   private readonly pendingRetirements = new Set<string>();
   private readonly unsubscribeFromDataChanges: () => void;
+  private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
   constructor(
     private readonly csvs: ComparisonCsvStore,
     private readonly executor: ComparisonExecutor,
   ) {
-    this.unsubscribeFromDataChanges = csvs.subscribeToDataChanges((sessionId) => {
-      this.markSourceChanged(sessionId);
+    this.unsubscribeFromDataChanges = csvs.subscribeToDataChanges((workingCsvId) => {
+      this.markSourceChanged(workingCsvId);
     });
   }
 
-  candidatesFor(baselineId: string): ComparisonCandidate[] {
-    const baseline = this.csvs.getSession(baselineId);
+  beginDisposal(): void {
+    if (this.lifecycle === 'active') this.lifecycle = 'disposing';
+  }
+
+  candidatesFor(baselineId: WorkingCsvId): ComparisonCandidate[] {
+    if (this.lifecycle !== 'active') return [];
+    const baseline = this.csvs.getState(baselineId);
     if (!baseline) return [];
 
     return this.csvs
-      .listSessions()
+      .list()
       .filter(
-        (session) => session.sessionId !== baselineId && !this.csvs.isClosing(session.sessionId),
+        (workingCsv) =>
+          workingCsv.workingCsvId !== baselineId &&
+          !this.csvs.isClosing(workingCsv.workingCsvId),
       )
       .map((workingCsv) => ({ workingCsv, compatibility: compareColumns(baseline, workingCsv) }))
       .sort((left, right) => {
@@ -96,9 +140,12 @@ export class CsvComparisonService {
       });
   }
 
-  open(request: { baselineId: string; candidateId: string }): OpenComparisonResult {
-    const baseline = this.csvs.getSession(request.baselineId);
-    const candidate = this.csvs.getSession(request.candidateId);
+  open(request: OpenComparisonRequest): OpenComparisonResult {
+    if (this.lifecycle !== 'active') {
+      return rejected('source-not-found', 'The CSV workspace is closing.');
+    }
+    const baseline = this.csvs.getState(request.baselineId);
+    const candidate = this.csvs.getState(request.candidateId);
     if (!baseline || !candidate)
       return rejected('source-not-found', 'Both Working CSVs must still be open.');
     if (this.csvs.isClosing(request.baselineId) || this.csvs.isClosing(request.candidateId)) {
@@ -131,15 +178,20 @@ export class CsvComparisonService {
     };
     this.entities.set(entity.comparisonId, entity);
     this.pairIndex.set(pair, entity.comparisonId);
+    this.addDependency(entity.baselineId, entity.comparisonId);
+    this.addDependency(entity.candidateId, entity.comparisonId);
     return { status: 'created', comparison: this.project(entity) };
   }
 
-  getState(comparisonId: string): ComparisonView | null {
+  getState(comparisonId: ComparisonId): ComparisonView | null {
     const entity = this.entities.get(comparisonId);
     return entity ? this.project(entity) : null;
   }
 
   begin(request: BeginComparisonRequest): BeginComparisonResult {
+    if (this.lifecycle !== 'active') {
+      return rejected('source-not-found', 'The CSV workspace is closing.');
+    }
     const entity = this.entities.get(request.comparisonId);
     if (!entity) return rejected('comparison-not-found', 'The Comparison Tab is no longer open.');
     if (entity.activity.kind === 'running') {
@@ -164,19 +216,20 @@ export class CsvComparisonService {
       intent: request.kind,
       phase: 'validating',
       cancelRequested: false,
+      changedSides: [],
     };
     const completion = Promise.resolve().then(() => this.run(entity, operation, [...key]));
     entity.activity = { kind: 'running', operation, completion };
     this.publishChange(entity);
-    return { status: 'accepted', operationId: operation.operationId };
+    return { status: 'accepted', operationId: operation.operationId, completion };
   }
 
-  cancel(comparisonId: string, operationId: string): CancelComparisonResult {
-    const entity = this.entities.get(comparisonId);
+  async cancel(request: CancelComparisonRequest): Promise<CancelComparisonResult> {
+    const entity = this.entities.get(request.comparisonId);
     if (!entity) return { status: 'comparison-not-found' };
     if (entity.activity.kind === 'idle') return { status: 'already-finished' };
     const operation = entity.activity.operation;
-    if (operation.operationId !== operationId) return { status: 'operation-mismatch' };
+    if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
     if (operation.cancelRequested) return { status: 'already-requested' };
     operation.cancelRequested = true;
     this.executor.cancel(operation.operationId);
@@ -184,6 +237,9 @@ export class CsvComparisonService {
   }
 
   async getWindow(request: ComparisonWindowRequest): Promise<ComparisonWindowOutcome> {
+    if (this.lifecycle !== 'active') {
+      return rejected('source-not-found', 'The CSV workspace is closing.');
+    }
     const entity = this.entities.get(request.comparisonId);
     if (!entity) return { status: 'comparison-not-found' };
     const snapshot = entity.snapshot;
@@ -203,7 +259,7 @@ export class CsvComparisonService {
       );
     }
 
-    const baseline = this.csvs.getSession(entity.baselineId);
+    const baseline = this.csvs.getState(entity.baselineId);
     if (!baseline) return { status: 'comparison-not-found' };
     const valueColumns = orderComparisonValueColumns(
       baseline.columns,
@@ -255,7 +311,10 @@ export class CsvComparisonService {
     };
   }
 
-  swap(comparisonId: string): ComparisonMutationOutcome {
+  swap(comparisonId: ComparisonId): ComparisonMutationOutcome {
+    if (this.lifecycle !== 'active') {
+      return rejected('source-not-found', 'The CSV workspace is closing.');
+    }
     const entity = this.entities.get(comparisonId);
     if (!entity) return rejected('comparison-not-found', 'The Comparison Tab is no longer open.');
     if (entity.activity.kind === 'running') {
@@ -288,9 +347,9 @@ export class CsvComparisonService {
     return { status: 'changed', comparison: this.project(entity) };
   }
 
-  async close(comparisonId: string): Promise<CloseComparisonResult> {
+  async close(comparisonId: ComparisonId): Promise<CloseComparisonResult> {
     const entity = this.entities.get(comparisonId);
-    if (!entity) return { status: 'closed' };
+    if (!entity) return { status: 'closed', comparisonId };
     if (entity.activity.kind === 'running') {
       const { operation, completion } = entity.activity;
       operation.cancelRequested = true;
@@ -312,29 +371,31 @@ export class CsvComparisonService {
     }
     this.entities.delete(comparisonId);
     this.pairIndex.delete(pairKey(entity.baselineId, entity.candidateId));
+    this.removeDependency(entity.baselineId, comparisonId);
+    this.removeDependency(entity.candidateId, comparisonId);
     this.emit({ kind: 'closed', comparisonId });
-    return { status: 'closed' };
+    return { status: 'closed', comparisonId };
   }
 
-  dependentComparisonIds(sessionId: string): string[] {
-    return [...this.entities.values()]
-      .filter((entity) => entity.baselineId === sessionId || entity.candidateId === sessionId)
-      .map((entity) => entity.comparisonId);
+  dependentComparisonIds(workingCsvId: WorkingCsvId): ComparisonId[] {
+    return [...(this.dependencyIndex.get(workingCsvId) ?? [])];
   }
 
-  async closeDependents(sessionId: string): Promise<void> {
-    for (const comparisonId of this.dependentComparisonIds(sessionId)) {
+  async closeDependents(workingCsvId: WorkingCsvId): Promise<void> {
+    for (const comparisonId of this.dependentComparisonIds(workingCsvId)) {
       const result = await this.close(comparisonId);
       if (result.status === 'failed') throw new Error(result.failure.message);
     }
   }
 
   subscribe(listener: (event: ComparisonEvent) => void): () => void {
+    if (this.lifecycle !== 'active') return () => undefined;
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   async dispose(): Promise<void> {
+    this.beginDisposal();
     this.unsubscribeFromDataChanges();
     const failures: Error[] = [];
     for (const comparisonId of [...this.entities.keys()]) {
@@ -354,33 +415,35 @@ export class CsvComparisonService {
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Unable to dispose all Comparison resources.');
     }
+    this.lifecycle = 'disposed';
   }
 
-  private async run(entity: ComparisonRecord, operation: Operation, key: string[]): Promise<void> {
-    let stagingArtifactId: string | null = null;
+  private async run(
+    entity: ComparisonRecord,
+    operation: Operation,
+    key: string[],
+  ): Promise<ComparisonAttemptOutcome> {
+    let stagingArtifactId: ComparisonOperationId | null = null;
     try {
       await yieldToEventLoop();
       if (!this.operationIsCurrent(entity, operation)) {
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'cancelled',
         });
-        return;
       }
       await this.retryPendingRetirements();
       if (!this.operationIsCurrent(entity, operation)) {
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'cancelled',
         });
-        return;
       }
-      const baseline = this.csvs.getSession(entity.baselineId);
-      const candidate = this.csvs.getSession(entity.candidateId);
+      const baseline = this.csvs.getState(entity.baselineId);
+      const candidate = this.csvs.getState(entity.candidateId);
       if (!baseline || !candidate) {
         await this.releaseWorker(operation.operationId);
-        this.finishFailed(entity, operation, 'source-unavailable');
-        return;
+        return this.finishFailed(entity, operation, 'source-unavailable');
       }
       const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
       const baselineDiagnostics = await this.executor.validateKey(
@@ -394,11 +457,10 @@ export class CsvComparisonService {
         key,
       );
       if (!this.operationIsCurrent(entity, operation)) {
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'cancelled',
         });
-        return;
       }
 
       const diagnostics: ComparisonKeyDiagnostics = {
@@ -408,23 +470,21 @@ export class CsvComparisonService {
       };
       if (hasInvalidKeys(diagnostics)) {
         this.executor.cancel(operation.operationId);
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'invalid-key',
           diagnostics,
         });
-        return;
       }
 
       operation.phase = 'comparing';
       this.publishChange(entity);
       await yieldToEventLoop();
       if (!this.operationIsCurrent(entity, operation)) {
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'cancelled',
         });
-        return;
       }
       const valueColumns = baseline.columns
         .map((column) => column.name)
@@ -432,6 +492,7 @@ export class CsvComparisonService {
       stagingArtifactId = operation.operationId;
       const summary = await this.executor.createSnapshot({
         artifactId: stagingArtifactId,
+        comparisonId: entity.comparisonId,
         baselineId: entity.baselineId,
         candidateId: entity.candidateId,
         key,
@@ -443,14 +504,13 @@ export class CsvComparisonService {
       await yieldToEventLoop();
       if (!this.operationIsCurrent(entity, operation)) {
         await this.retireSnapshot(stagingArtifactId);
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'cancelled',
         });
-        return;
       }
-      const currentBaseline = this.csvs.getSession(entity.baselineId);
-      const currentCandidate = this.csvs.getSession(entity.candidateId);
+      const currentBaseline = this.csvs.getState(entity.baselineId);
+      const currentCandidate = this.csvs.getState(entity.candidateId);
       const changedSides: ComparisonSide[] = [];
       if (!currentBaseline || currentBaseline.dataRevision !== captured.baseline)
         changedSides.push('baseline');
@@ -458,15 +518,15 @@ export class CsvComparisonService {
         changedSides.push('candidate');
       if (changedSides.length > 0) {
         await this.retireSnapshot(stagingArtifactId);
-        await this.settleAfterRelease(entity, operation, {
+        return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
           status: 'sources-changed',
           changedSides,
         });
-        return;
       }
 
       const previousArtifactId = entity.snapshot?.artifactId ?? null;
+      this.executor.activateSnapshot(stagingArtifactId);
       entity.snapshot = {
         artifactId: stagingArtifactId,
         resultToken: stagingArtifactId,
@@ -480,7 +540,7 @@ export class CsvComparisonService {
       stagingArtifactId = null;
       this.publishChange(entity);
       if (previousArtifactId) await this.retireSnapshot(previousArtifactId);
-      await this.settleAfterRelease(entity, operation, {
+      return this.settleAfterRelease(entity, operation, {
         attemptId: operation.operationId,
         status: 'applied',
       });
@@ -488,8 +548,11 @@ export class CsvComparisonService {
       console.error(`Comparison operation ${operation.operationId} failed.`, error);
       if (stagingArtifactId) await this.retireSnapshot(stagingArtifactId);
       await this.releaseWorker(operation.operationId);
-      if (operation.cancelRequested) this.finishCancelled(entity, operation);
-      else this.finishFailed(entity, operation, 'query-failed');
+      if (operation.changedSides.length > 0) {
+        return this.finishSourcesChanged(entity, operation, operation.changedSides);
+      }
+      if (operation.cancelRequested) return this.finishCancelled(entity, operation);
+      return this.finishFailed(entity, operation, 'query-failed');
     } finally {
       await this.releaseWorker(operation.operationId);
     }
@@ -499,18 +562,18 @@ export class CsvComparisonService {
     entity: ComparisonRecord,
     operation: Operation,
     lastAttempt: ComparisonView['lastAttempt'],
-  ): Promise<void> {
+  ): Promise<ComparisonAttemptOutcome> {
     await this.releaseWorker(operation.operationId);
-    this.settle(entity, operation, lastAttempt);
+    return this.settle(entity, operation, lastAttempt);
   }
 
-  private async releaseWorker(operationId: string): Promise<void> {
+  private async releaseWorker(operationId: ComparisonOperationId): Promise<void> {
     await this.executor.release(operationId).catch((error) => {
       console.error(`Failed to release Comparison worker ${operationId}.`, error);
     });
   }
 
-  private async retireSnapshot(artifactId: string): Promise<void> {
+  private async retireSnapshot(artifactId: ComparisonOperationId): Promise<void> {
     try {
       await this.executor.dropSnapshot(artifactId);
       this.pendingRetirements.delete(artifactId);
@@ -526,22 +589,40 @@ export class CsvComparisonService {
     }
   }
 
-  private finishCancelled(entity: ComparisonRecord, operation: Operation): void {
-    this.settle(entity, operation, { attemptId: operation.operationId, status: 'cancelled' });
+  private finishCancelled(
+    entity: ComparisonRecord,
+    operation: Operation,
+  ): ComparisonAttemptOutcome {
+    return this.settle(entity, operation, {
+      attemptId: operation.operationId,
+      status: 'cancelled',
+    });
   }
 
   private finishFailed(
     entity: ComparisonRecord,
     operation: Operation,
     code: 'source-unavailable' | 'query-failed',
-  ): void {
-    this.settle(entity, operation, {
+  ): ComparisonAttemptOutcome {
+    return this.settle(entity, operation, {
       attemptId: operation.operationId,
       status: 'failed',
       failure:
         code === 'source-unavailable'
           ? { code, message: 'A source Working CSV is no longer available.', retryable: false }
           : { code, message: 'The comparison query failed. Try again.', retryable: true },
+    });
+  }
+
+  private finishSourcesChanged(
+    entity: ComparisonRecord,
+    operation: Operation,
+    changedSides: ComparisonSide[],
+  ): ComparisonAttemptOutcome {
+    return this.settle(entity, operation, {
+      attemptId: operation.operationId,
+      status: 'sources-changed',
+      changedSides: [...changedSides].sort(sideOrder),
     });
   }
 
@@ -554,16 +635,23 @@ export class CsvComparisonService {
     );
   }
 
-  private markSourceChanged(sessionId: string): void {
-    for (const entity of this.entities.values()) {
-      if (!entity.snapshot) continue;
+  private markSourceChanged(workingCsvId: WorkingCsvId): void {
+    for (const comparisonId of this.dependencyIndex.get(workingCsvId) ?? []) {
+      const entity = this.entities.get(comparisonId);
+      if (!entity) throw new Error('Comparison dependency index invariant violated.');
       const side =
-        entity.baselineId === sessionId
+        entity.baselineId === workingCsvId
           ? 'baseline'
-          : entity.candidateId === sessionId
+          : entity.candidateId === workingCsvId
             ? 'candidate'
             : null;
       if (!side) continue;
+      if (entity.activity.kind === 'running') {
+        const { operation } = entity.activity;
+        if (!operation.changedSides.includes(side)) operation.changedSides.push(side);
+        this.executor.cancel(operation.operationId);
+      }
+      if (!entity.snapshot) continue;
       const changedSides =
         entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
       if (!changedSides.includes(side)) changedSides.push(side);
@@ -575,17 +663,30 @@ export class CsvComparisonService {
     }
   }
 
+  private addDependency(workingCsvId: WorkingCsvId, comparisonId: ComparisonId): void {
+    const comparisons = this.dependencyIndex.get(workingCsvId) ?? new Set<ComparisonId>();
+    comparisons.add(comparisonId);
+    this.dependencyIndex.set(workingCsvId, comparisons);
+  }
+
+  private removeDependency(workingCsvId: WorkingCsvId, comparisonId: ComparisonId): void {
+    const comparisons = this.dependencyIndex.get(workingCsvId);
+    if (!comparisons) throw new Error('Comparison dependency index invariant violated.');
+    comparisons.delete(comparisonId);
+    if (comparisons.size === 0) this.dependencyIndex.delete(workingCsvId);
+  }
+
   private sourcesCompatible(entity: ComparisonRecord): boolean {
-    const baseline = this.csvs.getSession(entity.baselineId);
-    const candidate = this.csvs.getSession(entity.candidateId);
+    const baseline = this.csvs.getState(entity.baselineId);
+    const candidate = this.csvs.getState(entity.candidateId);
     return Boolean(
       baseline && candidate && compareColumns(baseline, candidate).kind === 'compatible',
     );
   }
 
   private availableKeyColumns(entity: ComparisonRecord): string[] {
-    const baseline = this.csvs.getSession(entity.baselineId);
-    const candidate = this.csvs.getSession(entity.candidateId);
+    const baseline = this.csvs.getState(entity.baselineId);
+    const candidate = this.csvs.getState(entity.candidateId);
     if (!baseline || !candidate) return [];
     const candidateColumns = new Set(candidate.columns.map((column) => column.name));
     return baseline.columns
@@ -594,14 +695,14 @@ export class CsvComparisonService {
   }
 
   private project(entity: ComparisonRecord): ComparisonView {
-    const baseline = this.csvs.getSession(entity.baselineId);
-    const candidate = this.csvs.getSession(entity.candidateId);
+    const baseline = this.csvs.getState(entity.baselineId);
+    const candidate = this.csvs.getState(entity.candidateId);
     if (!baseline || !candidate) throw new Error('Comparison source invariant violated.');
     return {
       comparisonId: entity.comparisonId,
       version: entity.version,
-      baseline,
-      candidate,
+      baseline: projectWorkingCsvRef(baseline),
+      candidate: projectWorkingCsvRef(candidate),
       availableKeyColumns: this.availableKeyColumns(entity),
       operation:
         entity.activity.kind === 'running'
@@ -630,19 +731,34 @@ export class CsvComparisonService {
     entity: ComparisonRecord,
     operation: Operation,
     lastAttempt: ComparisonView['lastAttempt'],
-  ): void {
+  ): ComparisonAttemptOutcome {
     if (
       this.entities.get(entity.comparisonId) !== entity ||
       entity.activity.kind !== 'running' ||
       entity.activity.operation.operationId !== operation.operationId
-    )
-      return;
+    ) {
+      throw new Error('Comparison operation settlement invariant violated.');
+    }
     entity.activity = { kind: 'idle', lastAttempt };
     this.publishChange(entity);
+    const comparison = this.project(entity);
+    if (!lastAttempt) throw new Error('Comparison terminal outcome invariant violated.');
+    switch (lastAttempt.status) {
+      case 'applied':
+        return { status: 'applied', comparison };
+      case 'invalid-key':
+        return { status: 'invalid-key', diagnostics: lastAttempt.diagnostics, comparison };
+      case 'cancelled':
+        return { status: 'cancelled', comparison };
+      case 'sources-changed':
+        return { status: 'sources-changed', changedSides: lastAttempt.changedSides, comparison };
+      case 'failed':
+        return { status: 'failed', failure: lastAttempt.failure, comparison };
+    }
   }
 
   private publishChange(entity: ComparisonRecord): void {
-    if (!this.csvs.getSession(entity.baselineId) || !this.csvs.getSession(entity.candidateId)) {
+    if (!this.csvs.getState(entity.baselineId) || !this.csvs.getState(entity.candidateId)) {
       console.error(`Comparison ${entity.comparisonId} has an unavailable source projection.`);
       return;
     }
@@ -656,8 +772,8 @@ export class CsvComparisonService {
 }
 
 function compareColumns(
-  baseline: CsvSessionMetadata,
-  candidate: CsvSessionMetadata,
+  baseline: WorkingCsvView,
+  candidate: WorkingCsvView,
 ): ComparisonCandidate['compatibility'] {
   const baselineNames = baseline.columns.map((column) => column.name);
   const candidateNames = candidate.columns.map((column) => column.name);
@@ -695,6 +811,14 @@ function copySummary(summary: ComparisonSummary): ComparisonSummary {
   return {
     rows: { ...summary.rows },
     changedColumns: summary.changedColumns.map((column) => ({ ...column })),
+  };
+}
+
+function projectWorkingCsvRef(workingCsv: WorkingCsvView): WorkingCsvRef {
+  return {
+    workingCsvId: workingCsv.workingCsvId,
+    file: { ...workingCsv.file },
+    columns: workingCsv.columns.map((column) => ({ ...column })),
   };
 }
 

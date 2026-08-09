@@ -4,6 +4,11 @@ export type HealthStatus = {
   timestamp: string;
 };
 
+export type WorkingCsvId = string;
+export type ComparisonId = string;
+export type ComparisonOperationId = string;
+export type ComparisonResultToken = string;
+
 export type CsvColumn = {
   name: string;
   type: string;
@@ -22,14 +27,33 @@ export type CsvDialectOptions = {
 
 export const csvInternalRowIdField = '__csvViewerRowId' as const;
 
-export type CsvSessionMetadata = {
-  sessionId: string;
+export type WorkingCsvView = {
+  workingCsvId: WorkingCsvId;
   dataRevision: number;
   file: CsvFileMetadata;
   columns: CsvColumn[];
   rowCount: number;
   dialect: CsvDialectOptions;
+  editState: CsvEditState;
 };
+
+export type WorkingCsvRef = Pick<WorkingCsvView, 'workingCsvId' | 'file' | 'columns'>;
+
+export type WorkingCsvFailure = {
+  code: 'open-failed' | 'replace-failed';
+  message: string;
+  retryable: boolean;
+};
+
+export type OpenWorkingCsvOutcome =
+  | { status: 'opened'; workingCsv: WorkingCsvView }
+  | { status: 'existing'; workingCsv: WorkingCsvView }
+  | { status: 'failed'; failure: WorkingCsvFailure };
+
+export type ReplaceWorkingCsvOutcome =
+  | { status: 'replaced'; workingCsv: WorkingCsvView }
+  | { status: 'working-csv-not-found' }
+  | { status: 'failed'; failure: WorkingCsvFailure };
 
 export type RecentCsvFile = CsvFileMetadata & {
   lastOpenedAt: string;
@@ -97,7 +121,7 @@ export type CsvFilterDescriptor =
     };
 
 export type CsvRowWindowRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   offset: number;
   limit: number;
   sort?: CsvSortDescriptor[];
@@ -106,14 +130,14 @@ export type CsvRowWindowRequest = {
 };
 
 export type CsvRowWindow = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   offset: number;
   rows: CsvRow[];
   filteredRowCount: number;
 };
 
 export type CsvColumnValueCountsRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   column: string;
   filters?: CsvFilterDescriptor[];
   search?: string;
@@ -126,21 +150,21 @@ export type CsvColumnValueCount = {
 };
 
 export type CsvColumnValueCounts = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   column: string;
   scopeRowCount: number;
   values: CsvColumnValueCount[];
 };
 
 export type CsvCellEditRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   rowId: string;
   column: string;
   value: string;
 };
 
 export type CsvCellEditResult = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   rowId: string;
   column: string;
   dirty: boolean;
@@ -149,40 +173,69 @@ export type CsvCellEditResult = {
 };
 
 export type CsvDeleteRowsRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   rowIds: string[];
 };
 
 export type CsvInsertRowPlacement = 'above' | 'below' | 'append';
 
 export type CsvInsertRowRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   placement: CsvInsertRowPlacement;
   rowIds: string[];
   hasActiveQuery: boolean;
 };
 
 export type CsvEditStateRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
 };
 
 export type CsvSaveAsRequest = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
 };
 
 export type CsvEditState = {
-  sessionId: string;
+  workingCsvId: WorkingCsvId;
   dirty: boolean;
   canUndo: boolean;
   canRedo: boolean;
 };
 
 export type OpenCsvResult =
-  | { status: 'opened'; session: CsvSessionMetadata }
-  | { status: 'already-open'; session: CsvSessionMetadata }
+  | { status: 'opened'; session: WorkingCsvView }
+  | { status: 'already-open'; session: WorkingCsvView }
+  | { status: 'failed'; message: string }
   | { status: 'cancelled' };
 
-export type CsvCloseResult = { status: 'closed' } | { status: 'cancelled' };
+export type CloseImpact = {
+  dirty: boolean;
+  dependentComparisons: Array<{
+    comparisonId: ComparisonId;
+    baselineName: string;
+    candidateName: string;
+  }>;
+};
+
+export type CloseWorkingCsvRequest = {
+  workingCsvId: WorkingCsvId;
+  confirmedImpact?: CloseImpact;
+};
+
+export type CloseWorkingCsvOutcome =
+  | {
+      status: 'closed';
+      closedWorkingCsvId: WorkingCsvId;
+      closedComparisonIds: ComparisonId[];
+    }
+  | { status: 'confirmation-required'; impact: CloseImpact }
+  | {
+      status: 'failed';
+      failure: {
+        code: 'source-unavailable' | 'cleanup-failed';
+        message: string;
+        retryable: boolean;
+      };
+    };
 
 export type ComparisonSide = 'baseline' | 'candidate';
 export type ComparisonPhase = 'validating' | 'comparing' | 'summarizing';
@@ -206,7 +259,7 @@ export type ComparisonFault = {
 };
 
 export type ComparisonCandidate = {
-  workingCsv: CsvSessionMetadata;
+  workingCsv: WorkingCsvView;
   compatibility:
     | { kind: 'compatible' }
     | {
@@ -214,6 +267,11 @@ export type ComparisonCandidate = {
         missingFromBaseline: string[];
         missingFromCandidate: string[];
       };
+};
+
+export type OpenComparisonRequest = {
+  baselineId: WorkingCsvId;
+  candidateId: WorkingCsvId;
 };
 
 export type ComparisonSummary = {
@@ -254,23 +312,23 @@ export type ComparisonFailure = {
 };
 
 export type CloseComparisonResult =
-  | { status: 'closed' }
+  | { status: 'closed'; comparisonId: ComparisonId }
   | { status: 'failed'; failure: ComparisonFailure };
 
 export type ComparisonView = {
-  comparisonId: string;
+  comparisonId: ComparisonId;
   version: number;
-  baseline: CsvSessionMetadata;
-  candidate: CsvSessionMetadata;
+  baseline: WorkingCsvRef;
+  candidate: WorkingCsvRef;
   availableKeyColumns: string[];
   operation: null | {
-    operationId: string;
+    operationId: ComparisonOperationId;
     intent: 'apply-key' | 'refresh';
     phase: ComparisonPhase;
   };
   applied: null | {
     key: string[];
-    resultToken: string;
+    resultToken: ComparisonResultToken;
     freshness: { kind: 'current' } | { kind: 'outdated'; changedSides: ComparisonSide[] };
     summary: ComparisonSummary;
   };
@@ -279,19 +337,19 @@ export type ComparisonView = {
 
 export type ComparisonEvent =
   | { kind: 'changed'; comparison: ComparisonView }
-  | { kind: 'closed'; comparisonId: string };
+  | { kind: 'closed'; comparisonId: ComparisonId };
 
 export type OpenComparisonResult =
   | { status: 'created' | 'existing'; comparison: ComparisonView }
   | { status: 'rejected'; fault: ComparisonFault };
 
 export type BeginComparisonRequest =
-  | { kind: 'apply-key'; comparisonId: string; key: string[] }
-  | { kind: 'refresh'; comparisonId: string };
+  | { kind: 'apply-key'; comparisonId: ComparisonId; key: string[] }
+  | { kind: 'refresh'; comparisonId: ComparisonId };
 
-export type BeginComparisonResult =
-  | { status: 'accepted'; operationId: string }
-  | { status: 'busy'; activeOperationId: string }
+export type BeginComparisonIpcResult =
+  | { status: 'accepted'; operationId: ComparisonOperationId }
+  | { status: 'busy'; activeOperationId: ComparisonOperationId }
   | { status: 'rejected'; fault: ComparisonFault };
 
 export type CancelComparisonResult =
@@ -300,6 +358,11 @@ export type CancelComparisonResult =
   | { status: 'already-finished' }
   | { status: 'operation-mismatch' }
   | { status: 'comparison-not-found' };
+
+export type CancelComparisonRequest = {
+  comparisonId: ComparisonId;
+  operationId: ComparisonOperationId;
+};
 
 export type ComparisonRow = {
   classification: 'changed' | 'baseline-only' | 'candidate-only' | 'unchanged';
@@ -310,8 +373,8 @@ export type ComparisonRow = {
 };
 
 export type ComparisonWindowRequest = {
-  comparisonId: string;
-  resultToken: string;
+  comparisonId: ComparisonId;
+  resultToken: ComparisonResultToken;
   offset: number;
   limit: number;
   rows: ComparisonRowsMode;
@@ -319,8 +382,8 @@ export type ComparisonWindowRequest = {
 };
 
 export type ComparisonWindow = {
-  comparisonId: string;
-  resultToken: string;
+  comparisonId: ComparisonId;
+  resultToken: ComparisonResultToken;
   offset: number;
   totalRowCount: number;
   keyColumns: string[];
@@ -330,7 +393,7 @@ export type ComparisonWindow = {
 
 export type ComparisonWindowOutcome =
   | { status: 'ready'; window: ComparisonWindow }
-  | { status: 'result-replaced'; currentResultToken: string | null }
+  | { status: 'result-replaced'; currentResultToken: ComparisonResultToken | null }
   | { status: 'comparison-not-found' }
   | { status: 'rejected'; fault: ComparisonFault };
 
@@ -342,16 +405,16 @@ export type CsvViewerApi = {
   healthCheck: () => Promise<HealthStatus>;
   openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   openRecentCsv: (path: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  reopenCsv: (sessionId: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  closeCsv: (sessionId: string) => Promise<CsvCloseResult>;
-  getComparisonCandidates: (baselineId: string) => Promise<ComparisonCandidate[]>;
-  openComparison: (baselineId: string, candidateId: string) => Promise<OpenComparisonResult>;
-  getComparisonState: (comparisonId: string) => Promise<ComparisonView | null>;
-  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonResult>;
-  cancelComparison: (comparisonId: string, operationId: string) => Promise<CancelComparisonResult>;
+  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  closeCsv: (request: CloseWorkingCsvRequest) => Promise<CloseWorkingCsvOutcome>;
+  getComparisonCandidates: (baselineId: WorkingCsvId) => Promise<ComparisonCandidate[]>;
+  openComparison: (baselineId: WorkingCsvId, candidateId: WorkingCsvId) => Promise<OpenComparisonResult>;
+  getComparisonState: (comparisonId: ComparisonId) => Promise<ComparisonView | null>;
+  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonIpcResult>;
+  cancelComparison: (request: CancelComparisonRequest) => Promise<CancelComparisonResult>;
   getComparisonWindow: (request: ComparisonWindowRequest) => Promise<ComparisonWindowOutcome>;
-  swapComparison: (comparisonId: string) => Promise<ComparisonMutationOutcome>;
-  closeComparison: (comparisonId: string) => Promise<CloseComparisonResult>;
+  swapComparison: (comparisonId: ComparisonId) => Promise<ComparisonMutationOutcome>;
+  closeComparison: (comparisonId: ComparisonId) => Promise<CloseComparisonResult>;
   onComparisonEvent: (callback: (event: ComparisonEvent) => void) => () => void;
   getRecentFiles: () => Promise<RecentCsvFile[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;

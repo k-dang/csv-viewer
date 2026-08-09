@@ -165,7 +165,7 @@ export function ComparisonGrid({
   return (
     <div className="min-h-0 min-w-0 comparison-grid-frame" aria-label="Aligned comparison results">
       <AgGridReact<GridComparisonRow>
-        key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.sessionId}`}
+        key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.workingCsvId}`}
         theme={themeMode === 'dark' ? darkTheme : lightTheme}
         rowModelType="infinite"
         datasource={dataSource}

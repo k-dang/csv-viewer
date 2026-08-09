@@ -12,11 +12,12 @@ import {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
-import { CsvWorkspace, type CloseImpact } from './csv-workspace';
+import { CsvWorkspace, type WorkspaceCloseImpact } from './csv-workspace';
 import {
   ipcChannels,
   type BeginComparisonRequest,
-  type BeginComparisonResult,
+  type BeginComparisonIpcResult,
+  type CancelComparisonRequest,
   type CancelComparisonResult,
   type CloseComparisonResult,
   type ComparisonCandidate,
@@ -27,7 +28,8 @@ import {
   type ComparisonWindowRequest,
   type CsvCellEditRequest,
   type CsvCellEditResult,
-  type CsvCloseResult,
+  type CloseWorkingCsvOutcome,
+  type CloseWorkingCsvRequest,
   type CsvColumnValueCounts,
   type CsvColumnValueCountsRequest,
   type CsvDeleteRowsRequest,
@@ -49,6 +51,8 @@ const workspace = new CsvWorkspace();
 const csvDataService = workspace.csvs;
 const csvComparisonService = workspace.comparisons;
 const maxRecentFiles = 8;
+let workspaceCloseAuthorizedImpact: WorkspaceCloseImpact | undefined;
+let workspaceCloseConfirmationRunning = false;
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -95,22 +99,23 @@ function createWindow() {
   let closeAllowed = false;
 
   mainWindow.on('close', (event) => {
-    const dirtySessions = csvDataService.getDirtySessions();
-
-    if (closeAllowed || dirtySessions.length === 0) {
-      return;
-    }
+    if (closeAllowed) return;
+    const initial = workspace.confirmWindowClose();
+    if (initial.status === 'ready') return;
 
     event.preventDefault();
+    if (workspaceCloseConfirmationRunning) return;
+    workspaceCloseConfirmationRunning = true;
     void (async () => {
-      const canClose = await confirmDiscardChanges(
-        mainWindow,
-        dirtySessions.map((session) => session.file.name),
-      );
-
-      if (canClose) {
-        closeAllowed = true;
-        mainWindow.close();
+      try {
+        const confirmedImpact = await confirmCurrentWorkspaceImpact(mainWindow, initial.impact);
+        if (confirmedImpact) {
+          workspaceCloseAuthorizedImpact = confirmedImpact;
+          closeAllowed = true;
+          mainWindow.close();
+        }
+      } finally {
+        workspaceCloseConfirmationRunning = false;
       }
     })();
   });
@@ -194,15 +199,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     ipcChannels.reopenCsv,
-    async (_event, sessionId: string, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+    async (_event, workingCsvId: string, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      const existing = csvDataService.getSession(sessionId);
+      const existing = csvDataService.getState(workingCsvId);
 
       if (!existing) {
         return { status: 'cancelled' };
       }
 
-      if (csvDataService.isDirty(sessionId)) {
+      if (existing.editState.dirty) {
         const canContinue = await confirmDiscardChanges(ownerWindow, [existing.file.name]);
 
         if (!canContinue) {
@@ -210,25 +215,20 @@ function registerIpcHandlers() {
         }
       }
 
-      const session = await csvDataService.reopenSession(sessionId, options);
-      await recordRecentFile(session.file);
-      return { status: 'opened', session };
+      const replacement = await csvDataService.replace(workingCsvId, options);
+      if (replacement.status === 'working-csv-not-found') return { status: 'cancelled' };
+      if (replacement.status === 'failed') {
+        return { status: 'failed', message: replacement.failure.message };
+      }
+      await recordRecentFile(replacement.workingCsv.file);
+      return { status: 'opened', session: replacement.workingCsv };
     },
   );
 
   ipcMain.handle(
     ipcChannels.closeCsv,
-    async (_event, sessionId: string): Promise<CsvCloseResult> => {
-      const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      let outcome = await workspace.closeCsv(sessionId);
-      while (outcome.status === 'confirmation-required') {
-        const canContinue = await confirmCloseImpact(ownerWindow, outcome.impact);
-        if (!canContinue) return { status: 'cancelled' };
-        outcome = await workspace.closeCsv(sessionId, outcome.impact);
-      }
-      if (outcome.status === 'failed') throw new Error(outcome.message);
-      return outcome;
-    },
+    (_event, request: CloseWorkingCsvRequest): Promise<CloseWorkingCsvOutcome> =>
+      workspace.closeWorkingCsv(request),
   );
 
   ipcMain.handle(
@@ -249,14 +249,20 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     ipcChannels.beginComparison,
-    (_event, request: BeginComparisonRequest): BeginComparisonResult =>
-      csvComparisonService.begin(request),
+    (_event, request: BeginComparisonRequest): BeginComparisonIpcResult => {
+      const result = csvComparisonService.begin(request);
+      if (result.status !== 'accepted') return result;
+      void result.completion.catch((error) => {
+        console.error(`Comparison operation ${result.operationId} failed unexpectedly.`, error);
+      });
+      return { status: 'accepted', operationId: result.operationId };
+    },
   );
 
   ipcMain.handle(
     ipcChannels.cancelComparison,
-    (_event, comparisonId: string, operationId: string): CancelComparisonResult =>
-      csvComparisonService.cancel(comparisonId, operationId),
+    (_event, request: CancelComparisonRequest): Promise<CancelComparisonResult> =>
+      csvComparisonService.cancel(request),
   );
 
   ipcMain.handle(
@@ -319,7 +325,9 @@ function registerIpcHandlers() {
   ipcMain.handle(
     ipcChannels.getCsvEditState,
     (_event, request: CsvEditStateRequest): CsvEditState => {
-      return csvDataService.getEditState(request);
+      const workingCsv = csvDataService.getState(request.workingCsvId);
+      if (!workingCsv) throw new Error('Working CSV is no longer active.');
+      return workingCsv.editState;
     },
   );
 
@@ -335,28 +343,26 @@ function registerIpcHandlers() {
   ipcMain.handle(
     ipcChannels.undoCsvEdit,
     async (_event, request: CsvEditStateRequest): Promise<CsvEditState> => {
-      return csvDataService.undoEdit(request);
+      return csvDataService.undo(request.workingCsvId);
     },
   );
 
   ipcMain.handle(
     ipcChannels.redoCsvEdit,
     async (_event, request: CsvEditStateRequest): Promise<CsvEditState> => {
-      return csvDataService.redoEdit(request);
+      return csvDataService.redo(request.workingCsvId);
     },
   );
 }
 
 async function openCsvAsTab(filePath: string, options?: CsvDialectOptions): Promise<OpenCsvResult> {
-  const existing = csvDataService.findSessionByPath(filePath);
-
-  if (existing) {
-    return { status: 'already-open', session: existing };
+  const outcome = await csvDataService.open(filePath, options);
+  if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message };
+  if (outcome.status === 'existing') {
+    return { status: 'already-open', session: outcome.workingCsv };
   }
-
-  const session = await csvDataService.openCsv(filePath, options);
-  await recordRecentFile(session.file);
-  return { status: 'opened', session };
+  await recordRecentFile(outcome.workingCsv.file);
+  return { status: 'opened', session: outcome.workingCsv };
 }
 
 async function confirmDiscardChanges(
@@ -386,24 +392,29 @@ async function confirmDiscardChanges(
   return result.response === 0;
 }
 
-async function confirmCloseImpact(
+async function confirmWorkspaceClose(
   ownerWindow: BrowserWindow | undefined,
-  impact: CloseImpact,
+  impact: WorkspaceCloseImpact,
 ): Promise<boolean> {
-  if (impact.dependentComparisons.length === 0) {
-    return confirmDiscardChanges(ownerWindow, [impact.fileName]);
+  const details: string[] = [];
+  if (impact.dirtyWorkingCsvs.length > 0) {
+    details.push(
+      `Unsaved edits will be lost:\n${impact.dirtyWorkingCsvs.map((csv) => csv.fileName).join('\n')}`,
+    );
   }
-  const dependentNames = impact.dependentComparisons.map(
-    (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
-  );
+  if (impact.dependentComparisons.length > 0) {
+    details.push(
+      `Open comparisons will close:\n${impact.dependentComparisons
+        .map((comparison) => `${comparison.baselineName} ↔ ${comparison.candidateName}`)
+        .join('\n')}`,
+    );
+  }
   const messageOptions: MessageBoxOptions = {
     type: 'warning',
-    title: 'Close CSV and comparisons',
-    message: `Close ${impact.fileName} and ${dependentNames.length} dependent Comparison ${dependentNames.length === 1 ? 'Tab' : 'Tabs'}?`,
-    detail: impact.dirty
-      ? `The dependent comparisons below will close and unsaved CSV edits will be lost:\n${dependentNames.join('\n')}`
-      : `These dependent Comparison Tabs will also close:\n${dependentNames.join('\n')}`,
-    buttons: ['Close CSV and comparisons', 'Cancel'],
+    title: 'Close CSV Viewer',
+    message: 'Close CSV Viewer?',
+    detail: details.join('\n\n'),
+    buttons: ['Close', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
     noLink: true,
@@ -414,11 +425,24 @@ async function confirmCloseImpact(
   return result.response === 0;
 }
 
+async function confirmCurrentWorkspaceImpact(
+  ownerWindow: BrowserWindow | undefined,
+  initialImpact: WorkspaceCloseImpact,
+): Promise<WorkspaceCloseImpact | null> {
+  let impact = initialImpact;
+  while (await confirmWorkspaceClose(ownerWindow, impact)) {
+    const rechecked = workspace.confirmWindowClose(impact);
+    if (rechecked.status === 'ready') return impact;
+    impact = rechecked.impact;
+  }
+  return null;
+}
+
 async function saveCsvAsForSession(
   ownerWindow: BrowserWindow | undefined,
   request: CsvSaveAsRequest,
 ): Promise<CsvEditState | null> {
-  const session = csvDataService.getSession(request.sessionId);
+  const session = csvDataService.getState(request.workingCsvId);
 
   if (!session) {
     return null;
@@ -441,7 +465,7 @@ async function saveCsvAsForSession(
     return null;
   }
 
-  return csvDataService.saveAs(request, result.filePath);
+  return csvDataService.saveAs(request.workingCsvId, result.filePath);
 }
 
 function buildDefaultSaveAsPath(filePath: string): string {
@@ -541,8 +565,28 @@ app.on('before-quit', (event) => {
   if (workspaceDisposed) return;
   event.preventDefault();
   if (workspaceDisposalStarted) return;
-  workspaceDisposalStarted = true;
-  void disposeWorkspaceBeforeQuit();
+  if (workspaceCloseConfirmationRunning && !workspaceCloseAuthorizedImpact) return;
+  const impact = workspace.confirmWindowClose(workspaceCloseAuthorizedImpact);
+  if (impact.status === 'ready') {
+    workspaceDisposalStarted = true;
+    void disposeWorkspaceBeforeQuit();
+    return;
+  }
+  workspaceCloseConfirmationRunning = true;
+  void (async () => {
+    try {
+      const confirmedImpact = await confirmCurrentWorkspaceImpact(
+        BrowserWindow.getFocusedWindow() ?? undefined,
+        impact.impact,
+      );
+      if (!confirmedImpact) return;
+      workspaceCloseAuthorizedImpact = confirmedImpact;
+      workspaceDisposalStarted = true;
+      await disposeWorkspaceBeforeQuit();
+    } finally {
+      workspaceCloseConfirmationRunning = false;
+    }
+  })();
 });
 
 async function disposeWorkspaceBeforeQuit(): Promise<void> {

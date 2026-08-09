@@ -1,19 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, CsvSessionMetadata } from '../shared/ipc';
+import type { ComparisonView, WorkingCsvView } from '../shared/ipc';
 import {
   initialRendererWorkspace,
   projectOpenTabs,
   rendererWorkspaceReducer,
 } from './workspace-tabs';
 
-function csv(sessionId: string): CsvSessionMetadata {
+function csv(workingCsvId: string): WorkingCsvView {
   return {
-    sessionId,
+    workingCsvId,
     dataRevision: 0,
-    file: { path: `C:/${sessionId}.csv`, name: `${sessionId}.csv`, sizeBytes: 10 },
+    file: { path: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
     columns: [{ name: 'id', type: 'VARCHAR' }],
     rowCount: 1,
     dialect: {},
+    editState: { workingCsvId, dirty: false, canUndo: false, canRedo: false },
   };
 }
 
@@ -96,11 +97,11 @@ describe('rendererWorkspaceReducer', () => {
     state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('c') });
     state = rendererWorkspaceReducer(state, { type: 'select', tabId: 'csv:b' });
 
-    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'b' });
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'b' });
     expect(state.activeTabId).toBe('csv:c');
-    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'c' });
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'c' });
     expect(state.activeTabId).toBe('csv:a');
-    state = rendererWorkspaceReducer(state, { type: 'close-csv', sessionId: 'a' });
+    state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'a' });
     expect(state.activeTabId).toBeNull();
   });
 

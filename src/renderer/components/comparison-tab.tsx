@@ -81,7 +81,10 @@ export function ComparisonTab({
   async function cancel(operationId: string) {
     setActionError(null);
     try {
-      await window.csvViewer.cancelComparison(comparison.comparisonId, operationId);
+      await window.csvViewer.cancelComparison({
+        comparisonId: comparison.comparisonId,
+        operationId,
+      });
     } catch (error) {
       setActionError(actionFailureMessage(error, 'Unable to cancel comparison.'));
     }

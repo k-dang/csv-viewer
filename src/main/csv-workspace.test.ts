@@ -2,14 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ComparisonSummary, SourceKeyDiagnostics } from '../shared/ipc';
+import type {
+  ComparisonOperationId,
+  ComparisonSummary,
+  SourceKeyDiagnostics,
+} from '../shared/ipc';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import { CsvDataService } from './csv-data-service';
+import { WorkingCsvStore } from './working-csv-store';
 import { CsvWorkspace } from './csv-workspace';
 
 const validDiagnostics: SourceKeyDiagnostics = {
@@ -31,6 +35,8 @@ class ControlledExecutor implements ComparisonExecutor {
       this.rejectSnapshot = reject;
     });
   }
+
+  activateSnapshot(_artifactId: ComparisonOperationId): void {}
 
   cancel(): void {}
 
@@ -72,6 +78,12 @@ async function waitForApplied(workspace: CsvWorkspace, comparisonId: string) {
   throw new Error('Comparison did not publish a result.');
 }
 
+async function openWorkingCsv(workspace: CsvWorkspace, filePath: string) {
+  const outcome = await workspace.csvs.open(filePath);
+  if (outcome.status === 'failed') throw new Error(outcome.failure.message);
+  return outcome.workingCsv;
+}
+
 describe('CsvWorkspace lifecycle', () => {
   it('executes, reads, swaps, and cleans up a real DuckDB comparison', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-integration-'));
@@ -85,11 +97,17 @@ describe('CsvWorkspace lifecycle', () => {
     const workspace = new CsvWorkspace();
 
     try {
-      const baseline = await workspace.csvs.openCsv(baselinePath);
-      const candidate = await workspace.csvs.openCsv(candidatePath);
+      const baseline = await openWorkingCsv(workspace, baselinePath);
+      const candidate = await openWorkingCsv(workspace, candidatePath);
+      expect(baseline.editState).toEqual({
+        workingCsvId: baseline.workingCsvId,
+        dirty: false,
+        canUndo: false,
+        canRedo: false,
+      });
       const opened = workspace.comparisons.open({
-        baselineId: baseline.sessionId,
-        candidateId: candidate.sessionId,
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error(opened.fault.message);
 
@@ -98,8 +116,11 @@ describe('CsvWorkspace lifecycle', () => {
         comparisonId: opened.comparison.comparisonId,
         key: ['id'],
       });
-      expect(started.status).toBe('accepted');
-      const applied = await waitForApplied(workspace, opened.comparison.comparisonId);
+      if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
+      const completed = await started.completion;
+      expect(completed.status).toBe('applied');
+      if (completed.status !== 'applied') throw new Error('Comparison result was not applied.');
+      const applied = completed.comparison;
       expect(applied.applied?.summary).toEqual({
         rows: {
           changed: 1,
@@ -130,7 +151,11 @@ describe('CsvWorkspace lifecycle', () => {
       ]);
 
       await writeFile(baselinePath, 'id,replacement\n1,x\n');
-      await workspace.csvs.reopenSession(baseline.sessionId);
+      const replacement = await workspace.csvs.replace(baseline.workingCsvId);
+      expect(replacement.status).toBe('replaced');
+      expect(workspace.csvs.getState(baseline.workingCsvId)?.workingCsvId).toBe(
+        baseline.workingCsvId,
+      );
       expect(
         workspace.comparisons.getState(opened.comparison.comparisonId)?.applied?.freshness,
       ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
@@ -158,6 +183,7 @@ describe('CsvWorkspace lifecycle', () => {
 
       await expect(workspace.comparisons.close(opened.comparison.comparisonId)).resolves.toEqual({
         status: 'closed',
+        comparisonId: opened.comparison.comparisonId,
       });
     } finally {
       try {
@@ -172,40 +198,50 @@ describe('CsvWorkspace lifecycle', () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-'));
     const baselinePath = path.join(tempDir, 'baseline.csv');
     const candidatePath = path.join(tempDir, 'candidate.csv');
-    const csvs = new CsvDataService();
+    const csvs = new WorkingCsvStore();
     const executor = new ControlledExecutor();
     const workspace = new CsvWorkspace(csvs, executor);
     try {
       await writeFile(baselinePath, 'id,value\n1,a\n');
       await writeFile(candidatePath, 'id,value\n1,b\n');
-      const baseline = await csvs.openCsv(baselinePath);
-      const candidate = await csvs.openCsv(candidatePath);
+      const baseline = await csvs.openOrThrow(baselinePath);
+      const candidate = await csvs.openOrThrow(candidatePath);
       const opened = workspace.comparisons.open({
-        baselineId: baseline.sessionId,
-        candidateId: candidate.sessionId,
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
-      workspace.comparisons.begin({
+      const started = workspace.comparisons.begin({
         kind: 'apply-key',
         comparisonId: opened.comparison.comparisonId,
         key: ['id'],
       });
+      if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
       await waitForComparing(workspace, opened.comparison.comparisonId);
+      await expect(
+        workspace.comparisons.cancel({
+          comparisonId: opened.comparison.comparisonId,
+          operationId: started.operationId,
+        }),
+      ).resolves.toEqual({ status: 'requested' });
 
-      const confirmation = await workspace.closeCsv(baseline.sessionId);
+      const confirmation = await workspace.closeWorkingCsv({ workingCsvId: baseline.workingCsvId });
       if (confirmation.status !== 'confirmation-required')
         throw new Error('confirmation not required');
-      const closing = workspace.closeCsv(baseline.sessionId, confirmation.impact);
+      const closing = workspace.closeWorkingCsv({
+        workingCsvId: baseline.workingCsvId,
+        confirmedImpact: confirmation.impact,
+      });
 
       expect(
         workspace.comparisons.open({
-          baselineId: baseline.sessionId,
-          candidateId: candidate.sessionId,
+          baselineId: baseline.workingCsvId,
+          candidateId: candidate.workingCsvId,
         }),
       ).toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
       await expect(
         csvs.editCell({
-          sessionId: baseline.sessionId,
+          workingCsvId: baseline.workingCsvId,
           rowId: '1',
           column: 'value',
           value: 'changed while closing',
@@ -213,9 +249,274 @@ describe('CsvWorkspace lifecycle', () => {
       ).rejects.toThrow('closing');
 
       executor.releaseCancellation();
-      await expect(closing).resolves.toEqual({ status: 'closed' });
-      expect(csvs.getSession(baseline.sessionId)).toBeNull();
+      await expect(closing).resolves.toEqual({
+        status: 'closed',
+        closedWorkingCsvId: baseline.workingCsvId,
+        closedComparisonIds: [opened.comparison.comparisonId],
+      });
+      expect(csvs.getState(baseline.workingCsvId)).toBeNull();
       expect(workspace.comparisons.getState(opened.comparison.comparisonId)).toBeNull();
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('reports a source change as the winning terminal outcome during generation', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-source-change-'));
+    const baselinePath = path.join(tempDir, 'baseline.csv');
+    const candidatePath = path.join(tempDir, 'candidate.csv');
+    const executor = new ControlledExecutor();
+    const workspace = new CsvWorkspace(new WorkingCsvStore(), executor);
+    try {
+      await writeFile(baselinePath, 'id,value\n1,a\n');
+      await writeFile(candidatePath, 'id,value\n1,b\n');
+      const baseline = await openWorkingCsv(workspace, baselinePath);
+      const candidate = await openWorkingCsv(workspace, candidatePath);
+      const opened = workspace.comparisons.open({
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
+      });
+      if (opened.status === 'rejected') throw new Error('Comparison open was rejected.');
+      const started = workspace.comparisons.begin({
+        kind: 'apply-key',
+        comparisonId: opened.comparison.comparisonId,
+        key: ['id'],
+      });
+      if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
+      await waitForComparing(workspace, opened.comparison.comparisonId);
+
+      await workspace.csvs.editCell({
+        workingCsvId: baseline.workingCsvId,
+        rowId: '1',
+        column: 'value',
+        value: 'changed',
+      });
+      executor.releaseCancellation();
+
+      await expect(started.completion).resolves.toMatchObject({
+        status: 'sources-changed',
+        changedSides: ['baseline'],
+      });
+      expect(workspace.comparisons.getState(opened.comparison.comparisonId)?.applied).toBeNull();
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('projects current row and edit state through the Working CSV facet', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-working-state-'));
+    const filePath = path.join(tempDir, 'working.csv');
+    const workspace = new CsvWorkspace();
+    try {
+      await writeFile(filePath, 'id,value\n1,a\n');
+      const workingCsv = await openWorkingCsv(workspace, filePath);
+      await expect(workspace.csvs.open(filePath)).resolves.toMatchObject({
+        status: 'existing',
+        workingCsv: { workingCsvId: workingCsv.workingCsvId },
+      });
+      await expect(workspace.csvs.replace('missing-working-csv')).resolves.toEqual({
+        status: 'working-csv-not-found',
+      });
+
+      await workspace.csvs.deleteRows({
+        workingCsvId: workingCsv.workingCsvId,
+        rowIds: ['1'],
+      });
+      expect(workspace.csvs.getState(workingCsv.workingCsvId)).toMatchObject({
+        rowCount: 0,
+        dataRevision: 1,
+        editState: { dirty: true, canUndo: true, canRedo: false },
+      });
+
+      await workspace.csvs.undo(workingCsv.workingCsvId);
+      expect(workspace.csvs.getState(workingCsv.workingCsvId)).toMatchObject({
+        rowCount: 1,
+        dataRevision: 2,
+        editState: { dirty: false, canUndo: false, canRedo: true },
+      });
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('revalidates aggregate dirty and Comparison impact before window close', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-window-close-'));
+    const workspace = new CsvWorkspace(new WorkingCsvStore(), new ControlledExecutor());
+    try {
+      const baselinePath = path.join(tempDir, 'baseline.csv');
+      const candidatePath = path.join(tempDir, 'candidate.csv');
+      await writeFile(baselinePath, 'id,value\n1,a\n');
+      await writeFile(candidatePath, 'id,value\n1,b\n');
+      const baseline = await openWorkingCsv(workspace, baselinePath);
+      const candidate = await openWorkingCsv(workspace, candidatePath);
+      await workspace.csvs.editCell({
+        workingCsvId: baseline.workingCsvId,
+        rowId: '1',
+        column: 'value',
+        value: 'changed',
+      });
+      const opened = workspace.comparisons.open({
+        baselineId: baseline.workingCsvId,
+        candidateId: candidate.workingCsvId,
+      });
+      if (opened.status === 'rejected') throw new Error('comparison rejected');
+
+      const first = workspace.confirmWindowClose();
+      expect(first).toMatchObject({
+        status: 'confirmation-required',
+        impact: {
+          dirtyWorkingCsvs: [{ workingCsvId: baseline.workingCsvId }],
+          dependentComparisons: [{ comparisonId: opened.comparison.comparisonId }],
+        },
+      });
+      if (first.status !== 'confirmation-required') throw new Error('confirmation not required');
+
+      await workspace.csvs.undo(baseline.workingCsvId);
+      const rechecked = workspace.confirmWindowClose(first.impact);
+      expect(rechecked).toMatchObject({
+        status: 'confirmation-required',
+        impact: { dirtyWorkingCsvs: [], dependentComparisons: [{ comparisonId: opened.comparison.comparisonId }] },
+      });
+      if (rechecked.status !== 'confirmation-required') throw new Error('impact not refreshed');
+      expect(workspace.confirmWindowClose(rechecked.impact)).toEqual({ status: 'ready' });
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('rejects new Working CSV work once disposal starts', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-disposal-gate-'));
+    const baselinePath = path.join(tempDir, 'baseline.csv');
+    const candidatePath = path.join(tempDir, 'candidate.csv');
+    const latePath = path.join(tempDir, 'late.csv');
+    const workspace = new CsvWorkspace();
+    try {
+      await writeFile(baselinePath, 'id,value\n1,a\n');
+      await writeFile(candidatePath, 'id,value\n1,b\n');
+      await writeFile(latePath, 'id,value\n1,c\n');
+      const baseline = await openWorkingCsv(workspace, baselinePath);
+      const candidate = await openWorkingCsv(workspace, candidatePath);
+
+      const disposal = workspace.dispose();
+      await expect(workspace.csvs.open(latePath)).resolves.toMatchObject({
+        status: 'failed',
+        failure: { retryable: false },
+      });
+      expect(
+        workspace.comparisons.open({
+          baselineId: baseline.workingCsvId,
+          candidateId: candidate.workingCsvId,
+        }),
+      ).toMatchObject({
+        status: 'rejected',
+        fault: { message: 'The CSV workspace is closing.' },
+      });
+      await disposal;
+      await expect(workspace.csvs.open(latePath)).resolves.toMatchObject({
+        status: 'failed',
+        failure: { retryable: false },
+      });
+      await expect(
+        workspace.csvs.getRows({
+          workingCsvId: baseline.workingCsvId,
+          offset: 0,
+          limit: 100,
+        }),
+      ).rejects.toThrow('CSV workspace is disposing.');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for a Working CSV open admitted before disposal', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-open-disposal-'));
+    const filePath = path.join(tempDir, 'working.csv');
+    const workspace = new CsvWorkspace();
+    try {
+      await writeFile(filePath, 'id,value\n1,a\n');
+
+      const opening = workspace.csvs.open(filePath);
+      const disposal = workspace.dispose();
+      const opened = await opening;
+      expect(opened.status).toBe('opened');
+      await disposal;
+      if (opened.status !== 'opened') throw new Error('open was not admitted');
+      expect(workspace.csvs.getState(opened.workingCsv.workingCsvId)).toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for an admitted row read and rejects later reads while closing', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-read-close-'));
+    const filePath = path.join(tempDir, 'working.csv');
+    const workspace = new CsvWorkspace();
+    try {
+      await writeFile(filePath, 'id,value\n1,a\n2,b\n');
+      const workingCsv = await openWorkingCsv(workspace, filePath);
+
+      const admittedRead = workspace.csvs.getRows({
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 100,
+      });
+      const close = workspace.closeWorkingCsv({ workingCsvId: workingCsv.workingCsvId });
+
+      await expect(
+        workspace.csvs.getRows({
+          workingCsvId: workingCsv.workingCsvId,
+          offset: 0,
+          limit: 100,
+        }),
+      ).rejects.toThrow('Working CSV is closing.');
+      await expect(admittedRead).resolves.toMatchObject({ filteredRowCount: 2 });
+      await expect(close).resolves.toMatchObject({ status: 'closed' });
+    } finally {
+      try {
+        await workspace.dispose();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('waits for an admitted edit before calculating close impact', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-edit-close-'));
+    const filePath = path.join(tempDir, 'working.csv');
+    const workspace = new CsvWorkspace();
+    try {
+      await writeFile(filePath, 'id,value\n1,a\n');
+      const workingCsv = await openWorkingCsv(workspace, filePath);
+
+      const edit = workspace.csvs.editCell({
+        workingCsvId: workingCsv.workingCsvId,
+        rowId: '1',
+        column: 'value',
+        value: 'changed',
+      });
+      const close = workspace.closeWorkingCsv({ workingCsvId: workingCsv.workingCsvId });
+
+      await expect(edit).resolves.toMatchObject({ dirty: true });
+      await expect(close).resolves.toMatchObject({
+        status: 'confirmation-required',
+        impact: { dirty: true },
+      });
     } finally {
       try {
         await workspace.dispose();
