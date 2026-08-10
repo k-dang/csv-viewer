@@ -12,7 +12,6 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "fixtures:validation": "node scripts/generate-validation-fixtures.cjs",
-    "prototype:comparison": "node .scratch/aligned-csv-comparison/prototypes/duckdb-execution-prototype.mjs",
     "start": "pnpm run build && node scripts/launch-electron.cjs ."
   },
   "keywords": [],

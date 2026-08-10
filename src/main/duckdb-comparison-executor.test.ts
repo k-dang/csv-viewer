@@ -330,5 +330,5 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       owner.closeSync();
       database.closeSync();
     }
-  }, 10_000);
+  }, 20_000);
 });

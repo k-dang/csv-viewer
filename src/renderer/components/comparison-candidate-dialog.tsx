@@ -65,6 +65,7 @@ export function ComparisonCandidateDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="comparison-candidate-title"
+        aria-describedby="comparison-candidate-description"
         className="flex max-h-[min(680px,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border bg-background shadow-2xl"
       >
         <header className="flex items-start justify-between gap-4 border-b p-5">
@@ -75,7 +76,10 @@ export function ComparisonCandidateDialog({
             <h2 id="comparison-candidate-title" className="mt-1 text-xl font-semibold">
               Choose a Candidate
             </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p
+              id="comparison-candidate-description"
+              className="mt-1 text-sm text-muted-foreground"
+            >
               Comparison uses the complete Working CSV, including unsaved edits.
             </p>
           </div>
