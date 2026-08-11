@@ -54,7 +54,7 @@ pnpm run build
 The automated evidence is divided by seam:
 
 - `csv-workspace.comparison-verification.test.ts` uses real in-memory DuckDB and literal expected rows for compatibility, keys, exact equality, classifications, ordering, mutations, Swap sides, and boundary windows.
-- `csv-workspace.test.ts`, `csv-comparison-service.test.ts`, and `duckdb-comparison-executor.test.ts` cover cancellation, publication races, close/disposal, worker interruption, read survival, and artifact cleanup.
+- `csv-workspace.test.ts`, `csv-comparison-service.test.ts`, and `duckdb-comparison-executor.test.ts` cover cancellation, publication races, close/disposal, deterministic worker lifecycle, read survival, and artifact cleanup.
 - `comparison-grid-data-source.test.ts` enforces 100-row blocks, six cached blocks, two concurrent requests, the 1,000-row IPC cap, and stale-token rejection.
 - `comparison-accessibility.test.tsx` server-renders renderer components to verify dialog semantics, live regions, alerts, keyboard-operable controls, and bounded diagnostics without a browser-DOM dependency.
 - `workspace-tabs.test.ts` verifies version reconciliation and separation of authoritative Comparison state from renderer presentation state.
