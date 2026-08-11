@@ -2,16 +2,32 @@ import { describe, expect, it } from 'vitest';
 import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
 import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
 
-async function waitWithTimeout(
-  promise: Promise<void>,
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(error: Error): void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve'];
+  let reject!: Deferred<T>['reject'];
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitWithTimeout<T>(
+  promise: PromiseLike<T>,
   timeoutMs: number,
   message: string,
-): Promise<void> {
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      promise,
-      new Promise<void>((_resolve, reject) => {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise<T>((_resolve, reject) => {
         timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
       }),
     ]);
@@ -24,15 +40,16 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('interrupts an active operation before releasing its dedicated connection', async () => {
     let interrupted = false;
     let closed = false;
-    let rejectQuery: ((error: Error) => void) | null = null;
+    const queryStarted = createDeferred<void>();
+    const query = createDeferred<never>();
     const connection = {
-      runAndReadAll: () =>
-        new Promise((_resolve, reject) => {
-          rejectQuery = reject;
-        }),
+      runAndReadAll: () => {
+        queryStarted.resolve();
+        return query.promise;
+      },
       interrupt: () => {
         interrupted = true;
-        rejectQuery?.(new Error('interrupted'));
+        query.reject(new Error('interrupted'));
       },
       closeSync: () => {
         closed = true;
@@ -49,7 +66,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     });
 
     const validation = executor.validateKey('operation', 'source', ['id']);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await queryStarted.promise;
     executor.cancel('operation');
 
     await expect(validation).rejects.toThrow('interrupted');
@@ -61,7 +78,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
 
   it('releases a worker when cancellation wins the connection race', async () => {
     let closed = false;
-    let resolveConnection: ((connection: DuckDBConnection) => void) | null = null;
+    const connectionRequested = createDeferred<void>();
+    const workerConnection = createDeferred<DuckDBConnection>();
     const connection = {
       interrupt: () => undefined,
       closeSync: () => {
@@ -75,16 +93,16 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         release: async () => undefined,
       }),
       getOwnerConnection: async () => connection,
-      connectWorker: () =>
-        new Promise((resolve) => {
-          resolveConnection = resolve;
-        }),
+      connectWorker: () => {
+        connectionRequested.resolve();
+        return workerConnection.promise;
+      },
     });
 
     const validation = executor.validateKey('operation', 'source', ['id']);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await connectionRequested.promise;
     executor.cancel('operation');
-    resolveConnection?.(connection);
+    workerConnection.resolve(connection);
 
     await expect(validation).rejects.toThrow('cancelled');
     await executor.release('operation');
@@ -226,6 +244,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
   });
 
   it('interrupts real snapshot work without disrupting the owner connection or leaving staging', async () => {
+    const interruptibleRowCount = 10_000_000;
     const database = await DuckDBInstance.create(':memory:');
     const owner = await database.connect();
     await owner.run(`CREATE TABLE baseline_active AS SELECT
@@ -237,15 +256,16 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     await owner.run(`CREATE VIEW baseline AS SELECT
       'b' || i::VARCHAR AS "__csvViewerRowId", i AS "__csvViewerSourceOrder",
       false AS "__csvViewerDeleted", i::VARCHAR AS id, sin(i::DOUBLE)::VARCHAR AS value
-      FROM range(100000000) source(i)`);
+      FROM range(${interruptibleRowCount}) source(i)`);
     await owner.run(`CREATE VIEW candidate AS SELECT
       'c' || i::VARCHAR AS "__csvViewerRowId", i AS "__csvViewerSourceOrder",
       false AS "__csvViewerDeleted", i::VARCHAR AS id, cos(i::DOUBLE)::VARCHAR AS value
-      FROM range(100000000) source(i)`);
+      FROM range(${interruptibleRowCount}) source(i)`);
     let markSnapshotRunIssued: (() => void) | null = null;
     const snapshotRunIssued = new Promise<void>((resolve) => {
       markSnapshotRunIssued = resolve;
     });
+    let workerInterrupted = false;
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async (sessionId) => ({
         tableName: sessionId,
@@ -267,6 +287,12 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
                   markSnapshotRunIssued?.();
                 }
                 return query;
+              };
+            }
+            if (property === 'interrupt') {
+              return () => {
+                workerInterrupted = true;
+                target.interrupt();
               };
             }
             const value = Reflect.get(target, property, target) as unknown;
@@ -313,7 +339,18 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       );
       executor.cancel('real-interruption');
 
-      await expect(snapshot).rejects.toThrow();
+      const interruptionError = await waitWithTimeout(
+        snapshot.then(
+          () => {
+            throw new Error('Comparison snapshot completed before cancellation.');
+          },
+          (error: unknown) => error,
+        ),
+        2_000,
+        'Comparison snapshot did not stop within 2 seconds of cancellation.',
+      );
+      expect(interruptionError).toBeInstanceOf(Error);
+      expect(workerInterrupted).toBe(true);
       await executor.release('real-interruption');
       await expect(executor.readWindow(activeWindow)).resolves.toMatchObject({
         totalRowCount: 1,
@@ -330,5 +367,5 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       owner.closeSync();
       database.closeSync();
     }
-  }, 20_000);
+  }, 10_000);
 });
