@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DuckDBInstance, type DuckDBConnection } from '@duckdb/node-api';
+import {
+  DuckDBInstance,
+  DuckDBPendingResultState,
+  type DuckDBConnection,
+} from '@duckdb/node-api';
 import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
 
 type Deferred<T> = {
@@ -243,10 +247,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       'c' || i::VARCHAR AS "__csvViewerRowId", i AS "__csvViewerSourceOrder",
       false AS "__csvViewerDeleted", i::VARCHAR AS id, cos(i::DOUBLE)::VARCHAR AS value
       FROM range(${interruptibleRowCount}) source(i)`);
-    let markSnapshotRunIssued: (() => void) | null = null;
-    const snapshotRunIssued = new Promise<void>((resolve) => {
-      markSnapshotRunIssued = resolve;
-    });
+    const snapshotRunIssued = createDeferred<void>();
+    const snapshotCancelled = createDeferred<void>();
     let workerInterrupted = false;
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async (sessionId) => ({
@@ -263,18 +265,33 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         return new Proxy(connection, {
           get(target, property) {
             if (property === 'run') {
-              return (sql: string) => {
-                const query = target.run(sql);
-                if (sql.includes('csv_comparison_real_interruption')) {
-                  markSnapshotRunIssued?.();
+              return async (sql: string) => {
+                if (!sql.includes('csv_comparison_real_interruption')) {
+                  return target.run(sql);
                 }
-                return query;
+                const pending = await target.start(sql);
+                const firstTaskState = pending.runTask();
+                if (firstTaskState === DuckDBPendingResultState.RESULT_READY) {
+                  const error = new Error(
+                    'Comparison snapshot completed in its first pending task.',
+                  );
+                  snapshotRunIssued.reject(error);
+                  throw error;
+                }
+                snapshotRunIssued.resolve();
+                await snapshotCancelled.promise;
+                await pending.runAllTasks();
+                return pending.getResult();
               };
             }
             if (property === 'interrupt') {
               return () => {
                 workerInterrupted = true;
-                target.interrupt();
+                try {
+                  target.interrupt();
+                } finally {
+                  snapshotCancelled.resolve();
+                }
               };
             }
             const value = Reflect.get(target, property, target) as unknown;
@@ -314,7 +331,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         key: ['id'],
         valueColumns: ['value'],
       });
-      await snapshotRunIssued;
+      await snapshotRunIssued.promise;
       executor.cancel('real-interruption');
 
       const interruptionError = await snapshot.then(
