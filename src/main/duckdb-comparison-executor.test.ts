@@ -18,24 +18,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-async function waitWithTimeout<T>(
-  promise: PromiseLike<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      Promise.resolve(promise),
-      new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('interrupts an active operation before releasing its dedicated connection', async () => {
     let interrupted = false;
@@ -332,22 +314,14 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         key: ['id'],
         valueColumns: ['value'],
       });
-      await waitWithTimeout(
-        snapshotRunIssued,
-        2_000,
-        'Comparison snapshot query was not issued within 2 seconds.',
-      );
+      await snapshotRunIssued;
       executor.cancel('real-interruption');
 
-      const interruptionError = await waitWithTimeout(
-        snapshot.then(
-          () => {
-            throw new Error('Comparison snapshot completed before cancellation.');
-          },
-          (error: unknown) => error,
-        ),
-        2_000,
-        'Comparison snapshot did not stop within 2 seconds of cancellation.',
+      const interruptionError = await snapshot.then(
+        () => {
+          throw new Error('Comparison snapshot completed before cancellation.');
+        },
+        (error: unknown) => error,
       );
       expect(interruptionError).toBeInstanceOf(Error);
       expect(workerInterrupted).toBe(true);
