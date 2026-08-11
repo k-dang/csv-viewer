@@ -40,3 +40,23 @@ Manual validation should cover:
 - Sorted edits and multi-row delete, confirming operations target selected source rows rather than visible indexes.
 - Opening another file, reopening the active file, and closing the app with unsaved changes, confirming Save As, Discard, and Cancel decisions.
 - `fixtures/validation/large-rows.csv`, confirming scrolling still requests bounded row windows after edits.
+
+## Automated Aligned Comparison Validation
+
+Aligned Comparison has no manual release gate. Its required evidence is produced by automated tests and build tooling:
+
+```powershell
+pnpm run test
+pnpm run typecheck
+pnpm run build
+```
+
+The automated evidence is divided by seam:
+
+- `csv-workspace.comparison-verification.test.ts` uses real in-memory DuckDB and literal expected rows for compatibility, keys, exact equality, classifications, ordering, mutations, Swap sides, and boundary windows.
+- `csv-workspace.test.ts`, `csv-comparison-service.test.ts`, and `duckdb-comparison-executor.test.ts` cover cancellation, publication races, close/disposal, worker interruption, read survival, and artifact cleanup.
+- `comparison-grid-data-source.test.ts` enforces 100-row blocks, six cached blocks, two concurrent requests, the 1,000-row IPC cap, and stale-token rejection.
+- `comparison-accessibility.test.tsx` server-renders renderer components to verify dialog semantics, live regions, alerts, keyboard-operable controls, and bounded diagnostics without a browser-DOM dependency.
+- `workspace-tabs.test.ts` verifies version reconciliation and separation of authoritative Comparison state from renderer presentation state.
+
+Required behavior must have deterministic automated coverage before it becomes a release gate. Human observation, stopwatch measurements, memory sampling, screen-reader smoke passes, and visual sign-off are not required release evidence.

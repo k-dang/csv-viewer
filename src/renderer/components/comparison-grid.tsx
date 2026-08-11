@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellStyleModule,
@@ -9,8 +9,6 @@ import {
   themeQuartz,
   type ColDef,
   type ColGroupDef,
-  type IDatasource,
-  type IGetRowsParams,
   type ICellRendererParams,
 } from 'ag-grid-community';
 import type {
@@ -20,6 +18,10 @@ import type {
   ComparisonView,
 } from '../../shared/ipc';
 import { orderComparisonValueColumns } from '../../shared/comparison-presentation';
+import {
+  comparisonGridRequestBounds,
+  createComparisonGridDataSource,
+} from './comparison-grid-data-source';
 
 ModuleRegistry.registerModules([
   CellStyleModule,
@@ -73,6 +75,10 @@ export function ComparisonGrid({
   columnsMode: ComparisonColumnsMode;
   themeMode: 'light' | 'dark';
 }) {
+  const activeResultToken = useRef(applied.resultToken);
+  useEffect(() => {
+    activeResultToken.current = applied.resultToken;
+  }, [applied.resultToken]);
   const changedCounts = useMemo(
     () =>
       new Map(
@@ -134,31 +140,19 @@ export function ComparisonGrid({
     [applied.key, changedCounts, valueColumns],
   );
 
-  const dataSource = useMemo<IDatasource>(
-    () => ({
-      getRows(params: IGetRowsParams) {
-        const offset = params.startRow;
-        const limit = Math.min(1000, Math.max(0, params.endRow - params.startRow));
-        void window.csvViewer
-          .getComparisonWindow({
-            comparisonId: comparison.comparisonId,
-            resultToken: applied.resultToken,
-            offset,
-            limit,
-            rows: rowsMode,
-            columns: columnsMode,
-          })
-          .then((outcome) => {
-            if (outcome.status !== 'ready' || outcome.window.resultToken !== applied.resultToken) {
-              params.failCallback();
-              return;
-            }
-            const rows = outcome.window.rows.map((row) => toGridRow(row));
-            params.successCallback(rows, outcome.window.totalRowCount);
-          })
-          .catch(() => params.failCallback());
-      },
-    }),
+  const dataSource = useMemo(
+    () =>
+      createComparisonGridDataSource(
+        window.csvViewer,
+        {
+          comparisonId: comparison.comparisonId,
+          resultToken: applied.resultToken,
+          rows: rowsMode,
+          columns: columnsMode,
+        },
+        () => activeResultToken.current,
+        toGridRow,
+      ),
     [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode],
   );
 
@@ -170,9 +164,9 @@ export function ComparisonGrid({
         rowModelType="infinite"
         datasource={dataSource}
         columnDefs={columnDefs}
-        cacheBlockSize={100}
-        maxBlocksInCache={6}
-        maxConcurrentDatasourceRequests={2}
+        cacheBlockSize={comparisonGridRequestBounds.cacheBlockSize}
+        maxBlocksInCache={comparisonGridRequestBounds.maxBlocksInCache}
+        maxConcurrentDatasourceRequests={comparisonGridRequestBounds.maxConcurrentRequests}
         infiniteInitialRowCount={1}
         getRowId={(params) => params.data.rowKey}
         onCellKeyDown={(params) => {
