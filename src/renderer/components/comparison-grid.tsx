@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellStyleModule,
@@ -76,7 +76,9 @@ export function ComparisonGrid({
   themeMode: 'light' | 'dark';
 }) {
   const activeResultToken = useRef(applied.resultToken);
-  activeResultToken.current = applied.resultToken;
+  useEffect(() => {
+    activeResultToken.current = applied.resultToken;
+  }, [applied.resultToken]);
   const changedCounts = useMemo(
     () =>
       new Map(

@@ -656,8 +656,9 @@ describe('CsvWorkspace Comparison verification contract', () => {
     );
     const comparison = openComparison(value, baseline, candidate);
     let applied = await applyKey(value, comparison.comparisonId, ['id']);
+    if (!applied.applied) throw new Error('Comparison has no applied result.');
     const initialRevision = baseline.dataRevision;
-    const resultToken = applied.applied?.resultToken;
+    const resultToken = applied.applied.resultToken;
 
     await value.workspace.csvs.getRows({
       workingCsvId: baseline.workingCsvId,
