@@ -11,7 +11,6 @@
     "package": "pnpm run build && electron-builder --publish never",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "fixtures:validation": "node scripts/generate-validation-fixtures.cjs",
     "start": "pnpm run build && node scripts/launch-electron.cjs ."
   },
   "keywords": [],
