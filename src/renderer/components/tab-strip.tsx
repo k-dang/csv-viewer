@@ -31,7 +31,7 @@ export function TabStrip({
       <TabsList
         aria-label="Open CSV and Comparison Tabs"
         variant="line"
-        className="h-auto max-w-full justify-start overflow-x-auto rounded-none px-3 pt-1.5 pb-0"
+        className="group-data-[orientation=horizontal]/tabs:h-auto max-w-full justify-start overflow-x-auto rounded-none px-3 pt-1.5 pb-0"
         onWheel={(event) => {
           if (event.deltaY !== 0) {
             event.currentTarget.scrollLeft += event.deltaY;
