@@ -6,6 +6,7 @@ type ApplicationMenuOptions = {
   isDevelopment: boolean;
   onOpenCsv: () => void;
   onReopenCsv: () => void;
+  onExportCsv: () => void;
   onCloseTab: () => void;
   onAbout: () => void;
 };
@@ -16,6 +17,7 @@ export function buildApplicationMenuTemplate({
   isDevelopment,
   onOpenCsv,
   onReopenCsv,
+  onExportCsv,
   onCloseTab,
   onAbout,
 }: ApplicationMenuOptions): MenuItemConstructorOptions[] {
@@ -31,6 +33,11 @@ export function buildApplicationMenuTemplate({
         label: 'Reopen CSV',
         accelerator: 'CmdOrCtrl+R',
         click: onReopenCsv,
+      },
+      {
+        label: 'Export CSV...',
+        accelerator: 'CmdOrCtrl+Shift+E',
+        click: onExportCsv,
       },
       {
         label: 'Close Tab',

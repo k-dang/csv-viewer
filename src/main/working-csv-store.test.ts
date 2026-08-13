@@ -143,7 +143,7 @@ describe('WorkingCsvStore', () => {
       service.insertRow({ ...request, placement: 'append' as const, rowIds: [], hasActiveQuery: false }),
       service.undo(request.workingCsvId),
       service.redo(request.workingCsvId),
-      service.saveAs(request.workingCsvId, path.join(tempDir, 'closing-copy.csv')),
+      service.exportCsv(request.workingCsvId, path.join(tempDir, 'closing-copy.csv')),
     ];
     for (const mutation of mutations) await expect(mutation).rejects.toThrow('closing');
 
@@ -1262,7 +1262,7 @@ describe('WorkingCsvStore', () => {
 
   it('saves edited, inserted, and non-deleted rows without internal row identifiers', async () => {
     const filePath = await writeFixture(
-      'save-as.csv',
+      'export-source.csv',
       ['name,code,note', 'Ada,001,first', 'Grace,002,second', 'Linus,003,third'].join('\n'),
     );
     const outputPath = path.join(tempDir, 'saved.csv');
@@ -1288,7 +1288,7 @@ describe('WorkingCsvStore', () => {
     });
     await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['3'] });
 
-    const state = await service.saveAs(session.workingCsvId, outputPath);
+    const state = await service.exportCsv(session.workingCsvId, outputPath);
     const saved = await readFile(outputPath, 'utf8');
 
     expect(saved).toBe(
@@ -1315,7 +1315,7 @@ describe('WorkingCsvStore', () => {
       column: 'column1',
       value: '38',
     });
-    await service.saveAs(session.workingCsvId, outputPath);
+    await service.exportCsv(session.workingCsvId, outputPath);
 
     await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });
