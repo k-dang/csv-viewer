@@ -25,6 +25,11 @@ import type {
 } from '../shared/ipc';
 import { csvInternalRowIdField } from '../shared/ipc';
 import type { ComparisonExecutor } from './comparison-executor';
+import {
+  captureFileIdentity,
+  sameFileIdentity,
+  type CanonicalFileIdentity,
+} from './desktop-csv-export';
 import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
 import {
   assertKnownColumn,
@@ -61,6 +66,7 @@ type WorkingCsvState = {
   metadata: Omit<WorkingCsvView, 'editState'>;
   connection: DuckDBConnection;
   tableName: string;
+  sourceIdentity: CanonicalFileIdentity;
   undoStack: CsvEditCommand[];
   redoStack: CsvEditCommand[];
 };
@@ -326,6 +332,8 @@ export class WorkingCsvStore {
       );
     }
 
+    const sourceIdentity = await captureFileIdentity(filePath);
+    if (!sourceIdentity) throw normalizeOpenError(new Error('CSV Source is no longer available.'));
     const connection = await this.getConnection();
     const tableName = buildWorkingCsvTableName(randomUUID());
     this.artifactRegistry.register({
@@ -364,6 +372,7 @@ export class WorkingCsvStore {
         metadata,
         connection,
         tableName,
+        sourceIdentity,
         undoStack: [],
         redoStack: [],
       };
@@ -378,6 +387,12 @@ export class WorkingCsvStore {
     this.assertAcceptingWork();
     this.assertNotClosing(request.workingCsvId);
     return buildEditState(this.requireWorkingCsv(request.workingCsvId));
+  }
+
+  async isSourceDestination(workingCsvId: WorkingCsvId, filePath: string): Promise<boolean> {
+    const state = this.requireWorkingCsv(workingCsvId);
+    const destinationIdentity = await captureFileIdentity(filePath);
+    return destinationIdentity ? sameFileIdentity(state.sourceIdentity, destinationIdentity) : false;
   }
 
   async getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow> {
@@ -560,8 +575,11 @@ export class WorkingCsvStore {
 
   async exportCsv(workingCsvId: WorkingCsvId, filePath: string): Promise<CsvEditState> {
     return this.withWorkingCsvLease(workingCsvId, async (state) => {
-      const connection = this.requireConnection();
       const { metadata: session } = state;
+      if (await this.isSourceDestination(workingCsvId, filePath)) {
+        throw new Error('Export CSV cannot replace its CSV Source. Choose a different destination.');
+      }
+      const connection = this.requireConnection();
 
       const rowProjectionSql = session.columns
         .map((column) => quoteIdentifier(column.name))
