@@ -25,11 +25,11 @@ import {
   ArrowUp,
   BarChart3,
   Database,
+  FileDown,
   HardDrive,
   Plus,
   Redo2,
   RotateCcw,
-  Save,
   Search,
   Table2,
   Trash2,
@@ -121,10 +121,12 @@ const filterDebounceMs = 1500;
 export function CsvGrid({
   session,
   themeMode,
+  exportRequestSequence = 0,
   onDirtyChange,
 }: {
   session: WorkingCsvView;
   themeMode: 'light' | 'dark';
+  exportRequestSequence?: number;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
@@ -150,6 +152,7 @@ export function CsvGrid({
   const [statsRefreshKey, setStatsRefreshKey] = useState(0);
   const requestStateRef = useRef({ latestRequestId: 0 });
   const revertingCellRef = useRef(false);
+  const handledExportRequestSequenceRef = useRef(0);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
       session.columns.map((column) => ({
@@ -179,6 +182,12 @@ export function CsvGrid({
   useEffect(() => {
     onDirtyChange?.(editState.dirty);
   }, [editState.dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (exportRequestSequence <= handledExportRequestSequenceRef.current) return;
+    handledExportRequestSequenceRef.current = exportRequestSequence;
+    void exportCsv();
+  }, [exportRequestSequence]);
 
   useEffect(() => {
     setEditState({
@@ -392,18 +401,18 @@ export function CsvGrid({
     }
   }
 
-  async function saveAs() {
+  async function exportCsv() {
     try {
       setEditError(null);
-      const result = await window.csvViewer.saveCsvAs({ workingCsvId: session.workingCsvId });
+      const result = await window.csvViewer.exportCsv({ workingCsvId: session.workingCsvId });
 
-      if (isCancelledSaveResult(result)) {
+      if (isCancelledExportResult(result)) {
         return;
       }
 
       setEditState(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save CSV.';
+      const message = error instanceof Error ? error.message : 'Unable to export CSV.';
       setEditError(message);
     }
   }
@@ -540,12 +549,11 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void saveAs()}
-                disabled={!editState.dirty}
-                title="Save CSV as"
-                aria-label="Save CSV as"
+                onClick={() => void exportCsv()}
+                title="Export CSV"
+                aria-label="Export CSV"
               >
-                <Save />
+                <FileDown />
               </Button>
               <Button
                 type="button"
@@ -655,7 +663,7 @@ export function CsvGrid({
   );
 }
 
-function isCancelledSaveResult(
+function isCancelledExportResult(
   result: CsvEditState | { status: 'cancelled' },
 ): result is { status: 'cancelled' } {
   return 'status' in result && result.status === 'cancelled';

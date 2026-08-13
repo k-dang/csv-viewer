@@ -143,7 +143,7 @@ describe('WorkingCsvStore', () => {
       service.insertRow({ ...request, placement: 'append' as const, rowIds: [], hasActiveQuery: false }),
       service.undo(request.workingCsvId),
       service.redo(request.workingCsvId),
-      service.saveAs(request.workingCsvId, path.join(tempDir, 'closing-copy.csv')),
+      service.exportCsv(request.workingCsvId, path.join(tempDir, 'closing-copy.csv')),
     ];
     for (const mutation of mutations) await expect(mutation).rejects.toThrow('closing');
 
@@ -1260,12 +1260,12 @@ describe('WorkingCsvStore', () => {
     expect(rowIds(afterRedo.rows)).toEqual(['1', '3', '2']);
   });
 
-  it('saves edited, inserted, and non-deleted rows without internal row identifiers', async () => {
+  it('exports edited, inserted, and non-deleted rows without internal row identifiers', async () => {
     const filePath = await writeFixture(
-      'save-as.csv',
+      'export-source.csv',
       ['name,code,note', 'Ada,001,first', 'Grace,002,second', 'Linus,003,third'].join('\n'),
     );
-    const outputPath = path.join(tempDir, 'saved.csv');
+    const outputPath = path.join(tempDir, 'exported.csv');
 
     const session = await service.openOrThrow(filePath);
     await service.editCell({
@@ -1288,13 +1288,13 @@ describe('WorkingCsvStore', () => {
     });
     await service.deleteRows({ workingCsvId: session.workingCsvId, rowIds: ['3'] });
 
-    const state = await service.saveAs(session.workingCsvId, outputPath);
-    const saved = await readFile(outputPath, 'utf8');
+    const state = await service.exportCsv(session.workingCsvId, outputPath);
+    const exported = await readFile(outputPath, 'utf8');
 
-    expect(saved).toBe(
+    expect(exported).toBe(
       ['name,code,note', 'Ada,001,first', '"New, Person",,', 'Grace,00042,second', ''].join('\n'),
     );
-    expect(saved).not.toContain(csvInternalRowIdField);
+    expect(exported).not.toContain(csvInternalRowIdField);
     expect(state).toEqual({
       workingCsvId: session.workingCsvId,
       dirty: false,
@@ -1304,9 +1304,9 @@ describe('WorkingCsvStore', () => {
     expect(service.isDirty(session.workingCsvId)).toBe(false);
   });
 
-  it('saves delimiter and header settings from the active dialect', async () => {
-    const filePath = await writeFixture('save-no-header.txt', ['Ada|37', 'Grace|41'].join('\n'));
-    const outputPath = path.join(tempDir, 'saved-no-header.txt');
+  it('exports delimiter and header settings from the active dialect', async () => {
+    const filePath = await writeFixture('export-no-header.txt', ['Ada|37', 'Grace|41'].join('\n'));
+    const outputPath = path.join(tempDir, 'exported-no-header.txt');
 
     const session = await service.openOrThrow(filePath, { delimiter: '|', header: false });
     await service.editCell({
@@ -1315,7 +1315,7 @@ describe('WorkingCsvStore', () => {
       column: 'column1',
       value: '38',
     });
-    await service.saveAs(session.workingCsvId, outputPath);
+    await service.exportCsv(session.workingCsvId, outputPath);
 
     await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });

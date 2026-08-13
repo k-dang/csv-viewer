@@ -7,11 +7,13 @@ export function CsvMetadataView({
   session,
   dialectError,
   themeMode,
+  exportRequestSequence,
   onDirtyChange,
 }: {
   session: WorkingCsvView;
   dialectError: string | null;
   themeMode: 'light' | 'dark';
+  exportRequestSequence?: number;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   return (
@@ -28,7 +30,12 @@ export function CsvMetadataView({
         </FieldError>
       ) : null}
 
-      <CsvGrid session={session} themeMode={themeMode} onDirtyChange={onDirtyChange} />
+      <CsvGrid
+        session={session}
+        themeMode={themeMode}
+        exportRequestSequence={exportRequestSequence}
+        onDirtyChange={onDirtyChange}
+      />
     </section>
   );
 }
