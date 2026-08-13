@@ -8,13 +8,13 @@ export function CsvMetadataView({
   dialectError,
   themeMode,
   exportRequestSequence,
-  onDirtyChange,
+  onUnexportedChangesChange,
 }: {
   session: WorkingCsvView;
   dialectError: string | null;
   themeMode: 'light' | 'dark';
   exportRequestSequence?: number;
-  onDirtyChange?: (dirty: boolean) => void;
+  onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
 }) {
   return (
     <section
@@ -34,7 +34,7 @@ export function CsvMetadataView({
         session={session}
         themeMode={themeMode}
         exportRequestSequence={exportRequestSequence}
-        onDirtyChange={onDirtyChange}
+        onUnexportedChangesChange={onUnexportedChangesChange}
       />
     </section>
   );

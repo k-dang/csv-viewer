@@ -122,12 +122,12 @@ export function CsvGrid({
   session,
   themeMode,
   exportRequestSequence = 0,
-  onDirtyChange,
+  onUnexportedChangesChange,
 }: {
   session: WorkingCsvView;
   themeMode: 'light' | 'dark';
   exportRequestSequence?: number;
-  onDirtyChange?: (dirty: boolean) => void;
+  onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
 }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
@@ -135,12 +135,7 @@ export function CsvGrid({
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
   const hasActiveQueryRef = useRef(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
-  const [editState, setEditState] = useState<CsvEditState>({
-    workingCsvId: session.workingCsvId,
-    dirty: false,
-    canUndo: false,
-    canRedo: false,
-  });
+  const [editState, setEditState] = useState<CsvEditState>(session.editState);
   const [editError, setEditError] = useState<string | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -180,8 +175,8 @@ export function CsvGrid({
   }, [search]);
 
   useEffect(() => {
-    onDirtyChange?.(editState.dirty);
-  }, [editState.dirty, onDirtyChange]);
+    onUnexportedChangesChange?.(editState.hasUnexportedChanges);
+  }, [editState.hasUnexportedChanges, onUnexportedChangesChange]);
 
   useEffect(() => {
     if (exportRequestSequence <= handledExportRequestSequenceRef.current) return;
@@ -190,12 +185,7 @@ export function CsvGrid({
   }, [exportRequestSequence]);
 
   useEffect(() => {
-    setEditState({
-      workingCsvId: session.workingCsvId,
-      dirty: false,
-      canUndo: false,
-      canRedo: false,
-    });
+    setEditState(session.editState);
     setFilteredRowCount(session.rowCount);
     setDisplayedTotalRowCount(session.rowCount);
     setHasActiveQuery(false);
@@ -489,9 +479,9 @@ export function CsvGrid({
                   <HardDrive className="size-3.5" aria-hidden="true" />
                   {formatFileSize(session.file.sizeBytes)}
                 </span>
-                {editState.dirty ? (
+                {editState.hasUnexportedChanges ? (
                   <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
-                    Unsaved changes
+                    Unexported Changes
                   </span>
                 ) : null}
               </div>

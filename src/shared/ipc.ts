@@ -167,7 +167,7 @@ export type CsvCellEditResult = {
   workingCsvId: WorkingCsvId;
   rowId: string;
   column: string;
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
 };
@@ -196,7 +196,7 @@ export type CsvExportRequest = {
 
 export type CsvEditState = {
   workingCsvId: WorkingCsvId;
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
 };
@@ -208,7 +208,7 @@ export type OpenCsvResult =
   | { status: 'cancelled' };
 
 export type CloseImpact = {
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   dependentComparisons: Array<{
     comparisonId: ComparisonId;
     baselineName: string;
