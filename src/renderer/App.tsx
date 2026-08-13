@@ -41,7 +41,9 @@ export function App() {
     rendererWorkspaceReducer,
     initialRendererWorkspace,
   );
-  const [dirtySessionIds, setDirtySessionIds] = useState<ReadonlySet<string>>(new Set());
+  const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const [candidatePicker, setCandidatePicker] = useState<{
     baseline: WorkingCsvView;
     candidates: ComparisonCandidate[];
@@ -165,7 +167,7 @@ export function App() {
     }
     const session = result.session;
     dispatchWorkspace({ type: 'open-csv', session });
-    setDirtySessionIds((current) => {
+    setWorkingCsvIdsWithUnexportedChanges((current) => {
       if (!current.has(session.workingCsvId) || result.status === 'already-open') return current;
       const next = new Set(current);
       next.delete(session.workingCsvId);
@@ -275,7 +277,7 @@ export function App() {
           (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
         );
         const impact = [
-          result.impact.dirty ? 'Unsaved CSV edits will be lost.' : null,
+          result.impact.hasUnexportedChanges ? 'Unexported Changes will be lost.' : null,
           dependentNames.length > 0
             ? `These dependent Comparison Tabs will also close:\n${dependentNames.join('\n')}`
             : null,
@@ -300,7 +302,7 @@ export function App() {
         });
       }
       dispatchWorkspace({ type: 'close-csv', workingCsvId: tab.csv.workingCsvId });
-      setDirtySessionIds((current) => {
+      setWorkingCsvIdsWithUnexportedChanges((current) => {
         if (!current.has(tab.csv.workingCsvId)) return current;
         const next = new Set(current);
         next.delete(tab.csv.workingCsvId);
@@ -315,11 +317,14 @@ export function App() {
     dispatchWorkspace({ type: 'cycle', direction });
   }
 
-  function handleDirtyChange(workingCsvId: string, dirty: boolean) {
-    setDirtySessionIds((current) => {
-      if (current.has(workingCsvId) === dirty) return current;
+  function handleUnexportedChangesChange(
+    workingCsvId: string,
+    hasUnexportedChanges: boolean,
+  ) {
+    setWorkingCsvIdsWithUnexportedChanges((current) => {
+      if (current.has(workingCsvId) === hasUnexportedChanges) return current;
       const next = new Set(current);
-      if (dirty) next.add(workingCsvId);
+      if (hasUnexportedChanges) next.add(workingCsvId);
       else next.delete(workingCsvId);
       return next;
     });
@@ -408,7 +413,7 @@ export function App() {
             <TabStrip
               tabs={openTabs}
               activeTabId={activeTabId}
-              dirtySessionIds={dirtySessionIds}
+              workingCsvIdsWithUnexportedChanges={workingCsvIdsWithUnexportedChanges}
               onSelectTab={(tabId) => dispatchWorkspace({ type: 'select', tabId })}
               onCloseTab={(tab) => void closeTab(tab)}
             />
@@ -438,7 +443,12 @@ export function App() {
                         ? exportRequest.sequence
                         : 0
                     }
-                    onDirtyChange={(dirty) => handleDirtyChange(session.workingCsvId, dirty)}
+                    onUnexportedChangesChange={(hasUnexportedChanges) =>
+                      handleUnexportedChangesChange(
+                        session.workingCsvId,
+                        hasUnexportedChanges,
+                      )
+                    }
                   />
                 </div>
               );

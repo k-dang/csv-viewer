@@ -80,7 +80,7 @@ export function ComparisonCandidateDialog({
               id="comparison-candidate-description"
               className="mt-1 text-sm text-muted-foreground"
             >
-              Comparison uses the complete Working CSV, including unsaved edits.
+              Comparison uses the complete Working CSV, including Unexported Changes.
             </p>
           </div>
           <Button
