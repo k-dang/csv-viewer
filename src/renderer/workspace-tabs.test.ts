@@ -14,7 +14,7 @@ function csv(workingCsvId: string): WorkingCsvView {
     columns: [{ name: 'id', type: 'VARCHAR' }],
     rowCount: 1,
     dialect: {},
-    editState: { workingCsvId, dirty: false, canUndo: false, canRedo: false },
+    editState: { workingCsvId, hasUnexportedChanges: false, canUndo: false, canRedo: false },
   };
 }
 

@@ -167,7 +167,7 @@ export type CsvCellEditResult = {
   workingCsvId: WorkingCsvId;
   rowId: string;
   column: string;
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
 };
@@ -190,13 +190,13 @@ export type CsvEditStateRequest = {
   workingCsvId: WorkingCsvId;
 };
 
-export type CsvSaveAsRequest = {
+export type CsvExportRequest = {
   workingCsvId: WorkingCsvId;
 };
 
 export type CsvEditState = {
   workingCsvId: WorkingCsvId;
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
 };
@@ -208,7 +208,7 @@ export type OpenCsvResult =
   | { status: 'cancelled' };
 
 export type CloseImpact = {
-  dirty: boolean;
+  hasUnexportedChanges: boolean;
   dependentComparisons: Array<{
     comparisonId: ComparisonId;
     baselineName: string;
@@ -423,11 +423,12 @@ export type CsvViewerApi = {
   deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
   insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
   getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  saveCsvAs: (request: CsvSaveAsRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
+  exportCsv: (request: CsvExportRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   onOpenCsvRequest: (callback: () => void) => () => void;
   onReopenCsvRequest: (callback: () => void) => () => void;
+  onExportCsvRequest: (callback: () => void) => () => void;
   onCloseTabRequest: (callback: () => void) => () => void;
 };
 
@@ -453,10 +454,11 @@ export const ipcChannels = {
   deleteCsvRows: 'csv:delete-rows',
   insertCsvRow: 'csv:insert-row',
   getCsvEditState: 'csv:get-edit-state',
-  saveCsvAs: 'csv:save-as',
+  exportCsv: 'csv:export',
   undoCsvEdit: 'csv:undo-edit',
   redoCsvEdit: 'csv:redo-edit',
   menuOpenCsv: 'menu:open-csv',
   menuReopenCsv: 'menu:reopen-csv',
+  menuExportCsv: 'menu:export-csv',
   menuCloseTab: 'menu:close-tab',
 } as const;

@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { CsvWorkspace, type WorkspaceCloseImpact } from './csv-workspace';
+import { chooseCsvExportDestination } from './desktop-csv-export';
 import {
   ipcChannels,
   type BeginComparisonRequest,
@@ -41,7 +42,7 @@ import {
   type RecentCsvFile,
   type CsvRowWindow,
   type CsvRowWindowRequest,
-  type CsvSaveAsRequest,
+  type CsvExportRequest,
   type HealthStatus,
   type OpenCsvResult,
 } from '../shared/ipc';
@@ -130,6 +131,7 @@ function createApplicationMenu() {
     isDevelopment,
     onOpenCsv: () => sendMenuRequest(ipcChannels.menuOpenCsv),
     onReopenCsv: () => sendMenuRequest(ipcChannels.menuReopenCsv),
+    onExportCsv: () => sendMenuRequest(ipcChannels.menuExportCsv),
     onCloseTab: () => sendMenuRequest(ipcChannels.menuCloseTab),
     onAbout: () => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -149,6 +151,7 @@ function sendMenuRequest(
   channel:
     | typeof ipcChannels.menuOpenCsv
     | typeof ipcChannels.menuReopenCsv
+    | typeof ipcChannels.menuExportCsv
     | typeof ipcChannels.menuCloseTab,
 ) {
   const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -201,7 +204,7 @@ function registerIpcHandlers() {
         return { status: 'cancelled' };
       }
 
-      if (existing.editState.dirty) {
+      if (existing.editState.hasUnexportedChanges) {
         const canContinue = await confirmDiscardChanges(ownerWindow, [existing.file.name]);
 
         if (!canContinue) {
@@ -326,11 +329,11 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle(
-    ipcChannels.saveCsvAs,
-    async (_event, request: CsvSaveAsRequest): Promise<CsvEditState | { status: 'cancelled' }> => {
+    ipcChannels.exportCsv,
+    async (_event, request: CsvExportRequest): Promise<CsvEditState | { status: 'cancelled' }> => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      const saved = await saveCsvAsForSession(ownerWindow, request);
-      return saved ?? { status: 'cancelled' };
+      const exported = await exportCsvForSession(ownerWindow, request);
+      return exported ?? { status: 'cancelled' };
     },
   );
 
@@ -365,15 +368,15 @@ async function confirmDiscardChanges(
 ): Promise<boolean> {
   const messageOptions: MessageBoxOptions = {
     type: 'warning',
-    title: 'Unsaved CSV changes',
+    title: 'Unexported Changes',
     message:
       fileNames.length === 1
-        ? `Discard unsaved changes to ${fileNames[0]}?`
-        : 'Discard unsaved changes?',
+        ? `Discard Unexported Changes to ${fileNames[0]}?`
+        : 'Discard Unexported Changes?',
     detail:
       fileNames.length === 1
-        ? 'Your edits have not been saved and will be lost.'
-        : `These files have unsaved edits that will be lost:\n${fileNames.join('\n')}`,
+        ? 'Changes not represented by an Export CSV will be lost.'
+        : `These Working CSVs have Unexported Changes that will be lost:\n${fileNames.join('\n')}`,
     buttons: ['Discard', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
@@ -391,9 +394,9 @@ async function confirmWorkspaceClose(
   impact: WorkspaceCloseImpact,
 ): Promise<boolean> {
   const details: string[] = [];
-  if (impact.dirtyWorkingCsvs.length > 0) {
+  if (impact.workingCsvsWithUnexportedChanges.length > 0) {
     details.push(
-      `Unsaved edits will be lost:\n${impact.dirtyWorkingCsvs.map((csv) => csv.fileName).join('\n')}`,
+      `Unexported Changes will be lost:\n${impact.workingCsvsWithUnexportedChanges.map((csv) => csv.fileName).join('\n')}`,
     );
   }
   if (impact.dependentComparisons.length > 0) {
@@ -444,9 +447,9 @@ function confirmWorkspaceCloseOnce(
   return workspaceCloseConfirmation;
 }
 
-async function saveCsvAsForSession(
+async function exportCsvForSession(
   ownerWindow: BrowserWindow | undefined,
-  request: CsvSaveAsRequest,
+  request: CsvExportRequest,
 ): Promise<CsvEditState | null> {
   const session = csvDataService.getState(request.workingCsvId);
 
@@ -455,26 +458,43 @@ async function saveCsvAsForSession(
   }
 
   const saveOptions: SaveDialogOptions = {
-    title: 'Save CSV As',
-    defaultPath: buildDefaultSaveAsPath(session.file.path),
+    title: 'Export CSV',
+    defaultPath: buildDefaultExportPath(session.file.path),
     filters: [
       { name: 'CSV files', extensions: ['csv'] },
       { name: 'Text files', extensions: ['txt', 'tsv'] },
       { name: 'All files', extensions: ['*'] },
     ],
   };
-  const result = ownerWindow
-    ? await dialog.showSaveDialog(ownerWindow, saveOptions)
-    : await dialog.showSaveDialog(saveOptions);
+  const destinationPath = await chooseCsvExportDestination({
+    chooseDestination: async () => {
+      const result = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+        : await dialog.showSaveDialog(saveOptions);
+      return result.canceled ? null : (result.filePath ?? null);
+    },
+    isSourceDestination: (filePath) =>
+      csvDataService.isSourceDestination(request.workingCsvId, filePath),
+    showSourceConflict: async () => {
+      const messageOptions: MessageBoxOptions = {
+        type: 'warning',
+        title: 'Choose a different export destination',
+        message: 'Export CSV keeps the opened CSV Source unchanged.',
+        detail: 'Choose a different destination for the exported CSV.',
+        buttons: ['Choose destination'],
+        defaultId: 0,
+        noLink: true,
+      };
+      if (ownerWindow) await dialog.showMessageBox(ownerWindow, messageOptions);
+      else await dialog.showMessageBox(messageOptions);
+    },
+  });
 
-  if (result.canceled || !result.filePath) {
-    return null;
-  }
-
-  return csvDataService.saveAs(request.workingCsvId, result.filePath);
+  if (!destinationPath) return null;
+  return csvDataService.exportCsv(request.workingCsvId, destinationPath);
 }
 
-function buildDefaultSaveAsPath(filePath: string): string {
+function buildDefaultExportPath(filePath: string): string {
   const parsed = path.parse(filePath);
   return path.join(parsed.dir, `${parsed.name}-edited${parsed.ext || '.csv'}`);
 }
