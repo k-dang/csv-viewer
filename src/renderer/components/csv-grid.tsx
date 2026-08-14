@@ -198,7 +198,7 @@ export function CsvGrid({
     setStatsFilters([]);
     setStatsRefreshKey((current) => current + 1);
     void refreshEditState();
-  }, [session.dataRevision, session.workingCsvId]);
+  }, [session]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
