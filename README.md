@@ -61,7 +61,9 @@ Editing controls are intentionally disabled when the requested operation would b
 
 ## Development
 
-Before shipping changes, run `pnpm run test`, `pnpm run typecheck`, and `pnpm run build`. See [docs/validation.md](docs/validation.md) for manual release and editing validation scenarios.
+Before shipping changes, run `pnpm run test` and `pnpm run build`. The build includes the full TypeScript typecheck, and CI runs the same test and build gates for every pull request and push to `main`.
+
+Feature validation belongs in deterministic tests at the data-service, workspace, IPC-facing, and grid-data-source boundaries. Release readiness does not depend on a separate manual validation checklist.
 
 ## Packaging Notes
 
