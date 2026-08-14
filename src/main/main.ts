@@ -41,7 +41,7 @@ import {
   type RecentCsvFile,
   type CsvRowWindow,
   type CsvRowWindowRequest,
-  type CsvExportRequest,
+  type CsvSaveAsRequest,
   type HealthStatus,
   type OpenCsvResult,
 } from '../shared/ipc';
@@ -130,7 +130,6 @@ function createApplicationMenu() {
     isDevelopment,
     onOpenCsv: () => sendMenuRequest(ipcChannels.menuOpenCsv),
     onReopenCsv: () => sendMenuRequest(ipcChannels.menuReopenCsv),
-    onExportCsv: () => sendMenuRequest(ipcChannels.menuExportCsv),
     onCloseTab: () => sendMenuRequest(ipcChannels.menuCloseTab),
     onAbout: () => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -150,7 +149,6 @@ function sendMenuRequest(
   channel:
     | typeof ipcChannels.menuOpenCsv
     | typeof ipcChannels.menuReopenCsv
-    | typeof ipcChannels.menuExportCsv
     | typeof ipcChannels.menuCloseTab,
 ) {
   const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -328,11 +326,11 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle(
-    ipcChannels.exportCsv,
-    async (_event, request: CsvExportRequest): Promise<CsvEditState | { status: 'cancelled' }> => {
+    ipcChannels.saveCsvAs,
+    async (_event, request: CsvSaveAsRequest): Promise<CsvEditState | { status: 'cancelled' }> => {
       const ownerWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-      const exported = await exportCsvForSession(ownerWindow, request);
-      return exported ?? { status: 'cancelled' };
+      const saved = await saveCsvAsForSession(ownerWindow, request);
+      return saved ?? { status: 'cancelled' };
     },
   );
 
@@ -446,9 +444,9 @@ function confirmWorkspaceCloseOnce(
   return workspaceCloseConfirmation;
 }
 
-async function exportCsvForSession(
+async function saveCsvAsForSession(
   ownerWindow: BrowserWindow | undefined,
-  request: CsvExportRequest,
+  request: CsvSaveAsRequest,
 ): Promise<CsvEditState | null> {
   const session = csvDataService.getState(request.workingCsvId);
 
@@ -457,8 +455,8 @@ async function exportCsvForSession(
   }
 
   const saveOptions: SaveDialogOptions = {
-    title: 'Export CSV',
-    defaultPath: buildDefaultExportPath(session.file.path),
+    title: 'Save CSV As',
+    defaultPath: buildDefaultSaveAsPath(session.file.path),
     filters: [
       { name: 'CSV files', extensions: ['csv'] },
       { name: 'Text files', extensions: ['txt', 'tsv'] },
@@ -473,10 +471,10 @@ async function exportCsvForSession(
     return null;
   }
 
-  return csvDataService.exportCsv(request.workingCsvId, result.filePath);
+  return csvDataService.saveAs(request.workingCsvId, result.filePath);
 }
 
-function buildDefaultExportPath(filePath: string): string {
+function buildDefaultSaveAsPath(filePath: string): string {
   const parsed = path.parse(filePath);
   return path.join(parsed.dir, `${parsed.name}-edited${parsed.ext || '.csv'}`);
 }

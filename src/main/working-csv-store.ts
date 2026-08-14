@@ -558,7 +558,7 @@ export class WorkingCsvStore {
     });
   }
 
-  async exportCsv(workingCsvId: WorkingCsvId, filePath: string): Promise<CsvEditState> {
+  async saveAs(workingCsvId: WorkingCsvId, filePath: string): Promise<CsvEditState> {
     return this.withWorkingCsvLease(workingCsvId, async (state) => {
       const connection = this.requireConnection();
       const { metadata: session } = state;

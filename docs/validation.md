@@ -33,14 +33,12 @@ pnpm run build
 
 Manual validation should cover:
 
-- Normal CSV open, edit, undo, redo, delete, insert, append, and Export CSV.
-- `fixtures/validation/quoted-fields.csv`, confirming quoted delimiters remain data after editing and Export CSV.
+- Normal CSV open, edit, undo, redo, delete, insert, append, and Save As.
+- `fixtures/validation/quoted-fields.csv`, confirming quoted delimiters remain data after editing and Save As.
 - A CSV with leading-zero identifiers, confirming edited and untouched identifiers stay as text.
 - Filtered and searched edits, confirming rows refresh when an edited value enters or leaves the active query.
 - Sorted edits and multi-row delete, confirming operations target selected source rows rather than visible indexes.
-- Opening another CSV Source, reopening the Active Tab's CSV Source, and closing the app with Unexported Changes, confirming Export CSV, Discard, and Cancel decisions.
-- Exporting with and without Unexported Changes, confirming the operation remains available and preserves undo and redo history.
-- Selecting the opened CSV Source as the export destination, including through an alternate filesystem name, confirming CSV Viewer rejects it and re-prompts.
+- Opening another file, reopening the active file, and closing the app with unsaved changes, confirming Save As, Discard, and Cancel decisions.
 - `fixtures/validation/large-rows.csv`, confirming scrolling still requests bounded row windows after edits.
 
 ## Automated Aligned Comparison Validation

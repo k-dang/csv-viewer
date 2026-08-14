@@ -645,7 +645,7 @@ describe('CsvWorkspace Comparison verification contract', () => {
     ]);
   });
 
-  it('marks every Working CSV data mutation Outdated while queries and Export CSV remain current', async () => {
+  it('marks every Working CSV data mutation Outdated while queries and Save As remain current', async () => {
     const value = await fixture();
     const baselinePath = path.join(value.directory, 'baseline.csv');
     const baseline = await openCsv(value, 'baseline.csv', ['id,value', '1,old', ''].join('\n'));
@@ -673,7 +673,7 @@ describe('CsvWorkspace Comparison verification contract', () => {
       column: 'value',
       search: 'old',
     });
-    await value.workspace.csvs.exportCsv(
+    await value.workspace.csvs.saveAs(
       baseline.workingCsvId,
       path.join(value.directory, 'saved-copy.csv'),
     );

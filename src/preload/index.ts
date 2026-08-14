@@ -27,7 +27,7 @@ const api: CsvViewerApi = {
   deleteCsvRows: (request) => ipcRenderer.invoke(ipcChannels.deleteCsvRows, request),
   insertCsvRow: (request) => ipcRenderer.invoke(ipcChannels.insertCsvRow, request),
   getCsvEditState: (request) => ipcRenderer.invoke(ipcChannels.getCsvEditState, request),
-  exportCsv: (request) => ipcRenderer.invoke(ipcChannels.exportCsv, request),
+  saveCsvAs: (request) => ipcRenderer.invoke(ipcChannels.saveCsvAs, request),
   undoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.undoCsvEdit, request),
   redoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.redoCsvEdit, request),
   onOpenCsvRequest: (callback) => {
@@ -37,10 +37,6 @@ const api: CsvViewerApi = {
   onReopenCsvRequest: (callback) => {
     ipcRenderer.on(ipcChannels.menuReopenCsv, callback);
     return () => ipcRenderer.removeListener(ipcChannels.menuReopenCsv, callback);
-  },
-  onExportCsvRequest: (callback) => {
-    ipcRenderer.on(ipcChannels.menuExportCsv, callback);
-    return () => ipcRenderer.removeListener(ipcChannels.menuExportCsv, callback);
   },
   onCloseTabRequest: (callback) => {
     ipcRenderer.on(ipcChannels.menuCloseTab, callback);

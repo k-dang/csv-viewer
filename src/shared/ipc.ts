@@ -190,7 +190,7 @@ export type CsvEditStateRequest = {
   workingCsvId: WorkingCsvId;
 };
 
-export type CsvExportRequest = {
+export type CsvSaveAsRequest = {
   workingCsvId: WorkingCsvId;
 };
 
@@ -423,12 +423,11 @@ export type CsvViewerApi = {
   deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
   insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
   getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  exportCsv: (request: CsvExportRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
+  saveCsvAs: (request: CsvSaveAsRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   onOpenCsvRequest: (callback: () => void) => () => void;
   onReopenCsvRequest: (callback: () => void) => () => void;
-  onExportCsvRequest: (callback: () => void) => () => void;
   onCloseTabRequest: (callback: () => void) => () => void;
 };
 
@@ -454,11 +453,10 @@ export const ipcChannels = {
   deleteCsvRows: 'csv:delete-rows',
   insertCsvRow: 'csv:insert-row',
   getCsvEditState: 'csv:get-edit-state',
-  exportCsv: 'csv:export',
+  saveCsvAs: 'csv:save-as',
   undoCsvEdit: 'csv:undo-edit',
   redoCsvEdit: 'csv:redo-edit',
   menuOpenCsv: 'menu:open-csv',
   menuReopenCsv: 'menu:reopen-csv',
-  menuExportCsv: 'menu:export-csv',
   menuCloseTab: 'menu:close-tab',
 } as const;

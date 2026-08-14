@@ -51,7 +51,7 @@ export interface WorkingCsvs {
   insertRow(request: CsvInsertRowRequest): Promise<CsvEditState>;
   undo(workingCsvId: WorkingCsvId): Promise<CsvEditState>;
   redo(workingCsvId: WorkingCsvId): Promise<CsvEditState>;
-  exportCsv(workingCsvId: WorkingCsvId, filePath: string): Promise<CsvEditState>;
+  saveAs(workingCsvId: WorkingCsvId, filePath: string): Promise<CsvEditState>;
 }
 
 export type WorkspaceCloseImpact = {

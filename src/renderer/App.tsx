@@ -53,10 +53,6 @@ export function App() {
   const [dialectError, setDialectError] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentCsvFile[]>([]);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
-  const [exportRequest, setExportRequest] = useState<{
-    workingCsvId: string;
-    sequence: number;
-  } | null>(null);
 
   const openTabs = useMemo<OpenRendererTab[]>(
     () => projectOpenTabs(workspaceState),
@@ -119,13 +115,6 @@ export function App() {
     const removeReopenListener = window.csvViewer.onReopenCsvRequest(() => {
       void reopenActiveTab();
     });
-    const removeExportListener = window.csvViewer.onExportCsvRequest(() => {
-      if (!activeCsv) return;
-      setExportRequest((current) => ({
-        workingCsvId: activeCsv.workingCsvId,
-        sequence: (current?.sequence ?? 0) + 1,
-      }));
-    });
     const removeCloseListener = window.csvViewer.onCloseTabRequest(() => {
       const tab = openTabs.find((candidate) => candidate.id === activeTabId);
       if (tab) void closeTab(tab);
@@ -133,7 +122,6 @@ export function App() {
     return () => {
       removeOpenListener();
       removeReopenListener();
-      removeExportListener();
       removeCloseListener();
     };
   });
@@ -433,11 +421,6 @@ export function App() {
                     session={session}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
-                    exportRequestSequence={
-                      exportRequest?.workingCsvId === session.workingCsvId
-                        ? exportRequest.sequence
-                        : 0
-                    }
                     onDirtyChange={(dirty) => handleDirtyChange(session.workingCsvId, dirty)}
                   />
                 </div>
