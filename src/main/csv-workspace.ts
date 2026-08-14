@@ -44,7 +44,6 @@ export interface WorkingCsvs {
     dialect?: CsvDialectOptions,
   ): Promise<ReplaceWorkingCsvOutcome>;
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
-  isSourceDestination(workingCsvId: WorkingCsvId, filePath: string): Promise<boolean>;
   getRows(request: CsvRowWindowRequest): Promise<CsvRowWindow>;
   getColumnValueCounts(request: CsvColumnValueCountsRequest): Promise<CsvColumnValueCounts>;
   editCell(request: CsvCellEditRequest): Promise<CsvCellEditResult>;

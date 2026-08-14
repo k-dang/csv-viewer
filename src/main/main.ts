@@ -13,7 +13,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { CsvWorkspace, type WorkspaceCloseImpact } from './csv-workspace';
-import { chooseCsvExportDestination } from './desktop-csv-export';
 import {
   ipcChannels,
   type BeginComparisonRequest,
@@ -466,32 +465,15 @@ async function exportCsvForSession(
       { name: 'All files', extensions: ['*'] },
     ],
   };
-  const destinationPath = await chooseCsvExportDestination({
-    chooseDestination: async () => {
-      const result = ownerWindow
-        ? await dialog.showSaveDialog(ownerWindow, saveOptions)
-        : await dialog.showSaveDialog(saveOptions);
-      return result.canceled ? null : (result.filePath ?? null);
-    },
-    isSourceDestination: (filePath) =>
-      csvDataService.isSourceDestination(request.workingCsvId, filePath),
-    showSourceConflict: async () => {
-      const messageOptions: MessageBoxOptions = {
-        type: 'warning',
-        title: 'Choose a different export destination',
-        message: 'Export CSV keeps the opened CSV Source unchanged.',
-        detail: 'Choose a different destination for the exported CSV.',
-        buttons: ['Choose destination'],
-        defaultId: 0,
-        noLink: true,
-      };
-      if (ownerWindow) await dialog.showMessageBox(ownerWindow, messageOptions);
-      else await dialog.showMessageBox(messageOptions);
-    },
-  });
+  const result = ownerWindow
+    ? await dialog.showSaveDialog(ownerWindow, saveOptions)
+    : await dialog.showSaveDialog(saveOptions);
 
-  if (!destinationPath) return null;
-  return csvDataService.exportCsv(request.workingCsvId, destinationPath);
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  return csvDataService.exportCsv(request.workingCsvId, result.filePath);
 }
 
 function buildDefaultExportPath(filePath: string): string {

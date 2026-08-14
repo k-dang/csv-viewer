@@ -1,4 +1,4 @@
-import { link, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1302,7 +1302,6 @@ describe('WorkingCsvStore', () => {
       canRedo: false,
     });
     expect(service.isDirty(session.workingCsvId)).toBe(false);
-    expect(service.getState(session.workingCsvId)?.file).toEqual(session.file);
   });
 
   it('saves delimiter and header settings from the active dialect', async () => {
@@ -1321,34 +1320,6 @@ describe('WorkingCsvStore', () => {
     await expect(readFile(outputPath, 'utf8')).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
   });
 
-  it('rejects exporting to the CSV Source identity before writing', async () => {
-    const filePath = await writeFixture('protected-source.csv', ['name', 'Ada'].join('\n'));
-    const sourceAliasPath = path.join(tempDir, 'protected-source-alias.csv');
-    await link(filePath, sourceAliasPath);
-    const session = await service.openOrThrow(filePath);
-    await service.editCell({
-      workingCsvId: session.workingCsvId,
-      rowId: '1',
-      column: 'name',
-      value: 'Grace',
-    });
-
-    await expect(service.exportCsv(session.workingCsvId, sourceAliasPath)).rejects.toThrow(
-      'CSV Source',
-    );
-    await expect(readFile(filePath, 'utf8')).resolves.toBe(['name', 'Ada'].join('\n'));
-  });
-
-  it('retains CSV Source identity when the source is moved after opening', async () => {
-    const filePath = await writeFixture('source-before-move.csv', ['name', 'Ada'].join('\n'));
-    const movedSourcePath = path.join(tempDir, 'source-after-move.csv');
-    const session = await service.openOrThrow(filePath);
-    await rename(filePath, movedSourcePath);
-
-    await expect(service.isSourceDestination(session.workingCsvId, movedSourcePath)).resolves.toBe(
-      true,
-    );
-  });
   it('rejects unknown sessions and oversized row windows', async () => {
     const filePath = await writeFixture('windows.csv', ['value', '1'].join('\n'));
 
