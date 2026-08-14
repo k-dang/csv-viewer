@@ -12,13 +12,13 @@ export type OpenRendererTab =
 export function TabStrip({
   tabs,
   activeTabId,
-  workingCsvIdsWithUnexportedChanges,
+  dirtySessionIds,
   onSelectTab,
   onCloseTab,
 }: {
   tabs: OpenRendererTab[];
   activeTabId: string | null;
-  workingCsvIdsWithUnexportedChanges: ReadonlySet<string>;
+  dirtySessionIds: ReadonlySet<string>;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tab: OpenRendererTab) => void;
 }) {
@@ -44,8 +44,7 @@ export function TabStrip({
           const label = isCsv
             ? tab.csv.file.name
             : `${tab.comparison.baseline.file.name} ⇄ ${tab.comparison.candidate.file.name}`;
-          const hasUnexportedChanges =
-            isCsv && workingCsvIdsWithUnexportedChanges.has(tab.csv.workingCsvId);
+          const isDirty = isCsv && dirtySessionIds.has(tab.csv.workingCsvId);
           const isOutdated = !isCsv && tab.comparison.applied?.freshness.kind === 'outdated';
 
           return (
@@ -63,12 +62,12 @@ export function TabStrip({
               >
                 {!isCsv ? <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" /> : null}
                 <span className="truncate">{label}</span>
-                {hasUnexportedChanges ? (
+                {isDirty ? (
                   <Badge
                     role="img"
                     variant="secondary"
                     className="size-1.5 shrink-0 rounded-full p-0"
-                    aria-label="Unexported Changes"
+                    aria-label="Unsaved changes"
                   />
                 ) : null}
                 {isOutdated ? (

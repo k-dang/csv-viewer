@@ -45,29 +45,22 @@ import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 const workingCsvTablePrefix = 'csv_session_';
 const supportedFileExtensions = new Set(['.csv', '.tsv', '.txt']);
 
-type CsvEditCommand = RevisionTransition &
-  (
-    | {
+type CsvEditCommand =
+  | {
       type: 'cell-edit';
       rowId: string;
       column: string;
       oldValue: CsvCellValue;
       newValue: CsvCellValue;
     }
-    | {
+  | {
       type: 'delete-rows';
       rowIds: string[];
     }
-    | {
+  | {
       type: 'insert-row';
       rowId: string;
-    }
-  );
-
-type RevisionTransition = {
-  previousRevisionId: number;
-  revisionId: number;
-};
+    };
 
 type WorkingCsvState = {
   metadata: Omit<WorkingCsvView, 'editState'>;
@@ -76,9 +69,6 @@ type WorkingCsvState = {
   sourceIdentity: CanonicalFileIdentity;
   undoStack: CsvEditCommand[];
   redoStack: CsvEditCommand[];
-  currentRevisionId: number;
-  lastExportedRevisionId: number;
-  nextRevisionId: number;
 };
 
 export class WorkingCsvStore {
@@ -234,7 +224,6 @@ export class WorkingCsvStore {
         options,
         workingCsvId,
         existing.metadata.dataRevision,
-        existing.nextRevisionId,
       );
       this.artifactRegistry.transition(existing.tableName, 'retired');
       this.retiredSourceTables.add(existing.tableName);
@@ -310,14 +299,13 @@ export class WorkingCsvStore {
     }
   }
 
-  hasUnexportedChanges(workingCsvId: WorkingCsvId): boolean {
-    const state = this.workingCsvs.get(workingCsvId);
-    return state ? stateHasUnexportedChanges(state) : false;
+  isDirty(workingCsvId: WorkingCsvId): boolean {
+    return (this.workingCsvs.get(workingCsvId)?.undoStack.length ?? 0) > 0;
   }
 
-  getWithUnexportedChanges(): WorkingCsvView[] {
+  getDirty(): WorkingCsvView[] {
     return [...this.workingCsvs.values()]
-      .filter(stateHasUnexportedChanges)
+      .filter((state) => state.undoStack.length > 0)
       .map(buildWorkingCsvView);
   }
 
@@ -326,7 +314,6 @@ export class WorkingCsvStore {
     options: CsvDialectOptions,
     logicalWorkingCsvId: WorkingCsvId = randomUUID(),
     dataRevision = 0,
-    initialRevisionId = 0,
   ): Promise<WorkingCsvState> {
     const dialect = validateDialectOptions(options);
 
@@ -388,9 +375,6 @@ export class WorkingCsvStore {
         sourceIdentity,
         undoStack: [],
         redoStack: [],
-        currentRevisionId: initialRevisionId,
-        lastExportedRevisionId: initialRevisionId,
-        nextRevisionId: initialRevisionId + 1,
       };
     } catch (error) {
       await this.dropWorkingCsvTable(tableName);
@@ -499,7 +483,6 @@ export class WorkingCsvStore {
 
       await applyCellValue(state, request.rowId, request.column, request.value);
       state.undoStack.push({
-        ...advanceRevision(state),
         type: 'cell-edit',
         rowId: request.rowId,
         column: request.column,
@@ -527,7 +510,7 @@ export class WorkingCsvStore {
 
       await assertRowsExist(state, rowIds);
       await applyRowDeletion(state, rowIds, true);
-      state.undoStack.push({ ...advanceRevision(state), type: 'delete-rows', rowIds });
+      state.undoStack.push({ type: 'delete-rows', rowIds });
       state.redoStack = [];
       this.commitDataChange(state, -rowIds.length);
 
@@ -552,7 +535,7 @@ export class WorkingCsvStore {
       }
 
       const insertedRowId = await insertEmptyRow(state, request.placement, rowIds[0]);
-      state.undoStack.push({ ...advanceRevision(state), type: 'insert-row', rowId: insertedRowId });
+      state.undoStack.push({ type: 'insert-row', rowId: insertedRowId });
       state.redoStack = [];
       this.commitDataChange(state, 1);
 
@@ -570,7 +553,6 @@ export class WorkingCsvStore {
 
       await revertCommand(state, command);
       state.redoStack.push(command);
-      state.currentRevisionId = command.previousRevisionId;
       this.commitDataChange(state, rowCountDelta(command, 'undo'));
       return buildEditState(state);
     });
@@ -586,7 +568,6 @@ export class WorkingCsvStore {
 
       await applyCommand(state, command);
       state.undoStack.push(command);
-      state.currentRevisionId = command.revisionId;
       this.commitDataChange(state, rowCountDelta(command, 'redo'));
       return buildEditState(state);
     });
@@ -627,7 +608,8 @@ export class WorkingCsvStore {
       }
 
       await writeFile(filePath, `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`, 'utf8');
-      state.lastExportedRevisionId = state.currentRevisionId;
+      state.undoStack = [];
+      state.redoStack = [];
 
       return buildEditState(state);
     });
@@ -999,24 +981,10 @@ async function applyRowDeletion(
 function buildEditState(state: WorkingCsvState): CsvEditState {
   return {
     workingCsvId: state.metadata.workingCsvId,
-    hasUnexportedChanges: stateHasUnexportedChanges(state),
+    dirty: state.undoStack.length > 0,
     canUndo: state.undoStack.length > 0,
     canRedo: state.redoStack.length > 0,
   };
-}
-
-function stateHasUnexportedChanges(state: WorkingCsvState): boolean {
-  return state.currentRevisionId !== state.lastExportedRevisionId;
-}
-
-function advanceRevision(state: WorkingCsvState): RevisionTransition {
-  const transition = {
-    previousRevisionId: state.currentRevisionId,
-    revisionId: state.nextRevisionId,
-  };
-  state.currentRevisionId = transition.revisionId;
-  state.nextRevisionId += 1;
-  return transition;
 }
 
 function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo'): number {

@@ -56,7 +56,7 @@ export interface WorkingCsvs {
 }
 
 export type WorkspaceCloseImpact = {
-  workingCsvsWithUnexportedChanges: Array<{ workingCsvId: WorkingCsvId; fileName: string }>;
+  dirtyWorkingCsvs: Array<{ workingCsvId: WorkingCsvId; fileName: string }>;
   dependentComparisons: CloseImpact['dependentComparisons'];
 };
 
@@ -163,7 +163,7 @@ export class CsvWorkspace {
     const workingCsv = this.csvs.getState(workingCsvId);
     if (!workingCsv) throw new Error('Working CSV is no longer active.');
     return {
-      hasUnexportedChanges: this.csvStore.hasUnexportedChanges(workingCsvId),
+      dirty: this.csvStore.isDirty(workingCsvId),
       dependentComparisons: this.comparisonStore
         .dependentComparisonIds(workingCsvId)
         .map((comparisonId) => {
@@ -205,8 +205,8 @@ export class CsvWorkspace {
       }
     }
     return {
-      workingCsvsWithUnexportedChanges: workingCsvs
-        .filter((workingCsv) => workingCsv.editState.hasUnexportedChanges)
+      dirtyWorkingCsvs: workingCsvs
+        .filter((workingCsv) => workingCsv.editState.dirty)
         .map((workingCsv) => ({
           workingCsvId: workingCsv.workingCsvId,
           fileName: workingCsv.file.name,
@@ -224,21 +224,19 @@ export class CsvWorkspace {
 }
 
 function requiresConfirmation(impact: CloseImpact): boolean {
-  return impact.hasUnexportedChanges || impact.dependentComparisons.length > 0;
+  return impact.dirty || impact.dependentComparisons.length > 0;
 }
 
 function sameImpact(current: CloseImpact, confirmed: CloseImpact | undefined): boolean {
   if (!confirmed) return false;
   return (
-    current.hasUnexportedChanges === confirmed.hasUnexportedChanges &&
+    current.dirty === confirmed.dirty &&
     sameDependentComparisons(current.dependentComparisons, confirmed.dependentComparisons)
   );
 }
 
 function requiresWorkspaceConfirmation(impact: WorkspaceCloseImpact): boolean {
-  return (
-    impact.workingCsvsWithUnexportedChanges.length > 0 || impact.dependentComparisons.length > 0
-  );
+  return impact.dirtyWorkingCsvs.length > 0 || impact.dependentComparisons.length > 0;
 }
 
 function sameWorkspaceImpact(
@@ -247,10 +245,9 @@ function sameWorkspaceImpact(
 ): boolean {
   if (!confirmed) return false;
   return (
-    current.workingCsvsWithUnexportedChanges.length ===
-      confirmed.workingCsvsWithUnexportedChanges.length &&
-    current.workingCsvsWithUnexportedChanges.every((workingCsv, index) => {
-      const other = confirmed.workingCsvsWithUnexportedChanges[index];
+    current.dirtyWorkingCsvs.length === confirmed.dirtyWorkingCsvs.length &&
+    current.dirtyWorkingCsvs.every((workingCsv, index) => {
+      const other = confirmed.dirtyWorkingCsvs[index];
       return (
         workingCsv.workingCsvId === other.workingCsvId && workingCsv.fileName === other.fileName
       );

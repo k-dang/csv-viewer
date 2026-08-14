@@ -16,12 +16,7 @@ const session: WorkingCsvView = {
   ],
   rowCount: 250,
   dialect: {},
-  editState: {
-    workingCsvId: 'session-1',
-    hasUnexportedChanges: false,
-    canUndo: false,
-    canRedo: false,
-  },
+  editState: { workingCsvId: 'session-1', dirty: false, canUndo: false, canRedo: false },
 };
 
 describe('createCsvGridDataSource', () => {

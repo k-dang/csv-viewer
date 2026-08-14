@@ -204,7 +204,7 @@ function registerIpcHandlers() {
         return { status: 'cancelled' };
       }
 
-      if (existing.editState.hasUnexportedChanges) {
+      if (existing.editState.dirty) {
         const canContinue = await confirmDiscardChanges(ownerWindow, [existing.file.name]);
 
         if (!canContinue) {
@@ -368,15 +368,15 @@ async function confirmDiscardChanges(
 ): Promise<boolean> {
   const messageOptions: MessageBoxOptions = {
     type: 'warning',
-    title: 'Unexported Changes',
+    title: 'Unsaved CSV changes',
     message:
       fileNames.length === 1
-        ? `Discard Unexported Changes to ${fileNames[0]}?`
-        : 'Discard Unexported Changes?',
+        ? `Discard unsaved changes to ${fileNames[0]}?`
+        : 'Discard unsaved changes?',
     detail:
       fileNames.length === 1
-        ? 'Changes not represented by an Export CSV will be lost.'
-        : `These Working CSVs have Unexported Changes that will be lost:\n${fileNames.join('\n')}`,
+        ? 'Your edits have not been saved and will be lost.'
+        : `These files have unsaved edits that will be lost:\n${fileNames.join('\n')}`,
     buttons: ['Discard', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
@@ -394,9 +394,9 @@ async function confirmWorkspaceClose(
   impact: WorkspaceCloseImpact,
 ): Promise<boolean> {
   const details: string[] = [];
-  if (impact.workingCsvsWithUnexportedChanges.length > 0) {
+  if (impact.dirtyWorkingCsvs.length > 0) {
     details.push(
-      `Unexported Changes will be lost:\n${impact.workingCsvsWithUnexportedChanges.map((csv) => csv.fileName).join('\n')}`,
+      `Unsaved edits will be lost:\n${impact.dirtyWorkingCsvs.map((csv) => csv.fileName).join('\n')}`,
     );
   }
   if (impact.dependentComparisons.length > 0) {

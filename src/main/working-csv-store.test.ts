@@ -151,7 +151,7 @@ describe('WorkingCsvStore', () => {
     expect(service.isClosing(session.workingCsvId)).toBe(false);
     await expect(
       service.editCell({ ...request, rowId: '1', column: 'name', value: 'Grace' }),
-    ).resolves.toMatchObject({ hasUnexportedChanges: true });
+    ).resolves.toMatchObject({ dirty: true });
   });
 
   it('increments revisions and notifies subscribers for every committed data change', async () => {
@@ -272,11 +272,9 @@ describe('WorkingCsvStore', () => {
       value: 'Edited',
     });
 
-    expect(service.hasUnexportedChanges(first.workingCsvId)).toBe(true);
-    expect(service.hasUnexportedChanges(second.workingCsvId)).toBe(false);
-    expect(
-      service.getWithUnexportedChanges().map((workingCsv) => workingCsv.workingCsvId),
-    ).toEqual([
+    expect(service.isDirty(first.workingCsvId)).toBe(true);
+    expect(service.isDirty(second.workingCsvId)).toBe(false);
+    expect(service.getDirty().map((workingCsv) => workingCsv.workingCsvId)).toEqual([
       first.workingCsvId,
     ]);
     expect(service.getEditState({ workingCsvId: second.workingCsvId }).canUndo).toBe(false);
@@ -286,7 +284,7 @@ describe('WorkingCsvStore', () => {
     );
 
     await service.undo(first.workingCsvId);
-    expect(service.getWithUnexportedChanges()).toEqual([]);
+    expect(service.getDirty()).toEqual([]);
   });
 
   it('closes a session and leaves other sessions untouched', async () => {
@@ -820,7 +818,7 @@ describe('WorkingCsvStore', () => {
       workingCsvId: session.workingCsvId,
       rowId: '2',
       column: 'code',
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -899,7 +897,7 @@ describe('WorkingCsvStore', () => {
     expect(searchedAgain.rows).toEqual([]);
   });
 
-  it('undoes and redoes the most recent cell edit while updating Unexported Changes', async () => {
+  it('undoes and redoes the most recent cell edit while updating dirty state', async () => {
     const filePath = await writeFixture('edit-history.csv', ['name,code', 'Ada,001'].join('\n'));
 
     const session = await service.openOrThrow(filePath);
@@ -912,7 +910,7 @@ describe('WorkingCsvStore', () => {
 
     expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
+      dirty: false,
       canUndo: false,
       canRedo: false,
     });
@@ -920,7 +918,7 @@ describe('WorkingCsvStore', () => {
     await service.editCell({ workingCsvId: session.workingCsvId, rowId, column: 'code', value: '007' });
     expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -930,7 +928,7 @@ describe('WorkingCsvStore', () => {
 
     expect(undone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
+      dirty: false,
       canUndo: false,
       canRedo: true,
     });
@@ -941,7 +939,7 @@ describe('WorkingCsvStore', () => {
 
     expect(redone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -965,7 +963,7 @@ describe('WorkingCsvStore', () => {
 
     expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -998,7 +996,7 @@ describe('WorkingCsvStore', () => {
 
     expect(result).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -1094,14 +1092,14 @@ describe('WorkingCsvStore', () => {
 
     expect(undone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
+      dirty: false,
       canUndo: false,
       canRedo: true,
     });
     expect(rowIds(afterUndo.rows)).toEqual(['1', '2', '3']);
     expect(redone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -1154,7 +1152,7 @@ describe('WorkingCsvStore', () => {
     ]);
     expect(service.getEditState({ workingCsvId: session.workingCsvId })).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -1174,7 +1172,7 @@ describe('WorkingCsvStore', () => {
 
     expect(result).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -1248,14 +1246,14 @@ describe('WorkingCsvStore', () => {
     expect(rowIds(afterInsert.rows)).toEqual(['1', '3', '2']);
     expect(undone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
+      dirty: false,
       canUndo: false,
       canRedo: true,
     });
     expect(rowIds(afterUndo.rows)).toEqual(['1', '2']);
     expect(redone).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: true,
+      dirty: true,
       canUndo: true,
       canRedo: false,
     });
@@ -1299,11 +1297,11 @@ describe('WorkingCsvStore', () => {
     expect(saved).not.toContain(csvInternalRowIdField);
     expect(state).toEqual({
       workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
-      canUndo: true,
+      dirty: false,
+      canUndo: false,
       canRedo: false,
     });
-    expect(service.hasUnexportedChanges(session.workingCsvId)).toBe(false);
+    expect(service.isDirty(session.workingCsvId)).toBe(false);
     expect(service.getState(session.workingCsvId)?.file).toEqual(session.file);
   });
 
@@ -1351,74 +1349,6 @@ describe('WorkingCsvStore', () => {
       true,
     );
   });
-
-  it('tracks Unexported Changes by revision identity while preserving edit history', async () => {
-    const filePath = await writeFixture('export-revisions.csv', ['name,code', 'Ada,001'].join('\n'));
-    const outputPath = path.join(tempDir, 'exported.csv');
-    const session = await service.openOrThrow(filePath);
-
-    await service.editCell({
-      workingCsvId: session.workingCsvId,
-      rowId: '1',
-      column: 'code',
-      value: '002',
-    });
-    await expect(service.exportCsv(session.workingCsvId, outputPath)).resolves.toEqual({
-      workingCsvId: session.workingCsvId,
-      hasUnexportedChanges: false,
-      canUndo: true,
-      canRedo: false,
-    });
-    await expect(service.undo(session.workingCsvId)).resolves.toMatchObject({
-      hasUnexportedChanges: true,
-      canUndo: false,
-      canRedo: true,
-    });
-    await expect(service.redo(session.workingCsvId)).resolves.toMatchObject({
-      hasUnexportedChanges: false,
-      canUndo: true,
-      canRedo: false,
-    });
-
-    await service.undo(session.workingCsvId);
-    await expect(
-      service.editCell({
-        workingCsvId: session.workingCsvId,
-        rowId: '1',
-        column: 'code',
-        value: '003',
-      }),
-    ).resolves.toMatchObject({
-      hasUnexportedChanges: true,
-      canUndo: true,
-      canRedo: false,
-    });
-  });
-
-  it('preserves redo history when Export CSV establishes an undone revision as exported', async () => {
-    const filePath = await writeFixture('export-redo.csv', ['name,code', 'Ada,001'].join('\n'));
-    const outputPath = path.join(tempDir, 'exported-undone-revision.csv');
-    const session = await service.openOrThrow(filePath);
-    await service.editCell({
-      workingCsvId: session.workingCsvId,
-      rowId: '1',
-      column: 'code',
-      value: '002',
-    });
-    await service.undo(session.workingCsvId);
-
-    await expect(service.exportCsv(session.workingCsvId, outputPath)).resolves.toMatchObject({
-      hasUnexportedChanges: false,
-      canUndo: false,
-      canRedo: true,
-    });
-    await expect(service.redo(session.workingCsvId)).resolves.toMatchObject({
-      hasUnexportedChanges: true,
-      canUndo: true,
-      canRedo: false,
-    });
-  });
-
   it('rejects unknown sessions and oversized row windows', async () => {
     const filePath = await writeFixture('windows.csv', ['value', '1'].join('\n'));
 

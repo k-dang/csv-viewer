@@ -101,7 +101,7 @@ describe('CsvWorkspace lifecycle', () => {
       const candidate = await openWorkingCsv(workspace, candidatePath);
       expect(baseline.editState).toEqual({
         workingCsvId: baseline.workingCsvId,
-        hasUnexportedChanges: false,
+        dirty: false,
         canUndo: false,
         canRedo: false,
       });
@@ -333,14 +333,14 @@ describe('CsvWorkspace lifecycle', () => {
       expect(workspace.csvs.getState(workingCsv.workingCsvId)).toMatchObject({
         rowCount: 0,
         dataRevision: 1,
-        editState: { hasUnexportedChanges: true, canUndo: true, canRedo: false },
+        editState: { dirty: true, canUndo: true, canRedo: false },
       });
 
       await workspace.csvs.undo(workingCsv.workingCsvId);
       expect(workspace.csvs.getState(workingCsv.workingCsvId)).toMatchObject({
         rowCount: 1,
         dataRevision: 2,
-        editState: { hasUnexportedChanges: false, canUndo: false, canRedo: true },
+        editState: { dirty: false, canUndo: false, canRedo: true },
       });
     } finally {
       try {
@@ -351,51 +351,7 @@ describe('CsvWorkspace lifecycle', () => {
     }
   });
 
-  it('derives close impact from Unexported Changes independently of undo and redo', async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-export-close-'));
-    const filePath = path.join(tempDir, 'working.csv');
-    const outputPath = path.join(tempDir, 'exported.csv');
-    const workspace = new CsvWorkspace();
-    try {
-      await writeFile(filePath, 'id,value\n1,a\n');
-      const workingCsv = await openWorkingCsv(workspace, filePath);
-      await workspace.csvs.editCell({
-        workingCsvId: workingCsv.workingCsvId,
-        rowId: '1',
-        column: 'value',
-        value: 'exported',
-      });
-      const exported = await workspace.csvs.exportCsv(workingCsv.workingCsvId, outputPath);
-
-      expect(exported).toMatchObject({
-        hasUnexportedChanges: false,
-        canUndo: true,
-        canRedo: false,
-      });
-      expect(workspace.confirmWindowClose()).toEqual({ status: 'ready' });
-
-      const undone = await workspace.csvs.undo(workingCsv.workingCsvId);
-      expect(undone).toMatchObject({
-        hasUnexportedChanges: true,
-        canUndo: false,
-        canRedo: true,
-      });
-      expect(workspace.confirmWindowClose()).toMatchObject({
-        status: 'confirmation-required',
-        impact: {
-          workingCsvsWithUnexportedChanges: [{ workingCsvId: workingCsv.workingCsvId }],
-        },
-      });
-    } finally {
-      try {
-        await workspace.dispose();
-      } finally {
-        await rm(tempDir, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it('revalidates aggregate Unexported Changes and Comparison impact before window close', async () => {
+  it('revalidates aggregate dirty and Comparison impact before window close', async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-window-close-'));
     const workspace = new CsvWorkspace(new WorkingCsvStore(), new ControlledExecutor());
     try {
@@ -421,7 +377,7 @@ describe('CsvWorkspace lifecycle', () => {
       expect(first).toMatchObject({
         status: 'confirmation-required',
         impact: {
-          workingCsvsWithUnexportedChanges: [{ workingCsvId: baseline.workingCsvId }],
+          dirtyWorkingCsvs: [{ workingCsvId: baseline.workingCsvId }],
           dependentComparisons: [{ comparisonId: opened.comparison.comparisonId }],
         },
       });
@@ -431,10 +387,7 @@ describe('CsvWorkspace lifecycle', () => {
       const rechecked = workspace.confirmWindowClose(first.impact);
       expect(rechecked).toMatchObject({
         status: 'confirmation-required',
-        impact: {
-          workingCsvsWithUnexportedChanges: [],
-          dependentComparisons: [{ comparisonId: opened.comparison.comparisonId }],
-        },
+        impact: { dirtyWorkingCsvs: [], dependentComparisons: [{ comparisonId: opened.comparison.comparisonId }] },
       });
       if (rechecked.status !== 'confirmation-required') throw new Error('impact not refreshed');
       expect(workspace.confirmWindowClose(rechecked.impact)).toEqual({ status: 'ready' });
@@ -559,10 +512,10 @@ describe('CsvWorkspace lifecycle', () => {
       });
       const close = workspace.closeWorkingCsv({ workingCsvId: workingCsv.workingCsvId });
 
-      await expect(edit).resolves.toMatchObject({ hasUnexportedChanges: true });
+      await expect(edit).resolves.toMatchObject({ dirty: true });
       await expect(close).resolves.toMatchObject({
         status: 'confirmation-required',
-        impact: { hasUnexportedChanges: true },
+        impact: { dirty: true },
       });
     } finally {
       try {
