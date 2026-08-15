@@ -16,7 +16,7 @@
 - [x] **Ingest shape.** Confirm how a browser-selected file reaches SQL: buffer registration and the `read_csv_auto` call shape it produces, versus the current path-based call at `working-csv-store.ts:341`. Note any dialect-sniffing or option differences from the native path.
 - [x] **Row materialization.** Confirm the cost and shape of turning Wasm query results into the row objects the workspace expects, versus native `runAndReadAll().getRowObjectsJS()`. Note type and null differences observed on the existing fixtures.
 - [x] Findings are written to `.scratch/web-support/spike-findings.md`: one section per question, each with the observed answer, the evidence, and its consequence for tickets 03, 05, and 06. Where a finding contradicts the PRD's "Engine Constraints That Shape the Design" section, the PRD is corrected.
-- [ ] The spike branch is deleted. No spike code is merged, and no ticket depends on it existing.
+- [x] The spike branch is deleted. No spike code is merged, and no ticket depends on it existing.
 
 ## Comments
 
