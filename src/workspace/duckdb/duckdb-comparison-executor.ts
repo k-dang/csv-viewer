@@ -6,22 +6,18 @@ import type {
   CsvColumn,
   SourceKeyDiagnostics,
   WorkingCsvId,
-} from '../shared/ipc';
-import { csvInternalRowIdField } from '../shared/ipc';
+} from '../../shared/ipc';
+import { csvInternalRowIdField } from '../../shared/ipc';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
-} from './comparison-executor';
-import {
-  assertKnownColumn,
-  normalizeCellValue,
-  normalizeCount,
-  quoteIdentifier,
-} from './csv-query';
-import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
-import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
+} from '../comparison-executor';
+import { assertKnownColumn, quoteIdentifier } from '../csv-query';
+import { normalizeCellValue, normalizeCount } from '../csv-result-normalization';
+import { csvDeletedField, csvSourceOrderField } from '../csv-storage-schema';
+import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 export type ComparisonSource = {
   tableName: string;

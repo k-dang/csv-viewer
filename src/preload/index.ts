@@ -4,8 +4,8 @@ import { type CsvViewerApi, ipcChannels } from '../shared/ipc';
 const api: CsvViewerApi = {
   healthCheck: () => ipcRenderer.invoke(ipcChannels.healthCheck),
   openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
-  openRecentCsv: (filePath, options) =>
-    ipcRenderer.invoke(ipcChannels.openRecentCsv, filePath, options),
+  openRecentCsv: (sourceId, options) =>
+    ipcRenderer.invoke(ipcChannels.openRecentCsv, sourceId, options),
   reopenCsv: (workingCsvId, options) => ipcRenderer.invoke(ipcChannels.reopenCsv, workingCsvId, options),
   closeCsv: (request) => ipcRenderer.invoke(ipcChannels.closeCsv, request),
   getComparisonCandidates: (baselineId) =>
@@ -19,7 +19,7 @@ const api: CsvViewerApi = {
   getComparisonWindow: (request) => ipcRenderer.invoke(ipcChannels.getComparisonWindow, request),
   swapComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.swapComparison, comparisonId),
   closeComparison: (comparisonId) => ipcRenderer.invoke(ipcChannels.closeComparison, comparisonId),
-  getRecentFiles: () => ipcRenderer.invoke(ipcChannels.getRecentFiles),
+  getRecentCsvSources: () => ipcRenderer.invoke(ipcChannels.getRecentCsvSources),
   getCsvRows: (request) => ipcRenderer.invoke(ipcChannels.getCsvRows, request),
   getCsvColumnValueCounts: (request) =>
     ipcRenderer.invoke(ipcChannels.getCsvColumnValueCounts, request),

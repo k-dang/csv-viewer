@@ -15,7 +15,8 @@ import type {
   ComparisonCandidate,
   WorkingCsvView,
   OpenCsvResult,
-  RecentCsvFile,
+  CsvSourceId,
+  RecentCsvSource,
 } from '../shared/ipc';
 import {
   initialRendererWorkspace,
@@ -53,7 +54,7 @@ export function App() {
   const [delimiter, setDelimiter] = useState('');
   const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
-  const [recentFiles, setRecentFiles] = useState<RecentCsvFile[]>([]);
+  const [recentSources, setRecentSources] = useState<RecentCsvSource[]>([]);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
   const [exportRequest, setExportRequest] = useState<{
     workingCsvId: string;
@@ -105,7 +106,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void refreshRecentFiles();
+    void refreshRecentSources();
   }, []);
 
   useEffect(() => {
@@ -151,11 +152,11 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  async function refreshRecentFiles() {
+  async function refreshRecentSources() {
     try {
-      setRecentFiles(await window.csvViewer.getRecentFiles());
+      setRecentSources(await window.csvViewer.getRecentCsvSources());
     } catch {
-      setRecentFiles([]);
+      setRecentSources([]);
     }
   }
 
@@ -165,12 +166,12 @@ export function App() {
       setOpenError(result.message);
       return;
     }
-    const session = result.session;
-    dispatchWorkspace({ type: 'open-csv', session });
+    const workingCsv = result.workingCsv;
+    dispatchWorkspace({ type: 'open-csv', workingCsv });
     setWorkingCsvIdsWithUnexportedChanges((current) => {
-      if (!current.has(session.workingCsvId) || result.status === 'already-open') return current;
+      if (!current.has(workingCsv.workingCsvId) || result.status === 'already-open') return current;
       const next = new Set(current);
-      next.delete(session.workingCsvId);
+      next.delete(workingCsv.workingCsvId);
       return next;
     });
     setOpenError(null);
@@ -187,7 +188,7 @@ export function App() {
     try {
       const result = await window.csvViewer.openCsv(options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentFiles();
+      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open CSV.');
     } finally {
@@ -195,7 +196,7 @@ export function App() {
     }
   }
 
-  async function openRecentCsv(filePath: string) {
+  async function openRecentCsv(sourceId: CsvSourceId) {
     const options = buildDialectOptions(delimiter, headerMode);
     if (typeof options === 'string') {
       setDialectError(options);
@@ -204,12 +205,12 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await window.csvViewer.openRecentCsv(filePath, options);
+      const result = await window.csvViewer.openRecentCsv(sourceId, options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentFiles();
+      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open recent CSV.');
-      await refreshRecentFiles();
+      await refreshRecentSources();
     } finally {
       setIsOpening(false);
     }
@@ -227,7 +228,7 @@ export function App() {
     try {
       const result = await window.csvViewer.reopenCsv(activeCsv.workingCsvId, options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentFiles();
+      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to reopen CSV.');
     } finally {
@@ -425,27 +426,27 @@ export function App() {
           </div>
           <div className="grid min-h-0 min-w-0">
             {csvTabs.map((tab) => {
-              const session = tab.csv;
+              const workingCsv = tab.csv;
               return (
                 <div
-                  key={session.workingCsvId}
+                  key={workingCsv.workingCsvId}
                   className={cn(
                     'col-start-1 row-start-1 grid min-h-0 min-w-0',
                     tab.id !== activeTabId && 'hidden',
                   )}
                 >
                   <CsvMetadataView
-                    session={session}
+                    workingCsv={workingCsv}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
                     exportRequestSequence={
-                      exportRequest?.workingCsvId === session.workingCsvId
+                      exportRequest?.workingCsvId === workingCsv.workingCsvId
                         ? exportRequest.sequence
                         : 0
                     }
                     onUnexportedChangesChange={(hasUnexportedChanges) =>
                       handleUnexportedChangesChange(
-                        session.workingCsvId,
+                        workingCsv.workingCsvId,
                         hasUnexportedChanges,
                       )
                     }
@@ -482,7 +483,7 @@ export function App() {
           isOpening={isOpening}
           errorMessage={openError}
           dialectError={dialectError}
-          recentFiles={recentFiles}
+          recentSources={recentSources}
           onOpenCsv={openCsv}
           onOpenRecent={openRecentCsv}
         />

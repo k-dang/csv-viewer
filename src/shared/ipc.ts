@@ -5,6 +5,8 @@ export type HealthStatus = {
 };
 
 export type WorkingCsvId = string;
+/** Opaque, runtime-scoped identity of a CSV Source. Never parsed or interpreted by consumers. */
+export type CsvSourceId = string;
 export type ComparisonId = string;
 export type ComparisonOperationId = string;
 export type ComparisonResultToken = string;
@@ -15,8 +17,10 @@ export type CsvColumn = {
 };
 
 export type CsvFileMetadata = {
-  path: string;
+  sourceId: CsvSourceId;
   name: string;
+  /** Where the CSV Source lives, in whatever terms the runtime can show the user. */
+  location: string;
   sizeBytes: number;
 };
 
@@ -55,7 +59,7 @@ export type ReplaceWorkingCsvOutcome =
   | { status: 'working-csv-not-found' }
   | { status: 'failed'; failure: WorkingCsvFailure };
 
-export type RecentCsvFile = CsvFileMetadata & {
+export type RecentCsvSource = CsvFileMetadata & {
   lastOpenedAt: string;
 };
 
@@ -202,8 +206,8 @@ export type CsvEditState = {
 };
 
 export type OpenCsvResult =
-  | { status: 'opened'; session: WorkingCsvView }
-  | { status: 'already-open'; session: WorkingCsvView }
+  | { status: 'opened'; workingCsv: WorkingCsvView }
+  | { status: 'already-open'; workingCsv: WorkingCsvView }
   | { status: 'failed'; message: string }
   | { status: 'cancelled' };
 
@@ -404,7 +408,7 @@ export type ComparisonMutationOutcome =
 export type CsvViewerApi = {
   healthCheck: () => Promise<HealthStatus>;
   openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  openRecentCsv: (path: string, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  openRecentCsv: (sourceId: CsvSourceId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   closeCsv: (request: CloseWorkingCsvRequest) => Promise<CloseWorkingCsvOutcome>;
   getComparisonCandidates: (baselineId: WorkingCsvId) => Promise<ComparisonCandidate[]>;
@@ -416,7 +420,7 @@ export type CsvViewerApi = {
   swapComparison: (comparisonId: ComparisonId) => Promise<ComparisonMutationOutcome>;
   closeComparison: (comparisonId: ComparisonId) => Promise<CloseComparisonResult>;
   onComparisonEvent: (callback: (event: ComparisonEvent) => void) => () => void;
-  getRecentFiles: () => Promise<RecentCsvFile[]>;
+  getRecentCsvSources: () => Promise<RecentCsvSource[]>;
   getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
   getCsvColumnValueCounts: (request: CsvColumnValueCountsRequest) => Promise<CsvColumnValueCounts>;
   editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
@@ -447,7 +451,7 @@ export const ipcChannels = {
   swapComparison: 'comparison:swap',
   closeComparison: 'comparison:close',
   comparisonStateChanged: 'comparison:state-changed',
-  getRecentFiles: 'csv:get-recent-files',
+  getRecentCsvSources: 'csv:get-recent-sources',
   getCsvRows: 'csv:get-rows',
   getCsvColumnValueCounts: 'csv:get-column-value-counts',
   editCsvCell: 'csv:edit-cell',

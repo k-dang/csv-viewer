@@ -1,7 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import type {
   ComparisonOperationId,
   ComparisonSummary,
@@ -15,7 +12,8 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import { WorkingCsvStore } from './working-csv-store';
+import type { CsvWorkspace } from './csv-workspace';
+import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
 
 function session(
   workingCsvId: string,
@@ -25,7 +23,7 @@ function session(
   return {
     workingCsvId,
     dataRevision: 0,
-    file: { path: `C:/fixtures/${name}`, name, sizeBytes: 10 },
+    file: { sourceId: workingCsvId, location: `C:/fixtures/${name}`, name, sizeBytes: 10 },
     columns: columns.map((column) => ({ name: column, type: 'VARCHAR' })),
     rowCount: 0,
     dialect: {},
@@ -189,20 +187,17 @@ async function waitForReleaseAttemptCount(
   throw new Error(`Comparison worker release attempt count did not reach ${expectedCount}.`);
 }
 
-async function disposeRealFixture(
-  service: CsvComparisonService,
-  store: WorkingCsvStore,
-  tempDir: string,
-): Promise<void> {
-  try {
-    await service.dispose();
-  } finally {
-    try {
-      await store.disposeStore();
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+/** Polls the workspace until the Comparison has no operation in flight. */
+async function waitForWorkspaceIdle(
+  workspace: CsvWorkspace,
+  comparisonId: string,
+): Promise<ComparisonView> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const comparison = await workspace.getComparisonState(comparisonId);
+    if (comparison && !comparison.operation) return comparison;
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
+  throw new Error('Comparison did not settle.');
 }
 
 describe('CsvComparisonService interaction contract', () => {
@@ -321,30 +316,33 @@ describe('CsvComparisonService interaction contract', () => {
   });
 
   it('keeps the old result readable while a draft key fails validation, then marks it outdated', async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-service-'));
-    const store = new WorkingCsvStore();
-    const service = new CsvComparisonService(store, store.createComparisonExecutor());
+    const fixture = await CsvWorkspaceFixture.create();
+    const workspace = fixture.workspace;
     try {
-      const baselinePath = path.join(tempDir, 'a.csv');
-      const candidatePath = path.join(tempDir, 'b.csv');
-      await writeFile(baselinePath, 'id,name,status\n1,Ada,active\n2,Bob,old\n');
-      await writeFile(candidatePath, 'id,name,status\n1,Ada,active\n2,Bob,new\n');
-      const baseline = await store.openOrThrow(baselinePath);
-      const candidate = await store.openOrThrow(candidatePath);
-      const opened = service.open({
+      const baseline = await fixture.openSource(
+        'a.csv',
+        'id,name,status\n1,Ada,active\n2,Bob,old\n',
+      );
+      const candidate = await fixture.openSource(
+        'b.csv',
+        'id,name,status\n1,Ada,active\n2,Bob,new\n',
+      );
+      const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
 
       expect(
-        service.begin({
-          kind: 'apply-key',
-          comparisonId: opened.comparison.comparisonId,
-          key: ['id'],
-        }).status,
+        (
+          await workspace.beginComparison({
+            kind: 'apply-key',
+            comparisonId: opened.comparison.comparisonId,
+            key: ['id'],
+          })
+        ).status,
       ).toBe('accepted');
-      const applied = await waitForIdle(service, opened.comparison.comparisonId);
+      const applied = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
       expect(applied?.applied?.summary.rows).toEqual({
         changed: 1,
         baselineOnly: 0,
@@ -354,59 +352,63 @@ describe('CsvComparisonService interaction contract', () => {
       });
       const resultToken = applied?.applied?.resultToken;
 
-      await store.editCell({
+      await workspace.editCsvCell({
         workingCsvId: baseline.workingCsvId,
         rowId: '2',
         column: 'id',
         value: '1',
       });
       expect(
-        service.begin({
-          kind: 'apply-key',
-          comparisonId: opened.comparison.comparisonId,
-          key: ['id'],
-        }).status,
+        (
+          await workspace.beginComparison({
+            kind: 'apply-key',
+            comparisonId: opened.comparison.comparisonId,
+            key: ['id'],
+          })
+        ).status,
       ).toBe('accepted');
-      const invalid = await waitForIdle(service, opened.comparison.comparisonId);
-      expect(invalid?.lastAttempt?.status).toBe('invalid-key');
-      expect(invalid?.applied?.resultToken).toBe(resultToken);
+      const invalid = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
+      expect(invalid.lastAttempt?.status).toBe('invalid-key');
+      expect(invalid.applied?.resultToken).toBe(resultToken);
 
-      expect(service.getState(opened.comparison.comparisonId)?.applied?.freshness).toEqual({
-        kind: 'outdated',
-        changedSides: ['baseline'],
+      await expect(
+        workspace.getComparisonState(opened.comparison.comparisonId),
+      ).resolves.toMatchObject({
+        applied: { freshness: { kind: 'outdated', changedSides: ['baseline'] } },
       });
     } finally {
-      await disposeRealFixture(service, store, tempDir);
+      await fixture.dispose();
     }
   });
 
   it('serves bounded presentation windows and invalidates the old token after Swap sides', async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-window-'));
-    const store = new WorkingCsvStore();
-    const service = new CsvComparisonService(store, store.createComparisonExecutor());
+    const fixture = await CsvWorkspaceFixture.create();
+    const workspace = fixture.workspace;
     try {
-      const baselinePath = path.join(tempDir, 'a.csv');
-      const candidatePath = path.join(tempDir, 'b.csv');
-      await writeFile(baselinePath, 'id,name,status\n1,Ada,old\n2,Bob,same\n');
-      await writeFile(candidatePath, 'id,status,name\n1,new,Ada\n3,added,Cat\n');
-      const baseline = await store.openOrThrow(baselinePath);
-      const candidate = await store.openOrThrow(candidatePath);
-      const opened = service.open({
+      const baseline = await fixture.openSource(
+        'a.csv',
+        'id,name,status\n1,Ada,old\n2,Bob,same\n',
+      );
+      const candidate = await fixture.openSource(
+        'b.csv',
+        'id,status,name\n1,new,Ada\n3,added,Cat\n',
+      );
+      const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
-      service.begin({
+      await workspace.beginComparison({
         kind: 'apply-key',
         comparisonId: opened.comparison.comparisonId,
         key: ['id'],
       });
-      const applied = await waitForIdle(service, opened.comparison.comparisonId);
-      const token = applied?.applied?.resultToken;
+      const applied = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
+      const token = applied.applied?.resultToken;
       if (!token) throw new Error('result not applied');
 
       expect(
-        await service.getWindow({
+        await workspace.getComparisonWindow({
           comparisonId: opened.comparison.comparisonId,
           resultToken: token,
           offset: 0,
@@ -425,7 +427,7 @@ describe('CsvComparisonService interaction contract', () => {
         },
       });
 
-      const swapped = service.swap(opened.comparison.comparisonId);
+      const swapped = await workspace.swapComparison(opened.comparison.comparisonId);
       expect(swapped).toMatchObject({
         status: 'changed',
         comparison: { baseline: { workingCsvId: candidate.workingCsvId } },
@@ -434,7 +436,7 @@ describe('CsvComparisonService interaction contract', () => {
         throw new Error('comparison not swapped');
       }
       expect(
-        await service.getWindow({
+        await workspace.getComparisonWindow({
           comparisonId: opened.comparison.comparisonId,
           resultToken: token,
           offset: 0,
@@ -444,7 +446,7 @@ describe('CsvComparisonService interaction contract', () => {
         }),
       ).toMatchObject({ status: 'result-replaced' });
       expect(
-        await service.getWindow({
+        await workspace.getComparisonWindow({
           comparisonId: opened.comparison.comparisonId,
           resultToken: swapped.comparison.applied.resultToken,
           offset: 0,
@@ -462,41 +464,38 @@ describe('CsvComparisonService interaction contract', () => {
         },
       });
     } finally {
-      await disposeRealFixture(service, store, tempDir);
+      await fixture.dispose();
     }
   });
 
   it('awaits active work and emits no changed state after closing a Comparison', async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'comparison-close-'));
-    const store = new WorkingCsvStore();
-    const service = new CsvComparisonService(store, store.createComparisonExecutor());
+    const fixture = await CsvWorkspaceFixture.create();
+    const workspace = fixture.workspace;
     try {
-      const baselinePath = path.join(tempDir, 'a.csv');
-      const candidatePath = path.join(tempDir, 'b.csv');
-      await writeFile(baselinePath, 'id,value\n1,a\n2,b\n');
-      await writeFile(candidatePath, 'id,value\n1,a\n2,c\n');
-      const baseline = await store.openOrThrow(baselinePath);
-      const candidate = await store.openOrThrow(candidatePath);
-      const opened = service.open({
+      const baseline = await fixture.openSource('a.csv', 'id,value\n1,a\n2,b\n');
+      const candidate = await fixture.openSource('b.csv', 'id,value\n1,a\n2,c\n');
+      const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
       const events: string[] = [];
-      service.subscribe((event) => events.push(event.kind));
+      workspace.onComparisonEvent((event) => events.push(event.kind));
 
-      service.begin({
+      await workspace.beginComparison({
         kind: 'apply-key',
         comparisonId: opened.comparison.comparisonId,
         key: ['id'],
       });
-      await service.close(opened.comparison.comparisonId);
+      await workspace.closeComparison(opened.comparison.comparisonId);
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(events.at(-1)).toBe('closed');
-      expect(service.getState(opened.comparison.comparisonId)).toBeNull();
+      await expect(
+        workspace.getComparisonState(opened.comparison.comparisonId),
+      ).resolves.toBeNull();
     } finally {
-      await disposeRealFixture(service, store, tempDir);
+      await fixture.dispose();
     }
   });
 

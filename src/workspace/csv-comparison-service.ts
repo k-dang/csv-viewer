@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type {
   BeginComparisonRequest,
   CancelComparisonRequest,
@@ -25,6 +24,15 @@ import type {
 } from '../shared/ipc';
 import { orderComparisonValueColumns } from '../shared/comparison-presentation';
 import type { ComparisonExecutor } from './comparison-executor';
+import {
+  compareColumns,
+  hasInvalidKeys,
+  rejected,
+  sharedColumnNames,
+  sideOrder,
+  validateKeyShape,
+} from './comparison-key-rules';
+import { copySummary, projectComparison } from './comparison-projection';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -135,7 +143,7 @@ export class CsvComparisonService {
         if (compatibilityOrder !== 0) return compatibilityOrder;
         return (
           compareText(left.workingCsv.file.name, right.workingCsv.file.name) ||
-          compareText(left.workingCsv.file.path, right.workingCsv.file.path)
+          compareText(left.workingCsv.file.location, right.workingCsv.file.location)
         );
       });
   }
@@ -169,7 +177,7 @@ export class CsvComparisonService {
     }
 
     const entity: ComparisonRecord = {
-      comparisonId: randomUUID(),
+      comparisonId: crypto.randomUUID(),
       version: 1,
       baselineId: request.baselineId,
       candidateId: request.candidateId,
@@ -212,7 +220,7 @@ export class CsvComparisonService {
       );
 
     const operation: Operation = {
-      operationId: randomUUID(),
+      operationId: crypto.randomUUID(),
       intent: request.kind,
       phase: 'validating',
       cancelRequested: false,
@@ -341,7 +349,7 @@ export class CsvComparisonService {
             .sort(sideOrder),
         };
       }
-      snapshot.resultToken = randomUUID();
+      snapshot.resultToken = crypto.randomUUID();
     }
     this.publishChange(entity);
     return { status: 'changed', comparison: this.project(entity) };
@@ -687,22 +695,18 @@ export class CsvComparisonService {
   private availableKeyColumns(entity: ComparisonRecord): string[] {
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);
-    if (!baseline || !candidate) return [];
-    const candidateColumns = new Set(candidate.columns.map((column) => column.name));
-    return baseline.columns
-      .map((column) => column.name)
-      .filter((column) => candidateColumns.has(column));
+    return baseline && candidate ? sharedColumnNames(baseline, candidate) : [];
   }
 
   private project(entity: ComparisonRecord): ComparisonView {
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);
     if (!baseline || !candidate) throw new Error('Comparison source invariant violated.');
-    return {
+    return projectComparison({
       comparisonId: entity.comparisonId,
       version: entity.version,
-      baseline: projectWorkingCsvRef(baseline),
-      candidate: projectWorkingCsvRef(candidate),
+      baseline,
+      candidate,
       availableKeyColumns: this.availableKeyColumns(entity),
       operation:
         entity.activity.kind === 'running'
@@ -712,19 +716,9 @@ export class CsvComparisonService {
               phase: entity.activity.operation.phase,
             }
           : null,
-      applied: entity.snapshot
-        ? {
-            key: [...entity.snapshot.key],
-            resultToken: entity.snapshot.resultToken,
-            freshness:
-              entity.snapshot.freshness.kind === 'current'
-                ? { kind: 'current' }
-                : { kind: 'outdated', changedSides: [...entity.snapshot.freshness.changedSides] },
-            summary: copySummary(entity.snapshot.summary),
-          }
-        : null,
+      applied: entity.snapshot,
       lastAttempt: entity.activity.kind === 'idle' ? entity.activity.lastAttempt : null,
-    };
+    });
   }
 
   private settle(
@@ -778,64 +772,15 @@ export class CsvComparisonService {
   }
 }
 
-function compareColumns(
-  baseline: WorkingCsvView,
-  candidate: WorkingCsvView,
-): ComparisonCandidate['compatibility'] {
-  const baselineNames = baseline.columns.map((column) => column.name);
-  const candidateNames = candidate.columns.map((column) => column.name);
-  const baselineSet = new Set(baselineNames);
-  const candidateSet = new Set(candidateNames);
-  const missingFromBaseline = candidateNames.filter((name) => !baselineSet.has(name));
-  const missingFromCandidate = baselineNames.filter((name) => !candidateSet.has(name));
-  return missingFromBaseline.length === 0 && missingFromCandidate.length === 0
-    ? { kind: 'compatible' }
-    : { kind: 'incompatible', missingFromBaseline, missingFromCandidate };
-}
 
-function validateKeyShape(key: string[], available: string[]): ComparisonFault | null {
-  if (key.length === 0 || new Set(key).size !== key.length)
-    return fault('invalid-key-shape', 'Choose one or more distinct Comparison Key columns.');
-  const known = new Set(available);
-  if (key.some((column) => !known.has(column)))
-    return fault(
-      'unknown-key-column',
-      'The Comparison Key contains a column that is not shared by both Working CSVs.',
-    );
-  return null;
-}
 
-function hasInvalidKeys(diagnostics: ComparisonKeyDiagnostics): boolean {
-  return (
-    diagnostics.baseline.blankRowCount > 0 ||
-    diagnostics.baseline.duplicateGroupCount > 0 ||
-    diagnostics.candidate.blankRowCount > 0 ||
-    diagnostics.candidate.duplicateGroupCount > 0
-  );
-}
 
-function copySummary(summary: ComparisonSummary): ComparisonSummary {
-  return {
-    rows: { ...summary.rows },
-    changedColumns: summary.changedColumns.map((column) => ({ ...column })),
-  };
-}
 
-function projectWorkingCsvRef(workingCsv: WorkingCsvView): WorkingCsvRef {
-  return {
-    workingCsvId: workingCsv.workingCsvId,
-    file: { ...workingCsv.file },
-    columns: workingCsv.columns.map((column) => ({ ...column })),
-  };
-}
 
 function pairKey(left: string, right: string): string {
   return [left, right].sort().join('\u0000');
 }
 
-function sideOrder(left: ComparisonSide, right: ComparisonSide): number {
-  return left === right ? 0 : left === 'baseline' ? -1 : 1;
-}
 
 function compareText(left: string, right: string): number {
   return left.localeCompare(right, undefined, { sensitivity: 'base' });
@@ -845,13 +790,4 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function fault(code: ComparisonFault['code'], message: string): ComparisonFault {
-  return { code, message };
-}
 
-function rejected(
-  code: ComparisonFault['code'],
-  message: string,
-): { status: 'rejected'; fault: ComparisonFault } {
-  return { status: 'rejected', fault: fault(code, message) };
-}

@@ -4,13 +4,13 @@ import type { WorkingCsvView } from '../../shared/ipc';
 import { CsvGrid } from './csv-grid';
 
 export function CsvMetadataView({
-  session,
+  workingCsv,
   dialectError,
   themeMode,
   exportRequestSequence,
   onUnexportedChangesChange,
 }: {
-  session: WorkingCsvView;
+  workingCsv: WorkingCsvView;
   dialectError: string | null;
   themeMode: 'light' | 'dark';
   exportRequestSequence?: number;
@@ -31,7 +31,7 @@ export function CsvMetadataView({
       ) : null}
 
       <CsvGrid
-        session={session}
+        workingCsv={workingCsv}
         themeMode={themeMode}
         exportRequestSequence={exportRequestSequence}
         onUnexportedChangesChange={onUnexportedChangesChange}

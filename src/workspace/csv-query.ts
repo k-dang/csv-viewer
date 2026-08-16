@@ -1,18 +1,158 @@
 import type {
   CsvCellValue,
   CsvColumn,
+  CsvDialectOptions,
   CsvFilterDescriptor,
   CsvSortDescriptor,
 } from '../shared/ipc';
 import { csvInternalRowIdField } from '../shared/ipc';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 
-type QueryValues = Array<string | number | boolean | null>;
+export type QueryValues = Array<string | number | boolean | null>;
 
-export function normalizeCellValue(value: unknown): CsvCellValue {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value.toISOString();
-  return typeof value === 'string' ? value : String(value);
+export type CsvStatement = { sql: string; values: QueryValues };
+
+export function buildCreateWorkingCsvTableSql(
+  tableName: string,
+  engineSourceReference: string,
+  dialect: CsvDialectOptions,
+): string {
+  const readArguments = [quoteLiteral(engineSourceReference), 'all_varchar = true'];
+  if (dialect.delimiter) readArguments.push(`delim = ${quoteLiteral(dialect.delimiter)}`);
+  if (dialect.header !== undefined) {
+    readArguments.push(`header = ${dialect.header ? 'true' : 'false'}`);
+  }
+
+  return `CREATE TABLE ${quoteIdentifier(tableName)} AS SELECT CAST(row_number() OVER () AS VARCHAR) AS ${quoteIdentifier(
+    csvInternalRowIdField,
+  )}, row_number() OVER () AS ${quoteIdentifier(csvSourceOrderField)}, false AS ${quoteIdentifier(
+    csvDeletedField,
+  )}, * FROM read_csv_auto(${readArguments.join(', ')})`;
+}
+
+export function buildDescribeColumnsSql(tableName: string): string {
+  return `DESCRIBE SELECT * FROM ${quoteIdentifier(tableName)}`;
+}
+
+export function buildRowCountSql(tableName: string): string {
+  return `SELECT count(*)::BIGINT AS row_count FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+    csvDeletedField,
+  )} = false`;
+}
+
+export function buildDropTableSql(tableName: string): string {
+  return `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`;
+}
+
+export function buildCellValueQuery(
+  tableName: string,
+  rowId: string,
+  column: string,
+): CsvStatement {
+  return {
+    sql: `SELECT ${quoteIdentifier(column)} AS cell_value FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
+    values: [rowId],
+  };
+}
+
+export function buildCellUpdateStatement(
+  tableName: string,
+  rowId: string,
+  column: string,
+  value: CsvCellValue,
+): CsvStatement {
+  return {
+    sql: `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(column)} = ? WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ?`,
+    values: [value, rowId],
+  };
+}
+
+export function buildRowDeletionStatement(
+  tableName: string,
+  rowIds: string[],
+  deleted: boolean,
+): CsvStatement {
+  return {
+    sql: `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} IN (${buildPlaceholders(rowIds.length)})`,
+    values: [deleted, ...rowIds],
+  };
+}
+
+export function buildExistingRowIdsQuery(tableName: string, rowIds: string[]): CsvStatement {
+  return {
+    sql: `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} IN (${buildPlaceholders(rowIds.length)}) AND ${quoteIdentifier(csvDeletedField)} = false`,
+    values: rowIds,
+  };
+}
+
+export function buildNextRowIdSql(tableName: string): string {
+  return `SELECT coalesce(max(CAST(${quoteIdentifier(csvInternalRowIdField)} AS BIGINT)), 0)::BIGINT + 1 AS next_row_id FROM ${quoteIdentifier(tableName)}`;
+}
+
+export function buildAppendSourceOrderSql(tableName: string): string {
+  return `SELECT coalesce(max(${quoteIdentifier(csvSourceOrderField)}), 0)::BIGINT + 1 AS source_order FROM ${quoteIdentifier(tableName)}`;
+}
+
+export function buildRowSourceOrderQuery(tableName: string, rowId: string): CsvStatement {
+  return {
+    sql: `SELECT ${quoteIdentifier(csvSourceOrderField)} AS source_order FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+      csvInternalRowIdField,
+    )} = ? AND ${quoteIdentifier(csvDeletedField)} = false`,
+    values: [rowId],
+  };
+}
+
+export function buildSourceOrderShiftStatement(
+  tableName: string,
+  fromSourceOrder: number,
+): CsvStatement {
+  return {
+    sql: `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvSourceOrderField)} = ${quoteIdentifier(
+      csvSourceOrderField,
+    )} + 1 WHERE ${quoteIdentifier(csvSourceOrderField)} >= ?`,
+    values: [fromSourceOrder],
+  };
+}
+
+export function buildEmptyRowInsertStatement({
+  tableName,
+  columns,
+  rowId,
+  sourceOrder,
+}: {
+  tableName: string;
+  columns: CsvColumn[];
+  rowId: string;
+  sourceOrder: number;
+}): CsvStatement {
+  const insertColumns = [
+    csvInternalRowIdField,
+    csvSourceOrderField,
+    csvDeletedField,
+    ...columns.map((column) => column.name),
+  ];
+
+  return {
+    sql: `INSERT INTO ${quoteIdentifier(tableName)} (${insertColumns
+      .map((column) => quoteIdentifier(column))
+      .join(', ')}) VALUES (${buildPlaceholders(insertColumns.length)})`,
+    values: [rowId, sourceOrder, false, ...columns.map(() => '')],
+  };
+}
+
+export function buildExportRowsSql(tableName: string, columns: CsvColumn[]): string {
+  const projection = columns.map((column) => quoteIdentifier(column.name)).join(', ');
+  return `SELECT ${projection} FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
+    csvDeletedField,
+  )} = false ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
 }
 
 export function buildRowsQuery({
@@ -125,16 +265,16 @@ export function assertKnownColumn(column: string, knownColumns: Set<string>): vo
   if (!knownColumns.has(column)) throw new Error(`Unknown CSV column: ${column}`);
 }
 
-export function normalizeCount(value: unknown): number {
-  const count = Number(value);
-  if (!Number.isSafeInteger(count) || count < 0) {
-    throw new Error('DuckDB returned an invalid non-negative count.');
-  }
-  return count;
-}
-
 export function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+export function quoteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+export function buildPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ');
 }
 
 function buildSearchClause(

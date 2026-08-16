@@ -26,7 +26,7 @@ type StatsState =
   | { status: 'failed'; message: string };
 
 export function CsvStatsPanel({
-  session,
+  workingCsv,
   selectedColumn,
   filters,
   search,
@@ -34,7 +34,7 @@ export function CsvStatsPanel({
   onColumnChange,
   onClose,
 }: {
-  session: WorkingCsvView;
+  workingCsv: WorkingCsvView;
   selectedColumn: string;
   filters: CsvFilterDescriptor[];
   search: string;
@@ -50,7 +50,7 @@ export function CsvStatsPanel({
     setStatsState({ status: 'loading' });
     window.csvViewer
       .getCsvColumnValueCounts({
-        workingCsvId: session.workingCsvId,
+        workingCsvId: workingCsv.workingCsvId,
         column: selectedColumn,
         filters,
         search,
@@ -72,7 +72,7 @@ export function CsvStatsPanel({
     return () => {
       cancelled = true;
     };
-  }, [session.workingCsvId, selectedColumn, filters, search, refreshKey]);
+  }, [workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
 
   return (
     <aside className="grid min-h-0 w-full min-w-0 grid-rows-[auto_1fr] border-l bg-card md:w-[320px]" aria-label="Stats Panel">
@@ -95,7 +95,7 @@ export function CsvStatsPanel({
             <SelectValue placeholder="Select a column" />
           </SelectTrigger>
           <SelectContent>
-            {session.columns.map((column) => (
+            {workingCsv.columns.map((column) => (
               <SelectItem key={column.name} value={column.name}>
                 {column.name}
               </SelectItem>

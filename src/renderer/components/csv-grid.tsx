@@ -119,29 +119,29 @@ const csvGridDarkTheme = themeQuartz.withParams({
 const filterDebounceMs = 1500;
 
 export function CsvGrid({
-  session,
+  workingCsv,
   themeMode,
   exportRequestSequence = 0,
   onUnexportedChangesChange,
 }: {
-  session: WorkingCsvView;
+  workingCsv: WorkingCsvView;
   themeMode: 'light' | 'dark';
   exportRequestSequence?: number;
   onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
 }) {
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
-  const [filteredRowCount, setFilteredRowCount] = useState(session.rowCount);
-  const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(session.rowCount);
+  const [filteredRowCount, setFilteredRowCount] = useState(workingCsv.rowCount);
+  const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(workingCsv.rowCount);
   const [hasActiveQuery, setHasActiveQuery] = useState(false);
   const hasActiveQueryRef = useRef(false);
   const [queryState, setQueryState] = useState<QueryState>('idle');
-  const [editState, setEditState] = useState<CsvEditState>(session.editState);
+  const [editState, setEditState] = useState<CsvEditState>(workingCsv.editState);
   const [editError, setEditError] = useState<string | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
   const [statsPanelOpen, setStatsPanelOpen] = useState(false);
-  const [statsColumn, setStatsColumn] = useState(session.columns[0]?.name ?? '');
+  const [statsColumn, setStatsColumn] = useState(workingCsv.columns[0]?.name ?? '');
   const [focusedColumn, setFocusedColumn] = useState<string | null>(null);
   const [statsFilters, setStatsFilters] = useState<CsvFilterDescriptor[]>([]);
   const [statsRefreshKey, setStatsRefreshKey] = useState(0);
@@ -150,7 +150,7 @@ export function CsvGrid({
   const handledExportRequestSequenceRef = useRef(0);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
-      session.columns.map((column) => ({
+      workingCsv.columns.map((column) => ({
         field: column.name,
         headerName: column.name,
         minWidth: getColumnMinWidth(column.type),
@@ -167,7 +167,7 @@ export function CsvGrid({
         },
         valueFormatter: ({ value }) => formatCellValue(value as CsvCellValue | undefined),
       })),
-    [session.columns],
+    [workingCsv.columns],
   );
 
   useEffect(() => {
@@ -185,25 +185,25 @@ export function CsvGrid({
   }, [exportRequestSequence]);
 
   useEffect(() => {
-    setEditState(session.editState);
-    setFilteredRowCount(session.rowCount);
-    setDisplayedTotalRowCount(session.rowCount);
+    setEditState(workingCsv.editState);
+    setFilteredRowCount(workingCsv.rowCount);
+    setDisplayedTotalRowCount(workingCsv.rowCount);
     setHasActiveQuery(false);
     hasActiveQueryRef.current = false;
     setEditError(null);
     setSelectedRowIds([]);
     setStatsPanelOpen(false);
-    setStatsColumn(session.columns[0]?.name ?? '');
+    setStatsColumn(workingCsv.columns[0]?.name ?? '');
     setFocusedColumn(null);
     setStatsFilters([]);
     setStatsRefreshKey((current) => current + 1);
     void refreshEditState();
-  }, [session]);
+  }, [workingCsv]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
     const datasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       window.csvViewer,
       handleFilteredRowCount,
       searchRef.current,
@@ -224,7 +224,7 @@ export function CsvGrid({
     setStatsFilters(getCsvFilters(api));
     setStatsRefreshKey((current) => current + 1);
     const datasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       window.csvViewer,
       handleFilteredRowCount,
       search,
@@ -232,7 +232,7 @@ export function CsvGrid({
       setQueryState,
     );
     api.setGridOption('datasource', datasource);
-  }, [search, session]);
+  }, [search, workingCsv]);
 
   function clearQuery() {
     const api = gridApiRef.current;
@@ -252,7 +252,7 @@ export function CsvGrid({
     setFilteredRowCount(displayedTotalRowCount);
     updateActiveQueryState(false);
     const datasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       window.csvViewer,
       handleFilteredRowCount,
       '',
@@ -297,7 +297,7 @@ export function CsvGrid({
     try {
       setEditError(null);
       const result = await window.csvViewer.editCsvCell({
-        workingCsvId: session.workingCsvId,
+        workingCsvId: workingCsv.workingCsvId,
         rowId,
         column,
         value: String(event.newValue ?? ''),
@@ -317,7 +317,7 @@ export function CsvGrid({
 
   async function refreshEditState() {
     try {
-      setEditState(await window.csvViewer.getCsvEditState({ workingCsvId: session.workingCsvId }));
+      setEditState(await window.csvViewer.getCsvEditState({ workingCsvId: workingCsv.workingCsvId }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to read edit state.';
       setEditError(message);
@@ -331,8 +331,8 @@ export function CsvGrid({
       setEditError(null);
       const nextEditState =
         action === 'undo'
-          ? await window.csvViewer.undoCsvEdit({ workingCsvId: session.workingCsvId })
-          : await window.csvViewer.redoCsvEdit({ workingCsvId: session.workingCsvId });
+          ? await window.csvViewer.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId })
+          : await window.csvViewer.redoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
       setStatsRefreshKey((current) => current + 1);
@@ -354,7 +354,7 @@ export function CsvGrid({
       setEditError(null);
       setEditState(
         await window.csvViewer.deleteCsvRows({
-          workingCsvId: session.workingCsvId,
+          workingCsvId: workingCsv.workingCsvId,
           rowIds: selectedRowIds,
         }),
       );
@@ -375,7 +375,7 @@ export function CsvGrid({
       setEditError(null);
       setEditState(
         await window.csvViewer.insertCsvRow({
-          workingCsvId: session.workingCsvId,
+          workingCsvId: workingCsv.workingCsvId,
           placement,
           rowIds: selectedRowIds,
           hasActiveQuery,
@@ -394,7 +394,7 @@ export function CsvGrid({
   async function exportCsv() {
     try {
       setEditError(null);
-      const result = await window.csvViewer.exportCsv({ workingCsvId: session.workingCsvId });
+      const result = await window.csvViewer.exportCsv({ workingCsvId: workingCsv.workingCsvId });
 
       if (isCancelledExportResult(result)) {
         return;
@@ -431,7 +431,7 @@ export function CsvGrid({
       if (nextOpen) {
         setStatsColumn((currentColumn) => {
           return resolveStatsColumnOnOpen({
-            columns: session.columns,
+            columns: workingCsv.columns,
             currentColumn,
             focusedColumn,
           });
@@ -443,7 +443,7 @@ export function CsvGrid({
   }
 
   const hasSearch = search.trim().length > 0;
-  const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== session.rowCount;
+  const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== workingCsv.rowCount;
   const canInsertRelative = !hasActiveQuery && selectedRowIds.length === 1;
   const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
 
@@ -462,9 +462,9 @@ export function CsvGrid({
               <h2
                 id="metadata-title"
                 className="truncate text-base font-semibold text-foreground"
-                title={session.file.name}
+                title={workingCsv.file.name}
               >
-                {session.file.name}
+                {workingCsv.file.name}
               </h2>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                 <span>
@@ -473,11 +473,11 @@ export function CsvGrid({
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <Table2 className="size-3.5" aria-hidden="true" />
-                  {formatNumber(session.columns.length)} columns
+                  {formatNumber(workingCsv.columns.length)} columns
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <HardDrive className="size-3.5" aria-hidden="true" />
-                  {formatFileSize(session.file.sizeBytes)}
+                  {formatFileSize(workingCsv.file.sizeBytes)}
                 </span>
                 {editState.hasUnexportedChanges ? (
                   <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
@@ -605,7 +605,7 @@ export function CsvGrid({
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           <AgGridReact<CsvRow>
-            key={session.workingCsvId}
+            key={workingCsv.workingCsvId}
             theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
             columnDefs={columnDefs}
             defaultColDef={{
@@ -639,7 +639,7 @@ export function CsvGrid({
         </div>
         {statsPanelOpen && statsColumn ? (
           <CsvStatsPanel
-            session={session}
+            workingCsv={workingCsv}
             selectedColumn={statsColumn}
             filters={statsFilters}
             search={search.trim()}

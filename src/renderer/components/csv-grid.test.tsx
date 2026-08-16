@@ -13,10 +13,10 @@ afterEach(() => {
 
 describe('CsvGrid', () => {
   it('offers Export CSV for an open Working CSV without Unexported Changes', () => {
-    const session: WorkingCsvView = {
+    const workingCsv: WorkingCsvView = {
       workingCsvId: 'working-csv-1',
       dataRevision: 0,
-      file: { path: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
+      file: { sourceId: 'source-1', location: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
       columns: [{ name: 'name', type: 'VARCHAR' }],
       rowCount: 1,
       dialect: {},
@@ -28,17 +28,17 @@ describe('CsvGrid', () => {
       },
     };
 
-    const markup = renderToStaticMarkup(<CsvGrid session={session} themeMode="light" />);
+    const markup = renderToStaticMarkup(<CsvGrid workingCsv={workingCsv} themeMode="light" />);
 
     expect(markup).toContain('aria-label="Export CSV"');
     expect(markup).not.toMatch(/<button[^>]*aria-label="Export CSV"[^>]*disabled/);
   });
 
   it('presents Unexported Changes using the product language', () => {
-    const session: WorkingCsvView = {
+    const workingCsv: WorkingCsvView = {
       workingCsvId: 'working-csv-1',
       dataRevision: 1,
-      file: { path: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
+      file: { sourceId: 'source-1', location: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
       columns: [{ name: 'name', type: 'VARCHAR' }],
       rowCount: 1,
       dialect: {},
@@ -50,7 +50,7 @@ describe('CsvGrid', () => {
       },
     };
 
-    const markup = renderToStaticMarkup(<CsvGrid session={session} themeMode="light" />);
+    const markup = renderToStaticMarkup(<CsvGrid workingCsv={workingCsv} themeMode="light" />);
 
     expect(markup).toContain('Unexported Changes');
   });
@@ -59,7 +59,7 @@ describe('CsvGrid', () => {
     const editedSession: WorkingCsvView = {
       workingCsvId: 'working-csv-1',
       dataRevision: 1,
-      file: { path: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
+      file: { sourceId: 'source-1', location: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
       columns: [{ name: 'name', type: 'VARCHAR' }],
       rowCount: 1,
       dialect: {},
@@ -91,7 +91,7 @@ describe('CsvGrid', () => {
     await act(async () => {
       renderer = create(
         <CsvGrid
-          session={editedSession}
+          workingCsv={editedSession}
           themeMode="light"
           onUnexportedChangesChange={onUnexportedChangesChange}
         />,
@@ -102,7 +102,7 @@ describe('CsvGrid', () => {
     await act(async () => {
       renderer.update(
         <CsvGrid
-          session={reopenedSession}
+          workingCsv={reopenedSession}
           themeMode="light"
           onUnexportedChangesChange={onUnexportedChangesChange}
         />,

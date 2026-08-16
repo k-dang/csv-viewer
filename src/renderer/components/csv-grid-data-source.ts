@@ -10,7 +10,7 @@ import type {
 } from '../../shared/ipc';
 
 export function createCsvGridDataSource(
-  session: WorkingCsvView,
+  workingCsv: WorkingCsvView,
   api: Pick<CsvViewerApi, 'getCsvRows'>,
   onFilteredRowCount?: (rowCount: number) => void,
   search = '',
@@ -18,7 +18,7 @@ export function createCsvGridDataSource(
   onQueryState?: (state: 'querying' | 'ready' | 'failed') => void,
 ): IDatasource {
   return {
-    rowCount: session.rowCount,
+    rowCount: workingCsv.rowCount,
     getRows: (params: IGetRowsParams) => {
       const requestId = requestState.latestRequestId + 1;
       requestState.latestRequestId = requestId;
@@ -33,7 +33,7 @@ export function createCsvGridDataSource(
       onQueryState?.('querying');
 
       api
-        .getCsvRows({ workingCsvId: session.workingCsvId, offset, limit, ...query })
+        .getCsvRows({ workingCsvId: workingCsv.workingCsvId, offset, limit, ...query })
         .then((window) => {
           if (requestId !== requestState.latestRequestId) {
             return;

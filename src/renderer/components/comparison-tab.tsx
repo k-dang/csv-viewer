@@ -117,7 +117,7 @@ export function ComparisonTab({
           <SourceCard
             label="Baseline"
             name={comparison.baseline.file.name}
-            path={comparison.baseline.file.path}
+            location={comparison.baseline.file.location}
           />
           <div className="flex items-center">
             <Button
@@ -133,7 +133,7 @@ export function ComparisonTab({
           <SourceCard
             label="Candidate"
             name={comparison.candidate.file.name}
-            path={comparison.candidate.file.path}
+            location={comparison.candidate.file.location}
           />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Button
@@ -354,12 +354,12 @@ export function ComparisonTab({
   );
 }
 
-function SourceCard({ label, name, path }: { label: string; name: string; path: string }) {
+function SourceCard({ label, name, location }: { label: string; name: string; location: string }) {
   return (
     <div className="min-w-48 flex-1 rounded-lg border bg-background px-3 py-2">
       <p className="text-[11px] font-bold uppercase text-muted-foreground">{label}</p>
       <p className="truncate font-semibold">{name}</p>
-      <p className="truncate text-xs text-muted-foreground">{path}</p>
+      <p className="truncate text-xs text-muted-foreground">{location}</p>
     </div>
   );
 }
