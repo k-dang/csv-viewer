@@ -1,3 +1,5 @@
+import { toError } from '../shared/errors';
+import { supportedCsvFileExtensions } from '../shared/ipc';
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
@@ -18,17 +20,17 @@ import type {
   WorkingCsvView,
 } from '../shared/ipc';
 import type { ComparisonExecutor } from './comparison-executor';
-import { CsvEditHistory, rowCountDelta } from './csv-edit-history';
+import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import {
   assertKnownColumn,
   buildColumnValueCountsQuery,
   buildRowsQuery,
+  maxRowWindowLimit,
 } from './csv-query';
 import { normalizeCellValue, normalizeCount, normalizeRow } from './csv-result-normalization';
 import {
   applyCellValue,
-  applyEditCommand,
   applyRowDeletion,
   assertRowsExist,
   createWorkingCsvTable,
@@ -38,7 +40,7 @@ import {
   readColumns,
   readExportRows,
   readRowCount,
-  revertEditCommand,
+  runEditCommand,
   type CsvTable,
 } from './csv-working-csv-table';
 import { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
@@ -47,7 +49,6 @@ import { CsvSourceUnavailableError, type CsvWorkspaceHost } from './workspace-ho
 import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 
 const workingCsvTablePrefix = 'csv_working_';
-const supportedFileExtensions = ['.csv', '.tsv', '.txt'];
 
 type WorkingCsvState = {
   metadata: Omit<WorkingCsvView, 'editState'>;
@@ -110,7 +111,7 @@ export class WorkingCsvStore {
     }
   }
 
-  findBySource(sourceId: CsvSourceId): WorkingCsvView | null {
+  private findBySource(sourceId: CsvSourceId): WorkingCsvView | null {
     for (const state of this.workingCsvs.values()) {
       if (state.sourceId === sourceId) return buildWorkingCsvView(state);
     }
@@ -120,6 +121,11 @@ export class WorkingCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null {
     const state = this.workingCsvs.get(workingCsvId);
     return state ? buildWorkingCsvView(state) : null;
+  }
+
+  /** Existence without the cost of projecting a whole Working CSV view. */
+  has(workingCsvId: WorkingCsvId): boolean {
+    return this.workingCsvs.has(workingCsvId);
   }
 
   list(): WorkingCsvView[] {
@@ -255,7 +261,7 @@ export class WorkingCsvStore {
 
       this.artifactRegistry.assertEmpty();
     } catch (error) {
-      disposalFailure = asError(error);
+      disposalFailure = toError(error);
     } finally {
       teardownFailures = this.database.close();
       this.lifecycle = 'disposed';
@@ -286,8 +292,8 @@ export class WorkingCsvStore {
       const offset = validateWindowInteger(request.offset, 'offset');
       const limit = validateWindowInteger(request.limit, 'limit');
 
-      if (limit > 1000) {
-        throw new Error('Row window limit must be 1000 or less.');
+      if (limit > maxRowWindowLimit) {
+        throw new Error(`Row window limit must be ${maxRowWindowLimit} or less.`);
       }
 
       const query = buildRowsQuery({
@@ -319,8 +325,6 @@ export class WorkingCsvStore {
     try {
       const state = lease.state;
       const { metadata } = state;
-
-      assertKnownColumn(request.column, new Set(metadata.columns.map((column) => column.name)));
 
       const query = buildColumnValueCountsQuery({
         tableName: state.tableName,
@@ -424,19 +428,25 @@ export class WorkingCsvStore {
   }
 
   async undo(workingCsvId: WorkingCsvId): Promise<CsvEditState> {
-    return this.withWorkingCsvLease(workingCsvId, async (state) => {
-      const table = this.tableFor(state);
-      const command = await state.history.undo((entry) => revertEditCommand(table, entry));
-      this.commitDataChange(state, rowCountDelta(command, 'undo'));
-      return buildEditState(state);
-    });
+    return this.stepHistory(workingCsvId, 'undo');
   }
 
   async redo(workingCsvId: WorkingCsvId): Promise<CsvEditState> {
+    return this.stepHistory(workingCsvId, 'redo');
+  }
+
+  private async stepHistory(
+    workingCsvId: WorkingCsvId,
+    direction: 'undo' | 'redo',
+  ): Promise<CsvEditState> {
     return this.withWorkingCsvLease(workingCsvId, async (state) => {
       const table = this.tableFor(state);
-      const command = await state.history.redo((entry) => applyEditCommand(table, entry));
-      this.commitDataChange(state, rowCountDelta(command, 'redo'));
+      const replay = (entry: CsvEditCommand) => runEditCommand(table, entry, direction);
+      const command =
+        direction === 'undo'
+          ? await state.history.undo(replay)
+          : await state.history.redo(replay);
+      this.commitDataChange(state, rowCountDelta(command, direction));
       return buildEditState(state);
     });
   }
@@ -740,7 +750,7 @@ function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
 
 function isSupportedCsvSourceName(name: string): boolean {
   const lowerCaseName = name.toLowerCase();
-  return supportedFileExtensions.some((extension) => lowerCaseName.endsWith(extension));
+  return supportedCsvFileExtensions.some((extension) => lowerCaseName.endsWith(`.${extension}`));
 }
 
 function validateWindowInteger(value: number, label: string): number {
@@ -779,10 +789,6 @@ function unavailableWorkingCsvFailure(code: WorkingCsvFailure['code']): WorkingC
     message: 'The CSV workspace is closing.',
     retryable: false,
   };
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function normalizeOpenError(error: unknown): Error {

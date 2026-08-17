@@ -1,5 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { toError } from '../shared/errors';
 import type { CsvSourceId, RecentCsvSource } from '../shared/ipc';
 import {
   CsvSourceUnavailableError,
@@ -11,6 +12,8 @@ import {
 import {
   captureFileIdentity,
   chooseCsvExportDestination,
+  isFileSystemError,
+  normalizeCanonicalPath,
   sameFileIdentity,
   type CanonicalFileIdentity,
 } from './desktop-csv-export';
@@ -184,9 +187,7 @@ type RecentSourceEntry = {
 
 function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: string): string {
   if (identity && identity.inode !== 0n) return `inode:${identity.device}:${identity.inode}`;
-  const canonicalPath = identity?.canonicalPath ?? path.resolve(filePath);
-  const normalized = path.normalize(canonicalPath);
-  return `path:${process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized}`;
+  return `path:${normalizeCanonicalPath(identity?.canonicalPath ?? path.resolve(filePath))}`;
 }
 
 function buildDefaultExportName(sourceName: string): string {
@@ -195,7 +196,7 @@ function buildDefaultExportName(sourceName: string): string {
 }
 
 function toSourceUnavailableError(error: unknown): Error {
-  if (!isFileSystemError(error)) return error instanceof Error ? error : new Error(String(error));
+  if (!isFileSystemError(error)) return toError(error);
   if (error.code === 'ENOENT') {
     return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
   }
@@ -217,8 +218,4 @@ function isRecentSourceEntry(value: unknown): value is RecentSourceEntry {
     typeof candidate.sizeBytes === 'number' &&
     typeof candidate.lastOpenedAt === 'string'
   );
-}
-
-function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }

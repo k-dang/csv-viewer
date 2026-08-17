@@ -141,7 +141,7 @@ export class CsvWorkspace {
   }
 
   async exportCsv(request: CsvExportRequest): Promise<CsvEditState | { status: 'cancelled' }> {
-    if (!this.csvStore.getState(request.workingCsvId)) return { status: 'cancelled' };
+    if (!this.csvStore.has(request.workingCsvId)) return { status: 'cancelled' };
     return this.csvStore.exportCsv(request.workingCsvId);
   }
 
@@ -192,7 +192,7 @@ export class CsvWorkspace {
 
   async closeCsv(request: CloseWorkingCsvRequest): Promise<CloseWorkingCsvOutcome> {
     const { workingCsvId, confirmedImpact } = request;
-    if (!this.csvStore.getState(workingCsvId)) {
+    if (!this.csvStore.has(workingCsvId)) {
       return { status: 'closed', closedWorkingCsvId: workingCsvId, closedComparisonIds: [] };
     }
 
@@ -230,7 +230,7 @@ export class CsvWorkspace {
         },
       };
     } finally {
-      if (this.csvStore.getState(workingCsvId)) this.csvStore.endClose(workingCsvId);
+      if (this.csvStore.has(workingCsvId)) this.csvStore.endClose(workingCsvId);
     }
   }
 
@@ -258,7 +258,7 @@ export class CsvWorkspace {
   }
 
   private closeImpact(workingCsvId: WorkingCsvId): CloseImpact {
-    if (!this.csvStore.getState(workingCsvId)) {
+    if (!this.csvStore.has(workingCsvId)) {
       throw new Error('Working CSV is no longer active.');
     }
     return {

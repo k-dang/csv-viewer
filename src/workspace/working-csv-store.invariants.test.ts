@@ -1,8 +1,6 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DesktopWorkspaceHost } from '../main/desktop-workspace-host';
+import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
 import type { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 import { WorkingCsvStore } from './working-csv-store';
 import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
@@ -10,32 +8,23 @@ import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 /**
  * Store invariants that the CsvWorkspace surface cannot observe: disposal ordering when its own
  * validation fails, and isolation between the data-change listeners the Comparison area relies on.
+ * These drive a bare WorkingCsvStore, so they borrow only the fixture's host and temp directory.
  */
-let directory: string;
-let host: DesktopWorkspaceHost;
+let fixture: CsvWorkspaceFixture;
 let store: WorkingCsvStore;
 
 beforeEach(async () => {
-  directory = await mkdtemp(path.join(os.tmpdir(), 'csv-store-invariants-'));
-  host = new DesktopWorkspaceHost(
-    {
-      chooseSource: async () => null,
-      chooseExportDestination: async () => null,
-      showSourceConflict: async () => undefined,
-    },
-    path.join(directory, 'recent-sources.json'),
-  );
-  store = new WorkingCsvStore(host);
+  fixture = await CsvWorkspaceFixture.create();
+  store = new WorkingCsvStore(fixture.host);
 });
 
 afterEach(async () => {
-  await rm(directory, { recursive: true, force: true });
+  await rm(fixture.directory, { recursive: true, force: true });
 });
 
 async function openWorkingCsv(fileName: string, contents: string) {
-  const filePath = path.join(directory, fileName);
-  await writeFile(filePath, contents);
-  const outcome = await store.open(await host.registerSource(filePath));
+  const filePath = await fixture.writeSource(fileName, contents);
+  const outcome = await store.open(await fixture.sourceId(filePath));
   if (outcome.status !== 'opened') throw new Error(`Working CSV was ${outcome.status}.`);
   return outcome.workingCsv;
 }

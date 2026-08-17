@@ -17,12 +17,13 @@ import type {
   ComparisonWindowOutcome,
   ComparisonWindowRequest,
   WorkingCsvView,
-  WorkingCsvRef,
   WorkingCsvId,
   OpenComparisonResult,
   OpenComparisonRequest,
 } from '../shared/ipc';
 import { orderComparisonValueColumns } from '../shared/comparison-presentation';
+import { toError } from '../shared/errors';
+import { isValidRowWindow } from './csv-query';
 import type { ComparisonExecutor } from './comparison-executor';
 import {
   compareColumns,
@@ -32,7 +33,7 @@ import {
   sideOrder,
   validateKeyShape,
 } from './comparison-key-rules';
-import { copySummary, projectComparison } from './comparison-projection';
+import { projectComparison } from './comparison-projection';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -254,13 +255,7 @@ export class CsvComparisonService {
     if (!snapshot || snapshot.resultToken !== request.resultToken) {
       return { status: 'result-replaced', currentResultToken: snapshot?.resultToken ?? null };
     }
-    if (
-      !Number.isSafeInteger(request.offset) ||
-      request.offset < 0 ||
-      !Number.isSafeInteger(request.limit) ||
-      request.limit < 0 ||
-      request.limit > 1000
-    ) {
+    if (!isValidRowWindow(request.offset, request.limit)) {
       return rejected(
         'invalid-window',
         'Comparison windows require a non-negative offset and a limit of at most 1,000.',
@@ -411,13 +406,13 @@ export class CsvComparisonService {
         const result = await this.close(comparisonId);
         if (result.status === 'failed') failures.push(new Error(result.failure.message));
       } catch (error) {
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        failures.push(toError(error));
       }
     }
     try {
       await this.executor.dispose();
     } catch (error) {
-      failures.push(error instanceof Error ? error : new Error(String(error)));
+      failures.push(toError(error));
     }
     this.listeners.clear();
     if (failures.length > 0) {
@@ -772,15 +767,9 @@ export class CsvComparisonService {
   }
 }
 
-
-
-
-
-
 function pairKey(left: string, right: string): string {
   return [left, right].sort().join('\u0000');
 }
-
 
 function compareText(left: string, right: string): number {
   return left.localeCompare(right, undefined, { sensitivity: 'base' });
@@ -789,5 +778,3 @@ function compareText(left: string, right: string): number {
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-

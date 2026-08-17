@@ -1,4 +1,5 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
+import { toError } from '../../shared/errors';
 import type { QueryValues } from '../csv-query';
 
 export type DuckDbRow = Record<string, unknown>;
@@ -44,13 +45,13 @@ export class DuckDbWorkspaceDatabase {
     try {
       this.connection?.closeSync();
     } catch (error) {
-      failures.push(error instanceof Error ? error : new Error(String(error)));
+      failures.push(toError(error));
     }
     this.connection = null;
     try {
       this.instance?.closeSync();
     } catch (error) {
-      failures.push(error instanceof Error ? error : new Error(String(error)));
+      failures.push(toError(error));
     }
     this.instance = null;
     return failures;

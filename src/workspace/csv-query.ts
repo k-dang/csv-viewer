@@ -238,7 +238,7 @@ export function buildColumnValueCountsQuery({
   };
 }
 
-export function buildCountScopeWhere({
+function buildCountScopeWhere({
   columns,
   filters,
   search,
@@ -256,7 +256,7 @@ export function buildCountScopeWhere({
   return { whereSql: ` WHERE ${whereClauses.join(' AND ')}`, values };
 }
 
-export function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {
+function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {
   assertKnownColumn(descriptor.column, knownColumns);
   return `${quoteIdentifier(descriptor.column)} ${descriptor.direction === 'desc' ? 'DESC' : 'ASC'} NULLS LAST`;
 }
@@ -265,15 +265,29 @@ export function assertKnownColumn(column: string, knownColumns: Set<string>): vo
   if (!knownColumns.has(column)) throw new Error(`Unknown CSV column: ${column}`);
 }
 
+/** The most rows any single row-window request may return, for CSV rows and Comparison rows alike. */
+export const maxRowWindowLimit = 1000;
+
+/** The one definition of a well-formed row window. Callers phrase their own rejection. */
+export function isValidRowWindow(offset: number, limit: number): boolean {
+  return (
+    Number.isSafeInteger(offset) &&
+    offset >= 0 &&
+    Number.isSafeInteger(limit) &&
+    limit >= 0 &&
+    limit <= maxRowWindowLimit
+  );
+}
+
 export function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-export function quoteLiteral(value: string): string {
+function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-export function buildPlaceholders(count: number): string {
+function buildPlaceholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
 }
 

@@ -14,6 +14,7 @@ import { CsvWorkspace, type WorkspaceCloseImpact } from '../workspace/csv-worksp
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
 import {
   ipcChannels,
+  supportedCsvFileExtensions,
   type BeginComparisonRequest,
   type CancelComparisonRequest,
   type CloseWorkingCsvRequest,
@@ -40,7 +41,7 @@ const workspaceHost = new DesktopWorkspaceHost(
         title: 'Open CSV',
         properties: ['openFile'],
         filters: [
-          { name: 'CSV files', extensions: ['csv', 'tsv', 'txt'] },
+          { name: 'CSV files', extensions: [...supportedCsvFileExtensions] },
           { name: 'All files', extensions: ['*'] },
         ],
       });

@@ -15,7 +15,7 @@ import type {
 import type { CsvWorkspace } from './csv-workspace';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
 
-function session(
+function workingCsv(
   workingCsvId: string,
   name: string,
   columns = ['id', 'name', 'status'],
@@ -32,15 +32,15 @@ function session(
 }
 
 class FakeCsvStore {
-  readonly sessions = new Map<string, WorkingCsvView>();
+  readonly workingCsvs = new Map<string, WorkingCsvView>();
   private listeners = new Set<(workingCsvId: string) => void>();
 
   getState(workingCsvId: string) {
-    return this.sessions.get(workingCsvId) ?? null;
+    return this.workingCsvs.get(workingCsvId) ?? null;
   }
 
   list() {
-    return [...this.sessions.values()];
+    return [...this.workingCsvs.values()];
   }
 
   isClosing() {
@@ -53,9 +53,9 @@ class FakeCsvStore {
   }
 
   change(workingCsvId: string) {
-    const current = this.sessions.get(workingCsvId);
+    const current = this.workingCsvs.get(workingCsvId);
     if (current)
-      this.sessions.set(workingCsvId, { ...current, dataRevision: current.dataRevision + 1 });
+      this.workingCsvs.set(workingCsvId, { ...current, dataRevision: current.dataRevision + 1 });
     for (const listener of this.listeners) listener(workingCsvId);
   }
 }
@@ -203,9 +203,9 @@ async function waitForWorkspaceIdle(
 describe('CsvComparisonService interaction contract', () => {
   it('orders compatible candidates first and explains incompatible columns', () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'baseline.csv'));
-    store.sessions.set('b', session('b', 'z-compatible.csv'));
-    store.sessions.set('c', session('c', 'a-incompatible.csv', ['id', 'title']));
+    store.workingCsvs.set('a', workingCsv('a', 'baseline.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'z-compatible.csv'));
+    store.workingCsvs.set('c', workingCsv('c', 'a-incompatible.csv', ['id', 'title']));
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
 
     expect(service.candidatesFor('a')).toEqual([
@@ -226,8 +226,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('reuses an unordered pair without changing its orientation', () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
 
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
@@ -245,8 +245,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('resolves source-unavailable when a source disappears before generation starts', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
@@ -257,7 +257,7 @@ describe('CsvComparisonService interaction contract', () => {
       key: ['id'],
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
-    store.sessions.delete('a');
+    store.workingCsvs.delete('a');
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(begun.completion).resolves.toMatchObject({
@@ -276,8 +276,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('publishes a replacement before retiring the prior snapshot', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
@@ -501,8 +501,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('makes operation completion awaitable before publishing the running state', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
@@ -530,8 +530,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('publishes cancellation instead of translating an interrupted executor into query failure', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     executor.deferSnapshots = true;
     const service = new CsvComparisonService(store, executor);
@@ -561,8 +561,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('keeps the published replacement when retiring the prior snapshot fails', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
@@ -592,8 +592,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('publishes a replacement atomically before retiring the prior snapshot', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
@@ -632,8 +632,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('disposes the executor even when snapshot cleanup fails', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
@@ -651,8 +651,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('does not publish an invalid projection after a source disappears', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
@@ -661,7 +661,7 @@ describe('CsvComparisonService interaction contract', () => {
     const events: string[] = [];
     service.subscribe((event) => events.push(event.kind));
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    store.sessions.delete('a');
+    store.workingCsvs.delete('a');
 
     expect(() => store.change('a')).not.toThrow();
 
@@ -675,8 +675,8 @@ describe('CsvComparisonService interaction contract', () => {
 
   it('does not disguise a current snapshot read failure as result replacement', async () => {
     const store = new FakeCsvStore();
-    store.sessions.set('a', session('a', 'a.csv'));
-    store.sessions.set('b', session('b', 'b.csv'));
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
     const executor = new ScriptedComparisonExecutor();
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });

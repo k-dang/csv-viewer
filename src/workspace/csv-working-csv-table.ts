@@ -119,38 +119,41 @@ export async function insertEmptyRow(
   return rowId;
 }
 
+/**
+ * Returns engine rows as read. Cells are normalized during serialization rather than here, so
+ * exporting never holds a second full copy of the Working CSV in memory.
+ */
 export async function readExportRows(
   table: CsvTable,
   columns: CsvColumn[],
-): Promise<Array<Record<string, CsvCellValue>>> {
-  const rows = await table.database.readObjects(buildExportRowsSql(table.tableName, columns));
-  return rows.map((row) =>
-    Object.fromEntries(columns.map((column) => [column.name, normalizeCellValue(row[column.name])])),
-  );
+): Promise<Array<Record<string, unknown>>> {
+  return table.database.readObjects(buildExportRowsSql(table.tableName, columns));
 }
 
-export async function applyEditCommand(table: CsvTable, command: CsvEditCommand): Promise<void> {
+/**
+ * Replays an edit in either direction. Redo restores the command's new value and its deletions;
+ * undo restores the old value and reverses them - the same three cases with the sense flipped.
+ */
+export async function runEditCommand(
+  table: CsvTable,
+  command: CsvEditCommand,
+  direction: 'undo' | 'redo',
+): Promise<void> {
+  const redoing = direction === 'redo';
   if (command.type === 'cell-edit') {
-    await applyCellValue(table, command.rowId, command.column, command.newValue);
+    await applyCellValue(
+      table,
+      command.rowId,
+      command.column,
+      redoing ? command.newValue : command.oldValue,
+    );
     return;
   }
   if (command.type === 'delete-rows') {
-    await applyRowDeletion(table, command.rowIds, true);
+    await applyRowDeletion(table, command.rowIds, redoing);
     return;
   }
-  await applyRowDeletion(table, [command.rowId], false);
-}
-
-export async function revertEditCommand(table: CsvTable, command: CsvEditCommand): Promise<void> {
-  if (command.type === 'cell-edit') {
-    await applyCellValue(table, command.rowId, command.column, command.oldValue);
-    return;
-  }
-  if (command.type === 'delete-rows') {
-    await applyRowDeletion(table, command.rowIds, false);
-    return;
-  }
-  await applyRowDeletion(table, [command.rowId], true);
+  await applyRowDeletion(table, [command.rowId], !redoing);
 }
 
 async function nextRowId(table: CsvTable): Promise<string> {

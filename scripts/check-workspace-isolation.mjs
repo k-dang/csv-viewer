@@ -1,14 +1,18 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 /**
  * The shared workspace runs in the Electron main process today and in a browser page once the web
- * runtime lands, so it must not reach for Electron or Node filesystem primitives, and the native
- * DuckDB driver must stay in the named database modules the web adapter will sit beside.
+ * runtime lands, so it must not reach for Electron or Node filesystem primitives, must not import
+ * from a runtime-specific tree such as src/main, and the native DuckDB driver must stay in the
+ * named database modules the web adapter will sit beside.
  */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspaceRoot = path.join(repoRoot, 'src', 'workspace');
+/** The only source trees a workspace module may reach into: itself and the shared contracts. */
+const reachableRoots = [workspaceRoot, path.join(repoRoot, 'src', 'shared')];
 const duckDbDriver = '@duckdb/node-api';
 const duckDbDriverModules = ['duckdb/duckdb-comparison-executor.ts', 'duckdb/duckdb-database.ts'];
 const runtimeModules = [
@@ -21,24 +25,26 @@ const runtimeModules = [
   'worker_threads',
 ];
 
-/** Matches static imports, `export ... from`, and dynamic `import()` under either quote style. */
+/**
+ * Static imports, `export ... from`, dynamic `import()`, and bare `import 'x'`. The real parser
+ * does this without the false positives a regex scanner hits inside comments and string literals.
+ */
 function importedModules(contents) {
-  const specifiers = [];
-  const patterns = [
-    /(?:^|\s)(?:import|export)[\s\S]*?from\s*['"]([^'"]+)['"]/g,
-    /(?:^|[^.\w])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /(?:^|[^.\w])require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /(?:^|\s)import\s+['"]([^'"]+)['"]/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of contents.matchAll(pattern)) specifiers.push(match[1]);
-  }
-  return specifiers;
+  return ts.preProcessFile(contents, true, true).importedFiles.map((file) => file.fileName);
 }
 
 function isForbiddenRuntimeModule(specifier) {
   const bare = specifier.startsWith('node:') ? specifier.slice('node:'.length) : specifier;
   return runtimeModules.includes(bare);
+}
+
+/** True when a relative import escapes the workspace into a runtime-specific tree such as src/main. */
+function escapesWorkspace(specifier, fromFile) {
+  if (!specifier.startsWith('.')) return false;
+  const target = path.resolve(path.dirname(fromFile), specifier);
+  return !reachableRoots.some(
+    (root) => target === root || target.startsWith(`${root}${path.sep}`),
+  );
 }
 
 async function workspaceSourceFiles(directory = workspaceRoot) {
@@ -56,6 +62,7 @@ async function workspaceSourceFiles(directory = workspaceRoot) {
 
 export async function findWorkspaceIsolationViolations() {
   const forbiddenRuntimeImports = [];
+  const crossLayerImports = [];
   const driverImporters = [];
 
   for (const filePath of await workspaceSourceFiles()) {
@@ -67,6 +74,9 @@ export async function findWorkspaceIsolationViolations() {
       if (isForbiddenRuntimeModule(specifier)) {
         forbiddenRuntimeImports.push(`${relativePath} imports ${specifier}`);
       }
+      if (escapesWorkspace(specifier, filePath)) {
+        crossLayerImports.push(`${relativePath} imports ${specifier}`);
+      }
     }
     if (specifiers.includes(duckDbDriver)) driverImporters.push(relativePath);
   }
@@ -75,13 +85,17 @@ export async function findWorkspaceIsolationViolations() {
     .filter((importer) => !duckDbDriverModules.includes(importer))
     .sort();
 
-  return { forbiddenRuntimeImports: forbiddenRuntimeImports.sort(), unexpectedDriverImporters };
+  return {
+    forbiddenRuntimeImports: forbiddenRuntimeImports.sort(),
+    crossLayerImports: crossLayerImports.sort(),
+    unexpectedDriverImporters,
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { forbiddenRuntimeImports, unexpectedDriverImporters } =
+  const { forbiddenRuntimeImports, crossLayerImports, unexpectedDriverImporters } =
     await findWorkspaceIsolationViolations();
-  const failures = [...forbiddenRuntimeImports, ...unexpectedDriverImporters];
+  const failures = [...forbiddenRuntimeImports, ...crossLayerImports, ...unexpectedDriverImporters];
   if (failures.length > 0) {
     console.error('Shared workspace isolation violated:');
     for (const failure of failures) console.error(`  ${failure}`);

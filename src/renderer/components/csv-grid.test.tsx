@@ -56,7 +56,7 @@ describe('CsvGrid', () => {
   });
 
   it('reports clean export state after an edited Working CSV is reopened', async () => {
-    const editedSession: WorkingCsvView = {
+    const editedWorkingCsv: WorkingCsvView = {
       workingCsvId: 'working-csv-1',
       dataRevision: 1,
       file: { sourceId: 'source-1', location: '/data/source.csv', name: 'source.csv', sizeBytes: 24 },
@@ -70,8 +70,8 @@ describe('CsvGrid', () => {
         canRedo: false,
       },
     };
-    const reopenedSession: WorkingCsvView = {
-      ...editedSession,
+    const reopenedWorkingCsv: WorkingCsvView = {
+      ...editedWorkingCsv,
       editState: {
         workingCsvId: 'working-csv-1',
         hasUnexportedChanges: false,
@@ -81,8 +81,8 @@ describe('CsvGrid', () => {
     };
     const getCsvEditState = vi
       .fn()
-      .mockResolvedValueOnce(editedSession.editState)
-      .mockResolvedValueOnce(reopenedSession.editState);
+      .mockResolvedValueOnce(editedWorkingCsv.editState)
+      .mockResolvedValueOnce(reopenedWorkingCsv.editState);
     vi.stubGlobal('window', { csvViewer: { getCsvEditState } });
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const onUnexportedChangesChange = vi.fn();
@@ -91,7 +91,7 @@ describe('CsvGrid', () => {
     await act(async () => {
       renderer = create(
         <CsvGrid
-          workingCsv={editedSession}
+          workingCsv={editedWorkingCsv}
           themeMode="light"
           onUnexportedChangesChange={onUnexportedChangesChange}
         />,
@@ -102,7 +102,7 @@ describe('CsvGrid', () => {
     await act(async () => {
       renderer.update(
         <CsvGrid
-          workingCsv={reopenedSession}
+          workingCsv={reopenedWorkingCsv}
           themeMode="light"
           onUnexportedChangesChange={onUnexportedChangesChange}
         />,

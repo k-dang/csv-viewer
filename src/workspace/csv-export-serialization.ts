@@ -1,8 +1,10 @@
-import type { CsvCellValue, CsvColumn } from '../shared/ipc';
+import type { CsvColumn } from '../shared/ipc';
+import { normalizeCellValue } from './csv-result-normalization';
 
 /**
  * Serializes Working CSV rows to exported CSV text. Export serialization stays in shared
  * JavaScript rather than an engine `COPY TO`, so exported bytes are identical across runtimes.
+ * Engine values are normalized cell by cell here, so no intermediate copy of the rows is built.
  */
 export function serializeCsvExport({
   columns,
@@ -11,7 +13,7 @@ export function serializeCsvExport({
   header,
 }: {
   columns: CsvColumn[];
-  rows: Array<Record<string, CsvCellValue>>;
+  rows: Array<Record<string, unknown>>;
   delimiter: string;
   header: boolean;
 }): string {
@@ -23,7 +25,9 @@ export function serializeCsvExport({
 
   for (const row of rows) {
     lines.push(
-      columns.map((column) => serializeField(row[column.name] ?? '', delimiter)).join(delimiter),
+      columns
+        .map((column) => serializeField(normalizeCellValue(row[column.name]) ?? '', delimiter))
+        .join(delimiter),
     );
   }
 

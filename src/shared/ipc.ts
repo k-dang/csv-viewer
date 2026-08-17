@@ -31,6 +31,12 @@ export type CsvDialectOptions = {
 
 export const csvInternalRowIdField = '__csvViewerRowId' as const;
 
+/**
+ * File types a CSV Source may use, without the leading dot. The workspace enforces this list; hosts
+ * reuse it so their file pickers offer exactly what the workspace will accept.
+ */
+export const supportedCsvFileExtensions = ['csv', 'tsv', 'txt'] as const;
+
 export type WorkingCsvView = {
   workingCsvId: WorkingCsvId;
   dataRevision: number;
