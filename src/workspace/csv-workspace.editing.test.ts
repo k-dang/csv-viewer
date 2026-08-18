@@ -857,6 +857,61 @@ function rowIds(rows: CsvRow[]): string[] {
   return rows.map((row) => row[csvInternalRowIdField]);
 }
 
+describe('concurrent CSV mutations', () => {
+  it('gives every concurrently inserted row its own identifier and position', async () => {
+    const workingCsv = await fixture.openSource(
+      'insert-concurrent.csv',
+      ['name', 'Ada'].join('\n'),
+    );
+    const request = { workingCsvId: workingCsv.workingCsvId, hasActiveQuery: false };
+
+    await Promise.all([
+      workspace().insertCsvRow({ ...request, placement: 'append', rowIds: [] }),
+      workspace().insertCsvRow({ ...request, placement: 'append', rowIds: [] }),
+      workspace().insertCsvRow({ ...request, placement: 'append', rowIds: [] }),
+    ]);
+
+    const window = await workspace().getCsvRows({
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 10,
+    });
+    const rowIds = window.rows.map((row) => row[csvInternalRowIdField]);
+    expect(rowIds).toHaveLength(4);
+    expect(new Set(rowIds).size).toBe(4);
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada' },
+      { name: '' },
+      { name: '' },
+      { name: '' },
+    ]);
+  });
+
+  it('steps back one edit per concurrent undo', async () => {
+    const workingCsv = await fixture.openSource(
+      'undo-concurrent.csv',
+      ['name,code', 'Ada,001'].join('\n'),
+    );
+    const request = { workingCsvId: workingCsv.workingCsvId };
+    await workspace().editCsvCell({ ...request, rowId: '1', column: 'code', value: '002' });
+    await workspace().editCsvCell({ ...request, rowId: '1', column: 'code', value: '003' });
+
+    await Promise.all([workspace().undoCsvEdit(request), workspace().undoCsvEdit(request)]);
+
+    await expect(editState(workingCsv.workingCsvId)).resolves.toMatchObject({
+      canUndo: false,
+      canRedo: true,
+    });
+    const window = await workspace().getCsvRows({ ...request, offset: 0, limit: 10 });
+    expectVisibleRows(window.rows).toEqual([{ name: 'Ada', code: '001' }]);
+
+    await workspace().redoCsvEdit(request);
+    await workspace().redoCsvEdit(request);
+    const redone = await workspace().getCsvRows({ ...request, offset: 0, limit: 10 });
+    expectVisibleRows(redone.rows).toEqual([{ name: 'Ada', code: '003' }]);
+  });
+});
+
 function expectVisibleRows(rows: CsvRow[]) {
   return expect(rows.map(({ [csvInternalRowIdField]: _rowId, ...visibleRow }) => visibleRow));
 }

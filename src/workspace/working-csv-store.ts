@@ -66,6 +66,7 @@ export class WorkingCsvStore {
   private closingWorkingCsvs = new Set<string>();
   private sourceLeaseCounts = new Map<string, number>();
   private sourceLeaseWaiters = new Map<string, Array<() => void>>();
+  private mutationQueues = new Map<WorkingCsvId, Promise<void>>();
   private activeWorkspaceWorkCount = 0;
   private workspaceWorkWaiters: Array<() => void> = [];
   private retiredSourceTables = new Set<string>();
@@ -203,7 +204,7 @@ export class WorkingCsvStore {
     workingCsvId: WorkingCsvId,
     options: CsvDialectOptions = {},
   ): Promise<WorkingCsvView> {
-    return this.withWorkingCsvLease(workingCsvId, async (existing) => {
+    return this.withWorkingCsvMutation(workingCsvId, async (existing) => {
       const state = await this.createWorkingCsv(
         existing.sourceId,
         options,
@@ -352,7 +353,7 @@ export class WorkingCsvStore {
   }
 
   async editCell(request: CsvCellEditRequest): Promise<CsvCellEditResult> {
-    return this.withWorkingCsvLease(request.workingCsvId, async (state) => {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
       assertKnownColumn(request.column, knownColumns);
 
@@ -381,7 +382,7 @@ export class WorkingCsvStore {
   }
 
   async deleteRows(request: CsvDeleteRowsRequest): Promise<CsvEditState> {
-    return this.withWorkingCsvLease(request.workingCsvId, async (state) => {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
       const rowIds = normalizeRowIds(request.rowIds);
 
       if (rowIds.length === 0) {
@@ -399,7 +400,7 @@ export class WorkingCsvStore {
   }
 
   async insertRow(request: CsvInsertRowRequest): Promise<CsvEditState> {
-    return this.withWorkingCsvLease(request.workingCsvId, async (state) => {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
       if (request.hasActiveQuery) {
         throw new Error('CSV rows cannot be inserted while sort, filter, or search is active.');
       }
@@ -439,7 +440,7 @@ export class WorkingCsvStore {
     workingCsvId: WorkingCsvId,
     direction: 'undo' | 'redo',
   ): Promise<CsvEditState> {
-    return this.withWorkingCsvLease(workingCsvId, async (state) => {
+    return this.withWorkingCsvMutation(workingCsvId, async (state) => {
       const table = this.tableFor(state);
       const replay = (entry: CsvEditCommand) => runEditCommand(table, entry, direction);
       const command =
@@ -595,6 +596,37 @@ export class WorkingCsvStore {
     try {
       return await operation(lease.state);
     } finally {
+      await lease.release();
+    }
+  }
+
+  /**
+   * Runs one mutation at a time per Working CSV. A lease keeps a table alive across an await but
+   * does not exclude anything, and every mutation reads engine or history state before it writes:
+   * two inserts would read the same next row identifier, and two undos would replay and pop the
+   * same command twice. Reads stay off this queue and keep running concurrently.
+   *
+   * The lease is taken as the mutation is admitted rather than when its turn comes, so a close
+   * that arrives afterwards still waits for everything already queued behind it.
+   */
+  private async withWorkingCsvMutation<T>(
+    workingCsvId: WorkingCsvId,
+    operation: (state: WorkingCsvState) => Promise<T>,
+  ): Promise<T> {
+    const lease = this.acquireWorkingCsvLease(workingCsvId);
+    const queued = this.mutationQueues.get(workingCsvId) ?? Promise.resolve();
+    const mutation = queued.then(() => operation(lease.state));
+    const settled = mutation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.mutationQueues.set(workingCsvId, settled);
+    try {
+      return await mutation;
+    } finally {
+      if (this.mutationQueues.get(workingCsvId) === settled) {
+        this.mutationQueues.delete(workingCsvId);
+      }
       await lease.release();
     }
   }
