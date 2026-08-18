@@ -294,7 +294,11 @@ export class CsvWorkspace {
         if (described.has(comparisonId)) continue;
         const comparison = this.comparisonStore.getState(comparisonId);
         if (!comparison) {
-          throw new Error(`Comparison ${comparisonId} disappeared while calculating close impact.`);
+          // A Comparison that closed between the index read and the state read is no longer
+          // impacted by this close. Throwing here would reject confirmWindowClose, whose caller
+          // has already prevented the window close, leaving the window unclosable.
+          console.error(`Comparison ${comparisonId} disappeared while calculating close impact.`);
+          continue;
         }
         described.set(comparisonId, {
           comparisonId,

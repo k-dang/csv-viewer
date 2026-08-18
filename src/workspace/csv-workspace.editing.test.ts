@@ -806,7 +806,8 @@ describe('CsvWorkspace editing, history, and Export CSV', () => {
     ).resolves.toMatchObject({ status: 'closed' });
 
     release.resolve();
-    await expect(exporting).rejects.toThrow('Working CSV is no longer active');
+    await expect(exporting).resolves.toMatchObject({ hasUnexportedChanges: false });
+    await expect(readFile(fixture.file('delivered.csv'), 'utf8')).resolves.toContain('Grace');
   });
 
   it('leaves Unexported Changes set when the Working CSV moves on during delivery', async () => {

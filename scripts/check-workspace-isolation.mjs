@@ -15,15 +15,8 @@ const workspaceRoot = path.join(repoRoot, 'src', 'workspace');
 const reachableRoots = [workspaceRoot, path.join(repoRoot, 'src', 'shared')];
 const duckDbDriver = '@duckdb/node-api';
 const duckDbDriverModules = ['duckdb/duckdb-comparison-executor.ts', 'duckdb/duckdb-database.ts'];
-const runtimeModules = [
-  'electron',
-  'fs',
-  'fs/promises',
-  'path',
-  'os',
-  'child_process',
-  'worker_threads',
-];
+/** Package roots, so every subpath of one - `electron/main`, `node:fs/promises` - is caught too. */
+const runtimeModuleRoots = ['electron', 'fs', 'path', 'os', 'child_process', 'worker_threads'];
 
 /**
  * Static imports, `export ... from`, dynamic `import()`, and bare `import 'x'`. The real parser
@@ -33,9 +26,9 @@ function importedModules(contents) {
   return ts.preProcessFile(contents, true, true).importedFiles.map((file) => file.fileName);
 }
 
-function isForbiddenRuntimeModule(specifier) {
+export function isForbiddenRuntimeModule(specifier) {
   const bare = specifier.startsWith('node:') ? specifier.slice('node:'.length) : specifier;
-  return runtimeModules.includes(bare);
+  return runtimeModuleRoots.includes(bare.split('/')[0]);
 }
 
 /** True when a relative import escapes the workspace into a runtime-specific tree such as src/main. */

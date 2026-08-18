@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkingCsvView } from '../../shared/ipc';
+import type { CsvEditState, WorkingCsvView } from '../../shared/ipc';
 import { CsvGrid } from './csv-grid';
 
 vi.mock('ag-grid-react', () => ({ AgGridReact: () => null }));
@@ -111,5 +111,79 @@ describe('CsvGrid', () => {
 
     expect(getCsvEditState).toHaveBeenCalledTimes(2);
     expect(onUnexportedChangesChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('ignores an edit-state response that arrives after the Working CSV changed', async () => {
+    const firstWorkingCsv: WorkingCsvView = {
+      workingCsvId: 'working-csv-1',
+      dataRevision: 1,
+      file: { sourceId: 'source-1', location: '/data/first.csv', name: 'first.csv', sizeBytes: 24 },
+      columns: [{ name: 'name', type: 'VARCHAR' }],
+      rowCount: 1,
+      dialect: {},
+      editState: {
+        workingCsvId: 'working-csv-1',
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: false,
+      },
+    };
+    const secondWorkingCsv: WorkingCsvView = {
+      ...firstWorkingCsv,
+      workingCsvId: 'working-csv-2',
+      file: {
+        sourceId: 'source-2',
+        location: '/data/second.csv',
+        name: 'second.csv',
+        sizeBytes: 24,
+      },
+      editState: {
+        workingCsvId: 'working-csv-2',
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: false,
+      },
+    };
+    const pending = new Map<string, (editState: CsvEditState) => void>();
+    const getCsvEditState = vi.fn(
+      ({ workingCsvId }: { workingCsvId: string }) =>
+        new Promise<CsvEditState>((resolve) => pending.set(workingCsvId, resolve)),
+    );
+    vi.stubGlobal('window', { csvViewer: { getCsvEditState } });
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const onUnexportedChangesChange = vi.fn();
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        <CsvGrid
+          workingCsv={firstWorkingCsv}
+          themeMode="light"
+          onUnexportedChangesChange={onUnexportedChangesChange}
+        />,
+      );
+    });
+    await act(async () => {
+      renderer.update(
+        <CsvGrid
+          workingCsv={secondWorkingCsv}
+          themeMode="light"
+          onUnexportedChangesChange={onUnexportedChangesChange}
+        />,
+      );
+    });
+
+    await act(async () => {
+      pending.get('working-csv-2')?.(secondWorkingCsv.editState);
+      pending.get('working-csv-1')?.({
+        workingCsvId: 'working-csv-1',
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+    });
+
+    expect(onUnexportedChangesChange).toHaveBeenLastCalledWith(false);
+    expect(onUnexportedChangesChange).not.toHaveBeenCalledWith(true);
   });
 });

@@ -146,6 +146,7 @@ export function CsvGrid({
   const [statsFilters, setStatsFilters] = useState<CsvFilterDescriptor[]>([]);
   const [statsRefreshKey, setStatsRefreshKey] = useState(0);
   const requestStateRef = useRef({ latestRequestId: 0 });
+  const workingCsvIdRef = useRef(workingCsv.workingCsvId);
   const revertingCellRef = useRef(false);
   const handledExportRequestSequenceRef = useRef(0);
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
@@ -185,6 +186,7 @@ export function CsvGrid({
   }, [exportRequestSequence]);
 
   useEffect(() => {
+    workingCsvIdRef.current = workingCsv.workingCsvId;
     setEditState(workingCsv.editState);
     setFilteredRowCount(workingCsv.rowCount);
     setDisplayedTotalRowCount(workingCsv.rowCount);
@@ -315,10 +317,15 @@ export function CsvGrid({
     }
   }
 
+  /** Responses that arrive after the grid moved to another Working CSV describe the old one. */
   async function refreshEditState() {
+    const { workingCsvId } = workingCsv;
     try {
-      setEditState(await window.csvViewer.getCsvEditState({ workingCsvId: workingCsv.workingCsvId }));
+      const editState = await window.csvViewer.getCsvEditState({ workingCsvId });
+      if (workingCsvIdRef.current !== workingCsvId) return;
+      setEditState(editState);
     } catch (error) {
+      if (workingCsvIdRef.current !== workingCsvId) return;
       const message = error instanceof Error ? error.message : 'Unable to read edit state.';
       setEditError(message);
     }

@@ -76,6 +76,7 @@ export function buildRowDeletionStatement(
   rowIds: string[],
   deleted: boolean,
 ): CsvStatement {
+  assertRowIds(rowIds);
   return {
     sql: `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
       csvInternalRowIdField,
@@ -85,6 +86,7 @@ export function buildRowDeletionStatement(
 }
 
 export function buildExistingRowIdsQuery(tableName: string, rowIds: string[]): CsvStatement {
+  assertRowIds(rowIds);
   return {
     sql: `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
       csvInternalRowIdField,
@@ -285,6 +287,11 @@ export function quoteIdentifier(identifier: string): string {
 
 function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+/** An empty list would render `IN ()`, which the engine rejects as a syntax error. */
+function assertRowIds(rowIds: string[]): void {
+  if (rowIds.length === 0) throw new Error('At least one CSV row is required.');
 }
 
 function buildPlaceholders(count: number): string {

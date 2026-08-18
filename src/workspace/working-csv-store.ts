@@ -455,11 +455,15 @@ export class WorkingCsvStore {
    * Serializes the Working CSV, hands it to the runtime for delivery, then records the delivered
    * revision as exported. Delivery can involve the user, so it runs outside the Working CSV lease -
    * holding one across a prompt would block closing the Working CSV and disposing the workspace.
+   * The Working CSV can therefore be closed or replaced while the prompt is open, and a delivered
+   * export never fails afterwards: the exported revision is only recorded against the history it
+   * was serialized from.
    */
   async exportCsv(workingCsvId: WorkingCsvId): Promise<CsvEditState | { status: 'cancelled' }> {
     const prepared = await this.withWorkingCsvLease(workingCsvId, async (state) => {
       const { metadata } = state;
       return {
+        state,
         sourceId: state.sourceId,
         suggestedName: metadata.file.name,
         revisionId: state.history.currentRevision,
@@ -479,8 +483,8 @@ export class WorkingCsvStore {
     });
     if (delivery.status === 'cancelled') return { status: 'cancelled' };
 
-    const state = this.requireWorkingCsv(workingCsvId);
-    state.history.markExported(prepared.revisionId);
+    const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
+    if (state.history === prepared.state.history) state.history.markExported(prepared.revisionId);
     return buildEditState(state);
   }
 
@@ -538,9 +542,11 @@ export class WorkingCsvStore {
         history: new CsvEditHistory(initialRevisionId),
       };
     } catch (error) {
-      await dropWorkingCsvTable(table);
+      await dropWorkingCsvTable(table).catch((cleanupError: unknown) => {
+        console.error('Unable to drop a partially created Working CSV table.', cleanupError);
+      });
       this.artifactRegistry.remove(tableName);
-      throw normalizeOpenError(error);
+      throw normalizeEngineError(error);
     }
   }
 
@@ -735,7 +741,7 @@ function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
 
   if (options.delimiter !== undefined && options.delimiter !== '') {
     if (options.delimiter.length !== 1) {
-      throw new Error('Delimiter must be exactly one character.');
+      throw new CsvOpenError('Delimiter must be exactly one character.');
     }
 
     dialect.delimiter = options.delimiter;
@@ -801,16 +807,25 @@ function normalizeOpenError(error: unknown): Error {
     if (error.code === 'permission-denied') {
       return new CsvOpenError('Unable to open CSV: permission was denied for this file.');
     }
-    return new CsvOpenError(`Unable to open CSV: ${error.message}`);
+    return new CsvOpenError('Unable to open CSV: the file could not be read.');
   }
 
-  if (error instanceof Error) {
-    if (/read_csv|csv|delimiter|quote|header|sniff|parse/i.test(error.message)) {
-      return new CsvOpenError(`Unable to parse CSV: ${error.message}`);
-    }
-
-    return new CsvOpenError(`Unable to open CSV: ${error.message}`);
-  }
+  if (error instanceof Error) return new CsvOpenError(`Unable to open CSV: ${error.message}`);
 
   return new CsvOpenError('Unable to open CSV.');
+}
+
+/**
+ * Data engine failures carry driver detail such as the CSV Source path, and the host boundary keeps
+ * runtime locations out of the workspace's callers. The detail is logged instead, and the caller
+ * gets the message that actually helps: what to change about the dialect and try again.
+ */
+function normalizeEngineError(error: unknown): Error {
+  if (error instanceof CsvOpenError || error instanceof CsvSourceUnavailableError) {
+    return normalizeOpenError(error);
+  }
+  console.error('The data engine could not read the CSV Source.', error);
+  return new CsvOpenError(
+    'Unable to read CSV: check the delimiter, quote, and header options for this file.',
+  );
 }

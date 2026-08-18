@@ -206,7 +206,8 @@ function toSourceUnavailableError(error: unknown): Error {
       'Permission was denied for the CSV Source.',
     );
   }
-  return new CsvSourceUnavailableError('unreadable', error.message);
+  console.error('Unable to read the CSV Source.', error);
+  return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
 }
 
 function isRecentSourceEntry(value: unknown): value is RecentSourceEntry {

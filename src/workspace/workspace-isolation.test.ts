@@ -1,6 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 // The build runs this same check via `node scripts/check-workspace-isolation.mjs`.
-import { findWorkspaceIsolationViolations } from '../../scripts/check-workspace-isolation.mjs';
+import {
+  findWorkspaceIsolationViolations,
+  isForbiddenRuntimeModule,
+} from '../../scripts/check-workspace-isolation.mjs';
 
 describe('shared workspace isolation', () => {
   let violations: Awaited<ReturnType<typeof findWorkspaceIsolationViolations>>;
@@ -20,4 +23,27 @@ describe('shared workspace isolation', () => {
   it('confines the native DuckDB driver to the named database modules', () => {
     expect(violations.unexpectedDriverImporters).toEqual([]);
   });
+
+  it.each([
+    'electron',
+    'electron/main',
+    'electron/renderer',
+    'fs',
+    'node:fs',
+    'fs/promises',
+    'node:fs/promises',
+    'path',
+    'node:path/posix',
+    'child_process',
+    'node:worker_threads',
+  ])('rejects %s', (specifier) => {
+    expect(isForbiddenRuntimeModule(specifier)).toBe(true);
+  });
+
+  it.each(['@duckdb/node-api', 'electronic-tape', './csv-query', '../shared/ipc', 'vitest'])(
+    'allows %s',
+    (specifier) => {
+      expect(isForbiddenRuntimeModule(specifier)).toBe(false);
+    },
+  );
 });

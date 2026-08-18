@@ -1,8 +1,11 @@
 import type {
+  ComparisonAttemptOutcomeView,
   ComparisonId,
+  ComparisonKeyDiagnostics,
   ComparisonSide,
   ComparisonSummary,
   ComparisonView,
+  SourceKeyDiagnostics,
   WorkingCsvRef,
   WorkingCsvView,
 } from '../shared/ipc';
@@ -46,7 +49,7 @@ export function projectComparison(input: ComparisonProjectionInput): ComparisonV
           summary: copySummary(input.applied.summary),
         }
       : null,
-    lastAttempt: input.lastAttempt,
+    lastAttempt: copyAttemptOutcome(input.lastAttempt),
   };
 }
 
@@ -54,6 +57,43 @@ export function copySummary(summary: ComparisonSummary): ComparisonSummary {
   return {
     rows: { ...summary.rows },
     changedColumns: summary.changedColumns.map((column) => ({ ...column })),
+  };
+}
+
+function copyAttemptOutcome(
+  attempt: ComparisonAttemptOutcomeView | null,
+): ComparisonAttemptOutcomeView | null {
+  if (!attempt) return null;
+  if (attempt.status === 'invalid-key') {
+    return { ...attempt, diagnostics: copyKeyDiagnostics(attempt.diagnostics) };
+  }
+  if (attempt.status === 'sources-changed') {
+    return { ...attempt, changedSides: [...attempt.changedSides] };
+  }
+  if (attempt.status === 'failed') return { ...attempt, failure: { ...attempt.failure } };
+  return { ...attempt };
+}
+
+function copyKeyDiagnostics(diagnostics: ComparisonKeyDiagnostics): ComparisonKeyDiagnostics {
+  return {
+    key: [...diagnostics.key],
+    baseline: copySourceKeyDiagnostics(diagnostics.baseline),
+    candidate: copySourceKeyDiagnostics(diagnostics.candidate),
+  };
+}
+
+function copySourceKeyDiagnostics(diagnostics: SourceKeyDiagnostics): SourceKeyDiagnostics {
+  return {
+    ...diagnostics,
+    blankExamples: diagnostics.blankExamples.map((example) => ({
+      ...example,
+      keyValues: [...example.keyValues],
+    })),
+    duplicateExamples: diagnostics.duplicateExamples.map((example) => ({
+      ...example,
+      keyValues: [...example.keyValues],
+      rowIds: [...example.rowIds],
+    })),
   };
 }
 
