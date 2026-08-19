@@ -361,27 +361,30 @@ function snapshotExpression() {
   })()`;
 }
 
-function findControlExpression({ role, name, exact }) {
+function findControlExpression({ role, name, exact, nth }) {
   const escaped = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const payload = JSON.stringify({
     role: role || '',
     name: name || '',
     exact: Boolean(exact),
     escaped,
+    nth: nth == null ? null : Number(nth),
   });
   return `(() => {
-    const { role, name, exact, escaped } = ${payload};
+    const { role, name, exact, escaped, nth } = ${payload};
     const nameRe = exact || !name ? null : new RegExp(escaped, 'i');
     function accessibleName(el) {
       const labelledBy = el.getAttribute('aria-labelledby');
       const labelledText = labelledBy
         ? labelledBy.split(/\\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ')
         : '';
-      const label = el.id ? document.querySelector(\`label[for="\${el.id}"]\`)?.textContent || '' : '';
+      const labelledFor = el.id ? document.querySelector(\`label[for="\${el.id}"]\`)?.textContent || '' : '';
+      const wrappingLabel = el.closest('label')?.textContent || '';
       return [
         el.getAttribute('aria-label'),
         labelledText,
-        label,
+        labelledFor,
+        wrappingLabel,
         el.getAttribute('title'),
         el.getAttribute('placeholder'),
         el.innerText,
@@ -441,16 +444,21 @@ function findControlExpression({ role, name, exact }) {
       return { el, value, score };
     });
     scored.sort((a, b) => b.score - a.score);
-    if (scored.length > 1 && scored[0].score === scored[1].score) {
+    const tied = scored.length > 1 && scored[0].score === scored[1].score;
+    if (tied && nth == null) {
       return { status: 'ambiguous', names: scored.map((item) => item.value) };
     }
-    const winner = scored[0].el;
+    const pick = nth == null ? 0 : nth;
+    if (!Number.isInteger(pick) || pick < 0 || pick >= scored.length) {
+      return { status: 'missing', names: scored.map((item) => item.value) };
+    }
+    const winner = scored[pick].el;
     winner.scrollIntoView({ block: 'center', inline: 'center' });
     const box = winner.getBoundingClientRect();
     winner.dataset.verifyHit = '1';
     return {
       status: 'found',
-      name: scored[0].value,
+      name: scored[pick].value,
       disabled: Boolean(winner.disabled) || winner.getAttribute('aria-disabled') === 'true',
       x: box.x + box.width / 2,
       y: box.y + box.height / 2,
@@ -648,20 +656,48 @@ async function runScreenshot(options) {
 
 async function locate(session, options) {
   if (!options.name && !options.role) fail('click/fill require --name and usually --role');
+  const nth = options.nth == null || options.nth === true ? null : Number(options.nth);
+  if (options.nth != null && options.nth !== true && !Number.isInteger(nth)) {
+    fail('click --nth must be an integer index (0-based)');
+  }
   const found = await session.evaluate(
     findControlExpression({
       role: options.role || '',
       name: String(options.name || ''),
       exact: Boolean(options.exact),
+      nth,
     }),
   );
   if (found.status === 'missing') {
     fail(`No control matched role=${options.role ?? ''} name=${options.name}`, found.names);
   }
   if (found.status === 'ambiguous') {
-    fail(`Ambiguous control role=${options.role ?? ''} name=${options.name}`, found.names);
+    fail(
+      `Ambiguous control role=${options.role ?? ''} name=${options.name}. Pass --nth 0 to pick the first match.`,
+      found.names,
+    );
   }
   return found;
+}
+
+async function dispatchMouseClick(session, x, y, clickCount) {
+  await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  for (let count = 1; count <= clickCount; count += 1) {
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: count,
+    });
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: count,
+    });
+  }
 }
 
 async function runClick(options) {
@@ -671,13 +707,10 @@ async function runClick(options) {
     const clickCount = options.double ? 2 : 1;
     await session.evaluate(`(() => {
       const el = document.querySelector('[data-verify-hit="1"]');
-      if (!el) throw new Error('Lost hit target');
-      el.removeAttribute('data-verify-hit');
-      const eventInit = { bubbles: true, cancelable: true, view: window };
-      if (${clickCount} === 2) el.dispatchEvent(new MouseEvent('dblclick', eventInit));
-      else el.click();
+      if (el) el.removeAttribute('data-verify-hit');
       return true;
     })()`);
+    await dispatchMouseClick(session, found.x, found.y, clickCount);
     printJson({ status: 'ok', name: found.name, disabled: found.disabled });
   });
 }
@@ -695,7 +728,11 @@ async function runFill(options) {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (!setter) throw new Error('No value setter on ' + el.tagName);
-      setter.call(el, ${JSON.stringify(String(options.value))});
+      try {
+        setter.call(el, ${JSON.stringify(String(options.value))});
+      } catch {
+        throw new Error('No value setter on ' + el.tagName);
+      }
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return el.value;
