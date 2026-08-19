@@ -173,9 +173,14 @@ describe('CsvGrid', () => {
       );
     });
 
+    const resolveFirst = pending.get('working-csv-1');
+    const resolveSecond = pending.get('working-csv-2');
+    expect(resolveFirst).toBeDefined();
+    expect(resolveSecond).toBeDefined();
+
     await act(async () => {
-      pending.get('working-csv-2')?.(secondWorkingCsv.editState);
-      pending.get('working-csv-1')?.({
+      resolveSecond?.(secondWorkingCsv.editState);
+      resolveFirst?.({
         workingCsvId: 'working-csv-1',
         hasUnexportedChanges: true,
         canUndo: true,
