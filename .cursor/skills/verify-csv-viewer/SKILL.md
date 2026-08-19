@@ -136,7 +136,6 @@ Proof standards:
 - Record the feature id and the entry point used (recent-files button, header Compare, searchbox, and so on).
 - Opening a CSV also writes `recent-files.json` in the isolated userData dir. After a successful open, that file must still list the fixture path. The fixture bytes on disk must be unchanged. The app does not overwrite CSV sources.
 - Export CSV is not provable without a human finishing the OS dialog. Do not mark Export verified from an enabled button alone. `Compare…` is not provable in an unattended run: the second CSV requires that same OS dialog.
-- `docs/validation.md` mentions `pnpm run fixtures:validation`. That script is not in `package.json`. Do not call it. Use `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 
 ## Cleanup
 

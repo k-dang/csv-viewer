@@ -4,7 +4,7 @@
 
 **Blocked by:** None - can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done - PR #11 (merged as d9d6cb9)
 
 **Unexported Changes is revision identity, not stack depth.** Every mutation produces a new monotonically increasing revision id; each undo/redo entry carries the revision id it restores; the Working CSV records the revision id last exported, initialized to the revision id of the freshly opened CSV Source. Unexported Changes is `currentRevisionId !== lastExportedRevisionId`. One field satisfies all four behaviors below. Do not implement it as a separate state machine, and do not use stack depth - `undoStack.length !== exportedDepth` falsely reports clean when an edit after an undo restores the original depth with different content.
 
