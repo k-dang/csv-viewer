@@ -196,8 +196,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
     } as unknown as DuckDBConnection;
     const executor = new DuckDbComparisonExecutor({
-      acquireSource: async (sessionId) => ({
-        tableName: sessionId,
+      acquireSource: async (workingCsvId) => ({
+        tableName: workingCsvId,
         columns: [
           { name: 'id', type: 'VARCHAR' },
           { name: 'value', type: 'VARCHAR' },

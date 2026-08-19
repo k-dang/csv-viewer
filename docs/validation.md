@@ -19,7 +19,7 @@ Manual MVP scenarios:
 - Open `fixtures/validation/quoted-fields.csv` and verify quoted delimiters remain intact.
 - Open `fixtures/validation/unusual-columns.csv` and verify sorting, filtering, and search still work with unusual column names.
 - Open `fixtures/validation/malformed.csv` and verify the app surfaces a clear error instead of crashing.
-- Reopen a CSV from the recent files list after closing and relaunching the app.
+- Reopen a CSV from the Recent CSV Sources list after closing and relaunching the app.
 
 ## Editing Validation
 

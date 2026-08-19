@@ -31,7 +31,7 @@ export type RendererWorkspaceState = {
 };
 
 export type RendererWorkspaceAction =
-  | { type: 'open-csv'; session: WorkingCsvView }
+  | { type: 'open-csv'; workingCsv: WorkingCsvView }
   | { type: 'close-csv'; workingCsvId: WorkingCsvId }
   | { type: 'open-comparison'; comparison: ComparisonView }
   | { type: 'comparison-event'; event: ComparisonEvent }
@@ -58,16 +58,16 @@ export function rendererWorkspaceReducer(
 ): RendererWorkspaceState {
   switch (action.type) {
     case 'open-csv': {
-      const id = csvTabId(action.session.workingCsvId);
+      const id = csvTabId(action.workingCsv.workingCsvId);
       const existingIndex = state.tabs.findIndex(
         (tab) =>
           tab.kind === 'csv' &&
-          (tab.csv.workingCsvId === action.session.workingCsvId ||
-            tab.csv.file.path === action.session.file.path),
+          (tab.csv.workingCsvId === action.workingCsv.workingCsvId ||
+            tab.csv.file.sourceId === action.workingCsv.file.sourceId),
       );
       const tabs = [...state.tabs];
-      if (existingIndex === -1) tabs.push({ kind: 'csv', id, csv: action.session });
-      else tabs[existingIndex] = { kind: 'csv', id, csv: action.session };
+      if (existingIndex === -1) tabs.push({ kind: 'csv', id, csv: action.workingCsv });
+      else tabs[existingIndex] = { kind: 'csv', id, csv: action.workingCsv };
       return { ...state, tabs, activeTabId: id };
     }
     case 'close-csv':

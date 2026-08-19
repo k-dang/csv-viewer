@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WorkingCsvView } from '../../shared/ipc';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
-const session: WorkingCsvView = {
-  workingCsvId: 'session-1',
+const workingCsv: WorkingCsvView = {
+  workingCsvId: 'workingCsv-1',
   dataRevision: 0,
   file: {
-    path: 'C:\\data\\people.csv',
+    sourceId: 'source-1',
+    location: 'C:\\data\\people.csv',
     name: 'people.csv',
     sizeBytes: 32,
   },
@@ -17,7 +18,7 @@ const session: WorkingCsvView = {
   rowCount: 250,
   dialect: {},
   editState: {
-    workingCsvId: 'session-1',
+    workingCsvId: 'workingCsv-1',
     hasUnexportedChanges: false,
     canUndo: false,
     canRedo: false,
@@ -27,7 +28,7 @@ const session: WorkingCsvView = {
 describe('createCsvGridDataSource', () => {
   it('requests only the AG Grid row window from the preload API', async () => {
     const getCsvRows = vi.fn().mockResolvedValue({
-      workingCsvId: session.workingCsvId,
+      workingCsvId: workingCsv.workingCsvId,
       offset: 100,
       filteredRowCount: 250,
       rows: [{ name: 'Ada', age: 37 }],
@@ -38,7 +39,7 @@ describe('createCsvGridDataSource', () => {
     const onQueryState = vi.fn();
 
     const datasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       { getCsvRows },
       onFilteredRowCount,
       'Ada',
@@ -62,7 +63,7 @@ describe('createCsvGridDataSource', () => {
     });
 
     expect(getCsvRows).toHaveBeenCalledWith({
-      workingCsvId: session.workingCsvId,
+      workingCsvId: workingCsv.workingCsvId,
       offset: 100,
       limit: 25,
       sort: [{ column: 'age', direction: 'desc' }],
@@ -85,7 +86,7 @@ describe('createCsvGridDataSource', () => {
     const onQueryState = vi.fn();
 
     const datasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       { getCsvRows },
       undefined,
       '',
@@ -119,7 +120,7 @@ describe('createCsvGridDataSource', () => {
       .fn()
       .mockReturnValueOnce(firstRequest)
       .mockResolvedValueOnce({
-        workingCsvId: session.workingCsvId,
+        workingCsvId: workingCsv.workingCsvId,
         offset: 0,
         filteredRowCount: 1,
         rows: [{ name: 'Grace', age: 41 }],
@@ -130,14 +131,14 @@ describe('createCsvGridDataSource', () => {
     const requestState = { latestRequestId: 0 };
 
     const firstDatasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       { getCsvRows },
       onFilteredRowCount,
       'Ada',
       requestState,
     );
     const secondDatasource = createCsvGridDataSource(
-      session,
+      workingCsv,
       { getCsvRows },
       onFilteredRowCount,
       'Grace',
@@ -166,7 +167,7 @@ describe('createCsvGridDataSource', () => {
     });
 
     resolveFirst({
-      workingCsvId: session.workingCsvId,
+      workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       filteredRowCount: 1,
       rows: [{ name: 'Ada', age: 37 }],

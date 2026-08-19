@@ -128,7 +128,7 @@ export function ComparisonCandidateDialog({
                     {candidate.workingCsv.file.name}
                   </span>
                   <span className="block truncate text-xs text-muted-foreground">
-                    {candidate.workingCsv.file.path}
+                    {candidate.workingCsv.file.location}
                   </span>
                   <span
                     className={

@@ -6,22 +6,24 @@ import type {
   CsvColumn,
   SourceKeyDiagnostics,
   WorkingCsvId,
-} from '../shared/ipc';
-import { csvInternalRowIdField } from '../shared/ipc';
+} from '../../shared/ipc';
+import { csvInternalRowIdField } from '../../shared/ipc';
+import { toError } from '../../shared/errors';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
-} from './comparison-executor';
+} from '../comparison-executor';
 import {
   assertKnownColumn,
-  normalizeCellValue,
-  normalizeCount,
+  buildDropTableSql,
+  isValidRowWindow,
   quoteIdentifier,
-} from './csv-query';
-import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
-import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
+} from '../csv-query';
+import { normalizeCellValue, normalizeCount } from '../csv-result-normalization';
+import { csvDeletedField, csvSourceOrderField } from '../csv-storage-schema';
+import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 export type ComparisonSource = {
   tableName: string;
@@ -64,53 +66,55 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       const known = new Set(source.columns.map((column) => column.name));
       key.forEach((column) => assertKnownColumn(column, known));
       const table = quoteIdentifier(source.tableName);
-    const active = `${quoteIdentifier(csvDeletedField)} = false`;
-    const blank = key
-      .map((column) => `(${quoteIdentifier(column)} IS NULL OR ${quoteIdentifier(column)} = '')`)
-      .join(' OR ');
-    const present = key
-      .map(
-        (column) => `(${quoteIdentifier(column)} IS NOT NULL AND ${quoteIdentifier(column)} <> '')`,
-      )
-      .join(' AND ');
-    const keyProjection = key
-      .map((column, index) => `${quoteIdentifier(column)} AS ${quoteIdentifier(`key_${index}`)}`)
-      .join(', ');
-    const keyGroup = key.map(quoteIdentifier).join(', ');
-    const keyOrder = key
-      .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
-      .join(', ');
-    const blankCountResult = await writer.runAndReadAll(
-      `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
-    );
-    const blankExamplesResult = await writer.runAndReadAll(
-      `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id, ${keyProjection} FROM ${table}
-       WHERE ${active} AND (${blank}) ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
-    );
-    const duplicateCountResult = await writer.runAndReadAll(
-      `SELECT count(*)::BIGINT AS count FROM (
-        SELECT 1 FROM ${table} WHERE ${active} AND (${present}) GROUP BY ${keyGroup} HAVING count(*) > 1
-      ) duplicate_groups`,
-    );
-    const duplicateGroupsResult = await writer.runAndReadAll(
-      `SELECT ${keyProjection}, count(*)::BIGINT AS row_count FROM ${table} WHERE ${active} AND (${present})
-       GROUP BY ${keyGroup} HAVING count(*) > 1 ORDER BY ${keyOrder} LIMIT 5`,
-    );
-    const duplicateExamples: SourceKeyDiagnostics['duplicateExamples'] = [];
-    for (const group of duplicateGroupsResult.getRowObjectsJS()) {
-      const keyValues = key.map((_column, index) => String(group[`key_${index}`]));
-      const conditions = key.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
-      const rowIdsResult = await writer.runAndReadAll(
-        `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${table}
-         WHERE ${active} AND ${conditions} ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
-        keyValues,
+      const active = `${quoteIdentifier(csvDeletedField)} = false`;
+      const blank = key
+        .map((column) => `(${quoteIdentifier(column)} IS NULL OR ${quoteIdentifier(column)} = '')`)
+        .join(' OR ');
+      const present = key
+        .map(
+          (column) =>
+            `(${quoteIdentifier(column)} IS NOT NULL AND ${quoteIdentifier(column)} <> '')`,
+        )
+        .join(' AND ');
+      const keyProjection = key
+        .map((column, index) => `${quoteIdentifier(column)} AS ${quoteIdentifier(`key_${index}`)}`)
+        .join(', ');
+      const keyGroup = key.map(quoteIdentifier).join(', ');
+      const keyOrder = key
+        .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
+        .join(', ');
+      const blankCountResult = await writer.runAndReadAll(
+        `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
       );
-      duplicateExamples.push({
-        keyValues,
-        rowCount: normalizeCount(group.row_count),
-        rowIds: rowIdsResult.getRowObjectsJS().map((row) => String(row.row_id)),
-      });
-    }
+      const blankExamplesResult = await writer.runAndReadAll(
+        `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id, ${keyProjection} FROM ${table}
+         WHERE ${active} AND (${blank}) ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
+      );
+      const duplicateCountResult = await writer.runAndReadAll(
+        `SELECT count(*)::BIGINT AS count FROM (
+          SELECT 1 FROM ${table} WHERE ${active} AND (${present}) GROUP BY ${keyGroup} HAVING count(*) > 1
+        ) duplicate_groups`,
+      );
+      const duplicateGroupsResult = await writer.runAndReadAll(
+        `SELECT ${keyProjection}, count(*)::BIGINT AS row_count FROM ${table} WHERE ${active} AND (${present})
+         GROUP BY ${keyGroup} HAVING count(*) > 1 ORDER BY ${keyOrder} LIMIT 5`,
+      );
+      const duplicateExamples: SourceKeyDiagnostics['duplicateExamples'] = [];
+      for (const group of duplicateGroupsResult.getRowObjectsJS()) {
+        const keyValues = key.map((_column, index) => String(group[`key_${index}`]));
+        const conditions = key.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
+        const rowIdsResult = await writer.runAndReadAll(
+          `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${table}
+           WHERE ${active} AND ${conditions} ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
+          keyValues,
+        );
+        duplicateExamples.push({
+          keyValues,
+          rowCount: normalizeCount(group.row_count),
+          rowIds: rowIdsResult.getRowObjectsJS().map((row) => String(row.row_id)),
+        });
+      }
+
       return {
         blankRowCount: normalizeCount(blankCountResult.getRowObjectsJS()[0].count),
         duplicateGroupCount: normalizeCount(duplicateCountResult.getRowObjectsJS()[0].count),
@@ -236,13 +240,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   async readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
-    if (
-      !Number.isSafeInteger(request.offset) ||
-      request.offset < 0 ||
-      !Number.isSafeInteger(request.limit) ||
-      request.limit < 0 ||
-      request.limit > 1000
-    ) {
+    if (!isValidRowWindow(request.offset, request.limit)) {
       throw new Error(
         'Comparison window requires a non-negative offset and a limit of at most 1,000.',
       );
@@ -313,20 +311,20 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       try {
         await this.release(operationId);
       } catch (error) {
-        failures.push(normalizeError(error));
+        failures.push(toError(error));
       }
     }
     for (const artifactId of [...this.artifacts]) {
       try {
         await this.dropSnapshot(artifactId);
       } catch (error) {
-        failures.push(normalizeError(error));
+        failures.push(toError(error));
       }
     }
     try {
       this.artifactRegistry.assertNoArtifactsOwnedBy('comparison');
     } catch (error) {
-      failures.push(normalizeError(error));
+      failures.push(toError(error));
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Unable to dispose all Comparison executor resources.');
@@ -407,7 +405,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       this.artifactRegistry.transition(tableName, 'retired');
       await this.waitForReaders(artifactId);
       const connection = await this.database.getOwnerConnection();
-      await connection.run(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`);
+      await connection.run(buildDropTableSql(tableName));
       this.artifacts.delete(artifactId);
       this.artifactRegistry.remove(tableName);
     } finally {
@@ -419,7 +417,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     if (!this.artifacts.has(artifactId)) return;
     const tableName = buildComparisonTableName(artifactId);
     const connection = await this.database.getOwnerConnection();
-    await connection.run(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`);
+    await connection.run(buildDropTableSql(tableName));
     this.artifacts.delete(artifactId);
     this.artifactRegistry.remove(tableName);
   }
@@ -447,8 +445,4 @@ function flipClassification(
   if (classification === 'baseline-only') return 'candidate-only';
   if (classification === 'candidate-only') return 'baseline-only';
   return classification;
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

@@ -49,11 +49,12 @@ export function sameFileIdentity(
   );
 }
 
-function normalizeCanonicalPath(filePath: string): string {
+/** Case-folds on Windows so two spellings of one path compare equal. Identity keys must agree. */
+export function normalizeCanonicalPath(filePath: string): string {
   const normalized = path.normalize(filePath);
   return process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
 }
 
-function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
+export function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }

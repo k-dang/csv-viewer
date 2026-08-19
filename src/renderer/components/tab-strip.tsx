@@ -51,7 +51,7 @@ export function TabStrip({
           return (
             <div
               key={tab.id}
-              title={isCsv ? tab.csv.file.path : label}
+              title={isCsv ? tab.csv.file.location : label}
               className={cn(
                 'group flex max-w-56 shrink-0 flex-none items-center rounded-t-md border border-b-0',
                 isActive ? 'bg-background text-foreground' : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',

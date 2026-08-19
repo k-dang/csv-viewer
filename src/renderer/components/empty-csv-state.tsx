@@ -1,23 +1,23 @@
 import { FileSpreadsheet, FolderOpen, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldError, FieldGroup, FieldTitle } from '@/components/ui/field';
-import type { RecentCsvFile } from '../../shared/ipc';
-import { RecentFilesList } from './recent-files-list';
+import type { CsvSourceId, RecentCsvSource } from '../../shared/ipc';
+import { RecentCsvSourceList } from './recent-csv-source-list';
 
 export function EmptyCsvState({
   isOpening,
   errorMessage,
   dialectError,
-  recentFiles,
+  recentSources,
   onOpenCsv,
   onOpenRecent,
 }: {
   isOpening: boolean;
   errorMessage: string | null;
   dialectError: string | null;
-  recentFiles: RecentCsvFile[];
+  recentSources: RecentCsvSource[];
   onOpenCsv: () => void;
-  onOpenRecent: (path: string) => void;
+  onOpenRecent: (sourceId: CsvSourceId) => void;
 }) {
   return (
     <section
@@ -46,8 +46,8 @@ export function EmptyCsvState({
         </Button>
         <FieldError>{errorMessage}</FieldError>
         <FieldError>{dialectError}</FieldError>
-        {recentFiles.length > 0 ? (
-          <RecentFilesList files={recentFiles} disabled={isOpening} onOpenRecent={onOpenRecent} />
+        {recentSources.length > 0 ? (
+          <RecentCsvSourceList sources={recentSources} disabled={isOpening} onOpenRecent={onOpenRecent} />
         ) : null}
       </FieldGroup>
     </section>

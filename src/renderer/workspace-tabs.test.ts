@@ -10,7 +10,7 @@ function csv(workingCsvId: string): WorkingCsvView {
   return {
     workingCsvId,
     dataRevision: 0,
-    file: { path: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
+    file: { sourceId: workingCsvId, location: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
     columns: [{ name: 'id', type: 'VARCHAR' }],
     rowCount: 1,
     dialect: {},
@@ -35,9 +35,9 @@ describe('rendererWorkspaceReducer', () => {
   it('opens, orders, selects, and closes heterogeneous tabs atomically', () => {
     let state = rendererWorkspaceReducer(initialRendererWorkspace, {
       type: 'open-csv',
-      session: csv('a'),
+      workingCsv: csv('a'),
     });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
     state = rendererWorkspaceReducer(state, { type: 'open-comparison', comparison: comparison() });
 
     expect(state.tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:b', 'comparison:comparison-1']);
@@ -77,10 +77,10 @@ describe('rendererWorkspaceReducer', () => {
   it('cycles through tabs in both directions with wraparound', () => {
     let state = rendererWorkspaceReducer(initialRendererWorkspace, {
       type: 'open-csv',
-      session: csv('a'),
+      workingCsv: csv('a'),
     });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('b') });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('c') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('c') });
 
     state = rendererWorkspaceReducer(state, { type: 'cycle', direction: 1 });
     expect(state.activeTabId).toBe('csv:a');
@@ -91,10 +91,10 @@ describe('rendererWorkspaceReducer', () => {
   it('selects the next tab, then the previous tab, when the active CSV closes', () => {
     let state = rendererWorkspaceReducer(initialRendererWorkspace, {
       type: 'open-csv',
-      session: csv('a'),
+      workingCsv: csv('a'),
     });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('b') });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', session: csv('c') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('c') });
     state = rendererWorkspaceReducer(state, { type: 'select', tabId: 'csv:b' });
 
     state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'b' });

@@ -8,7 +8,7 @@ function workingCsv(workingCsvId: string): WorkingCsvView {
   return {
     workingCsvId,
     dataRevision: 0,
-    file: { path: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
+    file: { sourceId: workingCsvId, location: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
     columns: [
       { name: 'id', type: 'VARCHAR' },
       { name: 'value', type: 'VARCHAR' },
