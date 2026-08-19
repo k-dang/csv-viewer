@@ -42,7 +42,7 @@ What launch does:
 
 Electron is spawned detached. The launch command returns once ready and leaves the window running.
 
-Ready means stdout JSON has `"status": "ready"` and `inspect.ready` is `true`. The empty window shows `No CSV open`, `Open CSV`, `Recent files`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`.
+Ready means stdout JSON has `"status": "ready"` and `inspect.ready` is `true`. The empty window shows `No CSV open`, `Open CSV`, `Recent files`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`. Recent files exist only on that empty window.
 
 Launch refuses if `current.json` points at a live pid. Cleanup first. Do not start a second instance against the same run file.
 
@@ -72,6 +72,7 @@ Use the helper. Do not open `http://127.0.0.1:5173` in Cursor's browser. That pa
 
 ```powershell
 node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "phase-2-sample.csv"
+node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "Close stats panel" --nth 0
 node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --role searchbox --name "Global search" --value "Ada"
 node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --focused --value "Ada Lovelace Edited"
 node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs type --text "Ada"
@@ -90,12 +91,12 @@ Stable handles from this renderer:
 | --- | --- |
 | Product title | heading `CSV Viewer` |
 | IPC health | text `Main process connected` |
-| Empty state | heading `No CSV open` |
+| Empty state | text `No CSV open` |
 | Open from disk | button `Open CSV` (native OS dialog, do not click during automated proof) |
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
 | Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`) |
 | Header mode | combobox `Header mode` (`#csv-header-mode`), options `Auto header`, `First row headers`, `No headers` |
-| Compare | button `Compare…` (ellipsis character `…`, U+2026). Disabled until two CSV tabs are open. |
+| Compare | button `Compare…` (ellipsis character `…`, U+2026). Hidden on the empty window. Disabled until two CSV tabs are open. Unattended runs cannot open a second CSV (Recent files unmount after the first open; `Open CSV` is a native dialog). |
 | Reopen | button `Reopen` |
 | Theme | button `Switch to dark mode` / `Switch to light mode` |
 | Tabs | tablist `Open CSV and Comparison Tabs`, tab named with the file name |
@@ -106,19 +107,20 @@ Stable handles from this renderer:
 | Global search | searchbox `Global search` (`#global-search`) |
 | Clear query | button `Clear query` |
 | Insert / append / delete | buttons `Insert row above`, `Insert row below`, `Append row`, `Delete selected rows` |
-| Save As | button `Save CSV as` (native OS dialog, do not click during automated proof) |
+| Export | button `Export CSV` (native OS dialog, do not click during automated proof) |
 | Undo / redo | buttons `Undo edit`, `Redo edit` |
-| Dirty marker | text `Unsaved changes` |
+| Dirty marker | text `Unexported Changes` |
 | Grid | `aria-label="CSV row grid"` |
-| Stats | button `Open stats panel` / `Close stats panel`, region `Stats Panel` |
+| Stats | button `Open stats panel` / `Close stats panel`, region `Stats Panel`. While open, two Close buttons share that name; use `--nth 0` |
+| Stats column | combobox `Stats Column`, then `--role option --name "status"` (not `--exact`) |
 | Candidate picker | dialog `Choose a Candidate`, button `Close Candidate picker`, button `Cancel` |
 | Comparison | region `CSV comparison`, button `Swap sides`, button `Apply key`, button `Refresh comparison`, heading `Choose a Comparison Key` |
 
-`--name` is a substring match unless `--exact` is set. Prefer the full visible label.
+`--name` is a substring match unless `--exact` is set. Prefer the full visible label. When two visible controls share a name, pass `--nth 0` (first match) or `--nth 1`.
 
-Native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Save CSV as`) are OS windows. CDP cannot fill them. Open files through the seeded Recent files list. Prove edits with in-window state (`Unsaved changes`, cell text, undo/redo enabled). Do not click `Save CSV as` unless a human is present to finish the dialog.
+Native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through the seeded Recent files list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
 
-AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `press --key Enter`. Column header filters use AG Grid's own widgets and a 1500ms filter debounce. Global search is the stable query path.
+AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `fill --focused` and `press --key Enter`. Column header filters use AG Grid's own widgets and a 1500ms filter debounce. Global search is the stable query path. Search is a case-insensitive substring: `active` also matches `inactive`.
 
 Wait for observable text. After search or filter, wait for the visible-row line and `Ready`. After opening a file, wait for `#metadata-title` and `Ready`. After Apply key, wait for `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `, or for `This draft is not a Valid Comparison Key.`
 
@@ -129,11 +131,11 @@ Put artifacts under `.cursor/skills/verify-csv-viewer/evidence/<feature-id>/`. C
 Proof standards:
 
 - Exercise the real UI. Do not call `window.csvViewer.*` from CDP eval to open, edit, or compare. That skips the user path.
-- Capture before and after. Empty state plus the opened grid, query typed plus the filtered count, cell before plus `Unsaved changes`.
+- Capture before and after. Empty state plus the opened grid, query typed plus the filtered count, cell before plus `Unexported Changes`.
 - Every artifact set includes a snapshot (`.aria.txt`) and a screenshot (`.png`) that show `CSV Viewer` and `Main process connected`.
 - Record the feature id and the entry point used (recent-files button, header Compare, searchbox, and so on).
 - Opening a CSV also writes `recent-files.json` in the isolated userData dir. After a successful open, that file must still list the fixture path. The fixture bytes on disk must be unchanged. The app does not overwrite CSV sources.
-- Save As is not provable without a human finishing the OS dialog. Do not mark Save As verified from a disabled/enabled button alone.
+- Export CSV is not provable without a human finishing the OS dialog. Do not mark Export verified from an enabled button alone. `Compare…` is not provable in an unattended run: the second CSV requires that same OS dialog.
 - `docs/validation.md` mentions `pnpm run fixtures:validation`. That script is not in `package.json`. Do not call it. Use `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 
 ## Cleanup
@@ -154,7 +156,7 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | --- | --- |
 | `launch [--rebuild]` | Build if needed, seed recent files, start isolated Electron, wait until healthy |
 | `doctor` | Read-only health of the recorded instance |
-| `click --role <role> --name <name> [--exact] [--double]` | Click a visible control |
+| `click --role <role> --name <name> [--exact] [--double] [--nth N]` | Click a visible control (CDP mouse at the control center). `--nth` is 0-based when names collide |
 | `fill --role <role> --name <name> --value <text>` | Replace a textbox/searchbox value and fire input events |
 | `fill --focused --value <text>` | Replace the active editor (AG Grid cell editor) |
 | `type --text <text>` | Insert text at the current caret via CDP |

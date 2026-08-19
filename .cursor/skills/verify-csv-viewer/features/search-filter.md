@@ -34,4 +34,5 @@ Preconditions:
 - Insert row buttons disable while search is active. That is expected. Do not treat disabled insert as a failed search proof.
 - Do not wait a fixed 1500ms for global search. That debounce belongs to column filters. Wait for the visible-row line.
 - `Clear query` is disabled when nothing is queried. Enable it by searching first.
+- Search is a case-insensitive substring across every column. `active` also matches `inactive`, so that query is `4 visible of 5 rows`, not 3.
 - A screenshot of the searchbox value alone is not proof. The visible-row line and missing non-matching names are the proof.
