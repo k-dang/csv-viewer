@@ -20,7 +20,7 @@ import type {
   WorkingCsvId,
   OpenComparisonResult,
   OpenComparisonRequest,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import { orderComparisonValueColumns } from '../shared/comparison-presentation';
 import { toError } from '../shared/errors';
 import { isValidRowWindow } from './csv-query';

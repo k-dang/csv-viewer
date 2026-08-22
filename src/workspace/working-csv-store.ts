@@ -1,5 +1,5 @@
 import { toError } from '../shared/errors';
-import { supportedCsvFileExtensions } from '../shared/ipc';
+import { supportedCsvFileExtensions } from '../shared/csv-viewer-contract';
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
@@ -18,7 +18,7 @@ import type {
   WorkingCsvFailure,
   WorkingCsvId,
   WorkingCsvView,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from './comparison-executor';
 import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';

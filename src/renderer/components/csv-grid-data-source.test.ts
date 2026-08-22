@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkingCsvView } from '../../shared/ipc';
+import type { WorkingCsvView } from '../../shared/csv-viewer-contract';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
 const workingCsv: WorkingCsvView = {

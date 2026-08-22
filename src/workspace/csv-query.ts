@@ -4,8 +4,8 @@ import type {
   CsvDialectOptions,
   CsvFilterDescriptor,
   CsvSortDescriptor,
-} from '../shared/ipc';
-import { csvInternalRowIdField } from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../shared/csv-viewer-contract';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 
 export type QueryValues = Array<string | number | boolean | null>;

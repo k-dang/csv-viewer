@@ -1,5 +1,5 @@
-import type { CsvCellValue, CsvRow } from '../shared/ipc';
-import { csvInternalRowIdField } from '../shared/ipc';
+import type { CsvCellValue, CsvRow } from '../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../shared/csv-viewer-contract';
 
 /**
  * Turns engine result values into the workspace's own representation, so no engine's type

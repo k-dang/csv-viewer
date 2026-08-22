@@ -12,8 +12,8 @@ import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { CsvWorkspace, type WorkspaceCloseImpact } from '../workspace/csv-workspace';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
+import { ipcChannels } from '../shared/ipc-channels';
 import {
-  ipcChannels,
   supportedCsvFileExtensions,
   type BeginComparisonRequest,
   type CancelComparisonRequest,
@@ -28,10 +28,12 @@ import {
   type CsvInsertRowRequest,
   type CsvRowWindowRequest,
   type CsvSourceId,
+  type CsvViewerIntent,
   type CsvExportRequest,
   type HealthStatus,
+  type OpenComparisonRequest,
   type OpenCsvResult,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 const electronRoot = __dirname;
 const workspaceHost = new DesktopWorkspaceHost(
@@ -171,10 +173,7 @@ function createApplicationMenu() {
     platform: process.platform,
     appName: app.name,
     isDevelopment,
-    onOpenCsv: () => sendMenuRequest(ipcChannels.menuOpenCsv),
-    onReopenCsv: () => sendMenuRequest(ipcChannels.menuReopenCsv),
-    onExportCsv: () => sendMenuRequest(ipcChannels.menuExportCsv),
-    onCloseTab: () => sendMenuRequest(ipcChannels.menuCloseTab),
+    onIntent: sendIntent,
     onAbout: () => {
       void showMessageBox({
         type: 'info',
@@ -188,14 +187,9 @@ function createApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function sendMenuRequest(
-  channel:
-    | typeof ipcChannels.menuOpenCsv
-    | typeof ipcChannels.menuReopenCsv
-    | typeof ipcChannels.menuExportCsv
-    | typeof ipcChannels.menuCloseTab,
-) {
-  focusedWindow()?.webContents.send(channel);
+/** Application-menu commands reach the renderer as domain intents, never as menu command names. */
+function sendIntent(intent: CsvViewerIntent) {
+  focusedWindow()?.webContents.send(ipcChannels.intent, intent);
 }
 
 function registerIpcHandlers() {
@@ -229,6 +223,8 @@ function registerIpcHandlers() {
       }
 
       const replacement = await workspace.reopenCsv(workingCsvId, options);
+      // The workspace does not know this Working CSV, so the renderer is holding a Tab the main
+      // process has already dropped. An unreachable CSV Source is a `failed` outcome, not this one.
       if (replacement.status === 'working-csv-not-found') return { status: 'cancelled' };
       if (replacement.status === 'failed') {
         return { status: 'failed', message: replacement.failure.message };
@@ -245,8 +241,8 @@ function registerIpcHandlers() {
     workspace.getComparisonCandidates(baselineId),
   );
 
-  ipcMain.handle(ipcChannels.openComparison, (_event, baselineId: string, candidateId: string) =>
-    workspace.openComparison({ baselineId, candidateId }),
+  ipcMain.handle(ipcChannels.openComparison, (_event, request: OpenComparisonRequest) =>
+    workspace.openComparison(request),
   );
 
   ipcMain.handle(ipcChannels.getComparisonState, (_event, comparisonId: string) =>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, WorkingCsvView } from '../shared/ipc';
+import type { ComparisonView, WorkingCsvView } from '../shared/csv-viewer-contract';
 import {
   initialRendererWorkspace,
   projectOpenTabs,

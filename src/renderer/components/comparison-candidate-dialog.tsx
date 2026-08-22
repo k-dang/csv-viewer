@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ArrowLeftRight, FileSpreadsheet, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { ComparisonCandidate, WorkingCsvView } from '../../shared/ipc';
+import type { ComparisonCandidate, WorkingCsvView } from '../../shared/csv-viewer-contract';
 
 export function ComparisonCandidateDialog({
   baseline,

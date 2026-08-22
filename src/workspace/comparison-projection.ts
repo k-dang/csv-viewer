@@ -8,7 +8,7 @@ import type {
   SourceKeyDiagnostics,
   WorkingCsvRef,
   WorkingCsvView,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 export type ComparisonProjectionInput = {
   comparisonId: ComparisonId;

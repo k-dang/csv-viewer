@@ -16,12 +16,13 @@ import type {
   ComparisonRow,
   ComparisonRowsMode,
   ComparisonView,
-} from '../../shared/ipc';
+} from '../../shared/csv-viewer-contract';
 import { orderComparisonValueColumns } from '../../shared/comparison-presentation';
 import {
   comparisonGridRequestBounds,
   createComparisonGridDataSource,
 } from './comparison-grid-data-source';
+import { useCsvViewerRuntime } from '../csv-viewer-runtime';
 
 ModuleRegistry.registerModules([
   CellStyleModule,
@@ -75,6 +76,7 @@ export function ComparisonGrid({
   columnsMode: ComparisonColumnsMode;
   themeMode: 'light' | 'dark';
 }) {
+  const runtime = useCsvViewerRuntime();
   const activeResultToken = useRef(applied.resultToken);
   useEffect(() => {
     activeResultToken.current = applied.resultToken;
@@ -143,7 +145,7 @@ export function ComparisonGrid({
   const dataSource = useMemo(
     () =>
       createComparisonGridDataSource(
-        window.csvViewer,
+        runtime,
         {
           comparisonId: comparison.comparisonId,
           resultToken: applied.resultToken,
@@ -153,7 +155,7 @@ export function ComparisonGrid({
         () => activeResultToken.current,
         toGridRow,
       ),
-    [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode],
+    [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode, runtime],
   );
 
   return (

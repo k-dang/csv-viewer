@@ -1,4 +1,4 @@
-import type { ComparisonColumnsMode, ComparisonSummary, CsvColumn } from './ipc';
+import type { ComparisonColumnsMode, ComparisonSummary, CsvColumn } from './csv-viewer-contract';
 
 export function orderComparisonValueColumns(
   currentBaselineColumns: CsvColumn[],

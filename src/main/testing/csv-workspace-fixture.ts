@@ -8,7 +8,7 @@ import type {
   CsvDialectOptions,
   CsvSourceId,
   WorkingCsvView,
-} from '../../shared/ipc';
+} from '../../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from '../../workspace/comparison-executor';
 import { CsvWorkspace } from '../../workspace/csv-workspace';
 

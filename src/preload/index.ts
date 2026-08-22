@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { type CsvViewerApi, ipcChannels } from '../shared/ipc';
+import { ipcChannels } from '../shared/ipc-channels';
+import { isCsvViewerIntent, type CsvViewerRuntime } from '../shared/csv-viewer-contract';
 
-const api: CsvViewerApi = {
+const runtime: CsvViewerRuntime = {
+  capabilities: { recentCsvSources: true },
   healthCheck: () => ipcRenderer.invoke(ipcChannels.healthCheck),
   openCsv: (options) => ipcRenderer.invoke(ipcChannels.openCsv, options),
   openRecentCsv: (sourceId, options) =>
@@ -10,8 +12,7 @@ const api: CsvViewerApi = {
   closeCsv: (request) => ipcRenderer.invoke(ipcChannels.closeCsv, request),
   getComparisonCandidates: (baselineId) =>
     ipcRenderer.invoke(ipcChannels.getComparisonCandidates, baselineId),
-  openComparison: (baselineId, candidateId) =>
-    ipcRenderer.invoke(ipcChannels.openComparison, baselineId, candidateId),
+  openComparison: (request) => ipcRenderer.invoke(ipcChannels.openComparison, request),
   getComparisonState: (comparisonId) =>
     ipcRenderer.invoke(ipcChannels.getComparisonState, comparisonId),
   beginComparison: (request) => ipcRenderer.invoke(ipcChannels.beginComparison, request),
@@ -30,21 +31,13 @@ const api: CsvViewerApi = {
   exportCsv: (request) => ipcRenderer.invoke(ipcChannels.exportCsv, request),
   undoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.undoCsvEdit, request),
   redoCsvEdit: (request) => ipcRenderer.invoke(ipcChannels.redoCsvEdit, request),
-  onOpenCsvRequest: (callback) => {
-    ipcRenderer.on(ipcChannels.menuOpenCsv, callback);
-    return () => ipcRenderer.removeListener(ipcChannels.menuOpenCsv, callback);
-  },
-  onReopenCsvRequest: (callback) => {
-    ipcRenderer.on(ipcChannels.menuReopenCsv, callback);
-    return () => ipcRenderer.removeListener(ipcChannels.menuReopenCsv, callback);
-  },
-  onExportCsvRequest: (callback) => {
-    ipcRenderer.on(ipcChannels.menuExportCsv, callback);
-    return () => ipcRenderer.removeListener(ipcChannels.menuExportCsv, callback);
-  },
-  onCloseTabRequest: (callback) => {
-    ipcRenderer.on(ipcChannels.menuCloseTab, callback);
-    return () => ipcRenderer.removeListener(ipcChannels.menuCloseTab, callback);
+  onIntent: (callback) => {
+    // The bridge is a trust boundary: only a known intent reaches React.
+    const listener = (_event: Electron.IpcRendererEvent, intent: unknown) => {
+      if (isCsvViewerIntent(intent)) callback(intent);
+    };
+    ipcRenderer.on(ipcChannels.intent, listener);
+    return () => ipcRenderer.removeListener(ipcChannels.intent, listener);
   },
   onComparisonEvent: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, value: Parameters<typeof callback>[0]) =>
@@ -54,4 +47,4 @@ const api: CsvViewerApi = {
   },
 };
 
-contextBridge.exposeInMainWorld('csvViewer', api);
+contextBridge.exposeInMainWorld('csvViewer', runtime);

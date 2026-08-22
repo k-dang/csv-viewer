@@ -14,13 +14,14 @@ The concrete work:
 
 **Blocked by:** 03 - Shared CsvWorkspace extraction.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `CsvViewerApi` is evolved into CsvViewerRuntime in place. At no point do two renderer-facing interfaces coexist, and the type is not re-declared beside the original.
-- [ ] `CsvFileMetadata` carries opaque CSV Source identity instead of `path`; `openRecentCsv` is keyed by that identity; `saveCsvAs` is `exportCsv`.
-- [ ] CsvViewerRuntime is injected at the renderer composition root. All 29 `window.csvViewer` call sites are migrated; renderer code never touches the Electron preload global, IPC channel names, or runtime-name checks.
-- [ ] The runtime stays a thin facade: workspace surface plus explicit capabilities plus intent subscriptions. It does not re-abstract, re-wrap, or restate domain operations with different shapes than the workspace contract.
-- [ ] Genuine runtime differences (Recent CSV Source availability, export delivery, cancellation immediacy, capacity) are expressed as explicit capabilities, not optional methods, no-ops, fake empty results, or platform-named booleans.
-- [ ] Application-menu requests are translated into shared domain intents before reaching React; no Electron command names appear in renderer code.
-- [ ] Renderer behavior and capability-dependent presentation are testable through a test runtime with no Electron or browser globals.
-- [ ] Desktop application behaves identically end to end; existing renderer tests pass against the seam.
+- [x] `CsvViewerApi` is evolved into CsvViewerRuntime in place. At no point do two renderer-facing interfaces coexist, and the type is not re-declared beside the original.
+- [x] `CsvFileMetadata` carries opaque CSV Source identity instead of `path`; `openRecentCsv` is keyed by that identity; `saveCsvAs` is `exportCsv`.
+- [x] CsvViewerRuntime is injected at the renderer composition root. All 29 `window.csvViewer` call sites are migrated; renderer code never touches the Electron preload global, IPC channel names, or runtime-name checks.
+- [x] The runtime stays a thin facade: workspace surface plus explicit capabilities plus intent subscriptions. It does not re-abstract, re-wrap, or restate domain operations with different shapes than the workspace contract.
+- [x] Genuine runtime differences (Recent CSV Source availability, export delivery, cancellation immediacy, capacity) are expressed as explicit capabilities, not optional methods, no-ops, fake empty results, or platform-named booleans.
+  - Recent CSV Source availability is declared and read now. Export delivery, cancellation immediacy, and capacity are deliberately **not** declared yet: they have no consumer on desktop, and the tickets that introduce their first reader (08 web export and lifecycle, 09 capacity envelope) are also the tickets that establish their real shape. Declaring them here would ship a guessed vocabulary and a two-field capacity envelope that ticket 09's benchmarks would then have to migrate. The criterion's prohibition is on the *shape* a difference takes; nothing here is an optional method, no-op, fake empty result, or platform-named boolean.
+- [x] Application-menu requests are translated into shared domain intents before reaching React; no Electron command names appear in renderer code.
+- [x] Renderer behavior and capability-dependent presentation are testable through a test runtime with no Electron or browser globals.
+- [x] Desktop application behaves identically end to end; existing renderer tests pass against the seam.

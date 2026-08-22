@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonRow, ComparisonWindowOutcome } from '../../shared/ipc';
+import type { ComparisonRow, ComparisonWindowOutcome } from '../../shared/csv-viewer-contract';
 import {
   comparisonGridRequestBounds,
   createComparisonGridDataSource,

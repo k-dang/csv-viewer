@@ -3,8 +3,8 @@ import type {
   CsvColumn,
   CsvDialectOptions,
   CsvInsertRowPlacement,
-} from '../shared/ipc';
-import { csvInternalRowIdField } from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../shared/csv-viewer-contract';
 import type { CsvEditCommand } from './csv-edit-history';
 import {
   buildAppendSourceOrderSql,

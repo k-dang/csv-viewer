@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 import { FieldError } from '@/components/ui/field';
-import type { WorkingCsvView } from '../../shared/ipc';
+import type { WorkingCsvView } from '../../shared/csv-viewer-contract';
 import { CsvGrid } from './csv-grid';
 
 export function CsvMetadataView({

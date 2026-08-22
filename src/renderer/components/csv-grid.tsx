@@ -43,8 +43,8 @@ import type {
   CsvFilterDescriptor,
   CsvRow,
   WorkingCsvView,
-} from '../../shared/ipc';
-import { csvInternalRowIdField } from '../../shared/ipc';
+} from '../../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../../shared/csv-viewer-contract';
 import {
   createCsvGridDataSource,
   toCsvFilterDescriptors,
@@ -54,6 +54,7 @@ import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
 import { resolveStatsColumnOnOpen } from './csv-stats-state';
+import { useCsvViewerRuntime } from '../csv-viewer-runtime';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -129,6 +130,7 @@ export function CsvGrid({
   exportRequestSequence?: number;
   onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
 }) {
+  const runtime = useCsvViewerRuntime();
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(workingCsv.rowCount);
   const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(workingCsv.rowCount);
@@ -206,7 +208,7 @@ export function CsvGrid({
     gridApiRef.current = event.api;
     const datasource = createCsvGridDataSource(
       workingCsv,
-      window.csvViewer,
+      runtime,
       handleFilteredRowCount,
       searchRef.current,
       requestStateRef.current,
@@ -227,14 +229,14 @@ export function CsvGrid({
     setStatsRefreshKey((current) => current + 1);
     const datasource = createCsvGridDataSource(
       workingCsv,
-      window.csvViewer,
+      runtime,
       handleFilteredRowCount,
       search,
       requestStateRef.current,
       setQueryState,
     );
     api.setGridOption('datasource', datasource);
-  }, [search, workingCsv]);
+  }, [runtime, search, workingCsv]);
 
   function clearQuery() {
     const api = gridApiRef.current;
@@ -255,7 +257,7 @@ export function CsvGrid({
     updateActiveQueryState(false);
     const datasource = createCsvGridDataSource(
       workingCsv,
-      window.csvViewer,
+      runtime,
       handleFilteredRowCount,
       '',
       requestStateRef.current,
@@ -298,7 +300,7 @@ export function CsvGrid({
 
     try {
       setEditError(null);
-      const result = await window.csvViewer.editCsvCell({
+      const result = await runtime.editCsvCell({
         workingCsvId: workingCsv.workingCsvId,
         rowId,
         column,
@@ -321,7 +323,7 @@ export function CsvGrid({
   async function refreshEditState() {
     const { workingCsvId } = workingCsv;
     try {
-      const editState = await window.csvViewer.getCsvEditState({ workingCsvId });
+      const editState = await runtime.getCsvEditState({ workingCsvId });
       if (workingCsvIdRef.current !== workingCsvId) return;
       setEditState(editState);
     } catch (error) {
@@ -338,8 +340,8 @@ export function CsvGrid({
       setEditError(null);
       const nextEditState =
         action === 'undo'
-          ? await window.csvViewer.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId })
-          : await window.csvViewer.redoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
+          ? await runtime.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId })
+          : await runtime.redoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
       setStatsRefreshKey((current) => current + 1);
@@ -360,7 +362,7 @@ export function CsvGrid({
     try {
       setEditError(null);
       setEditState(
-        await window.csvViewer.deleteCsvRows({
+        await runtime.deleteCsvRows({
           workingCsvId: workingCsv.workingCsvId,
           rowIds: selectedRowIds,
         }),
@@ -381,7 +383,7 @@ export function CsvGrid({
     try {
       setEditError(null);
       setEditState(
-        await window.csvViewer.insertCsvRow({
+        await runtime.insertCsvRow({
           workingCsvId: workingCsv.workingCsvId,
           placement,
           rowIds: selectedRowIds,
@@ -401,7 +403,7 @@ export function CsvGrid({
   async function exportCsv() {
     try {
       setEditError(null);
-      const result = await window.csvViewer.exportCsv({ workingCsvId: workingCsv.workingCsvId });
+      const result = await runtime.exportCsv({ workingCsvId: workingCsv.workingCsvId });
 
       if (isCancelledExportResult(result)) {
         return;

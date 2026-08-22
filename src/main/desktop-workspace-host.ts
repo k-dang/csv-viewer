@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { toError } from '../shared/errors';
-import type { CsvSourceId, RecentCsvSource } from '../shared/ipc';
+import type { CsvSourceId, RecentCsvSource } from '../shared/csv-viewer-contract';
 import {
   CsvSourceUnavailableError,
   type CsvExportDelivery,

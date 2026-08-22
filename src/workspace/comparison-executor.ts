@@ -5,7 +5,7 @@ import type {
   ComparisonSummary,
   SourceKeyDiagnostics,
   WorkingCsvId,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 export type CreateComparisonSnapshotRequest = {
   artifactId: ComparisonOperationId;

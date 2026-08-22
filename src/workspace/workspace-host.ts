@@ -1,4 +1,4 @@
-import type { CsvSourceId, RecentCsvSource } from '../shared/ipc';
+import type { CsvSourceId, RecentCsvSource } from '../shared/csv-viewer-contract';
 
 export type CsvSourceDescription = {
   sourceId: CsvSourceId;

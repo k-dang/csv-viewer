@@ -1,4 +1,4 @@
-import type { CsvCellValue } from '../../shared/ipc';
+import type { CsvCellValue } from '../../shared/csv-viewer-contract';
 
 export function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value);

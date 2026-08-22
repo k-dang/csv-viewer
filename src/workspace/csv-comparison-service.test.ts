@@ -4,7 +4,7 @@ import type {
   ComparisonSummary,
   WorkingCsvView,
   SourceKeyDiagnostics,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import { CsvComparisonService } from './csv-comparison-service';
 import type {
   ComparisonExecutor,

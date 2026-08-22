@@ -1,4 +1,4 @@
-import type { CsvCellValue } from '../shared/ipc';
+import type { CsvCellValue } from '../shared/csv-viewer-contract';
 
 export type CsvEditDraft =
   | {

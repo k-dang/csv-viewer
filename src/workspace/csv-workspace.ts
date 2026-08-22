@@ -32,13 +32,14 @@ import type {
   CsvRowWindowRequest,
   CsvSourceId,
   OpenComparisonRequest,
+  CsvWorkspaceOperations,
   OpenComparisonResult,
   OpenCsvResult,
   RecentCsvSource,
   ReplaceWorkingCsvOutcome,
   WorkingCsvId,
   WorkingCsvView,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 export type WorkspaceCloseImpact = {
   workingCsvsWithUnexportedChanges: Array<{ workingCsvId: WorkingCsvId; fileName: string }>;
@@ -55,7 +56,7 @@ export type ConfirmWorkspaceCloseOutcome =
  * up in the page. Everything below it - the Working CSV store, edit history, query construction,
  * comparison orchestration, and database access - is internal implementation.
  */
-export class CsvWorkspace {
+export class CsvWorkspace implements CsvWorkspaceOperations {
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
   private disposal: Promise<void> | null = null;

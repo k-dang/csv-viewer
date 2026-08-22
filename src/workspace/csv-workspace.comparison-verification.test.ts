@@ -5,7 +5,7 @@ import type {
   ComparisonView,
   ComparisonWindow,
   WorkingCsvView,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
 
 type Fixture = CsvWorkspaceFixture;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ComparisonAttemptOutcomeView } from '../shared/ipc';
+import type { ComparisonAttemptOutcomeView } from '../shared/csv-viewer-contract';
 import type { ComparisonProjectionInput } from './comparison-projection';
 import { projectComparison } from './comparison-projection';
 

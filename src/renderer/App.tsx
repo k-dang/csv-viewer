@@ -13,11 +13,11 @@ import { HealthBadge, type HealthState } from '@/components/health-badge';
 import { TabStrip, type OpenRendererTab } from '@/components/tab-strip';
 import type {
   ComparisonCandidate,
+  CsvViewerIntent,
   WorkingCsvView,
   OpenCsvResult,
   CsvSourceId,
-  RecentCsvSource,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import {
   initialRendererWorkspace,
   projectOpenTabs,
@@ -25,6 +25,7 @@ import {
   type ComparisonTabPresentation,
   type RendererTab,
 } from './workspace-tabs';
+import { useCsvViewerRuntime } from './csv-viewer-runtime';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -37,6 +38,7 @@ function getInitialTheme(): ThemeMode {
 }
 
 export function App() {
+  const runtime = useCsvViewerRuntime();
   const [health, setHealth] = useState<HealthState>({ status: 'checking' });
   const [workspaceState, dispatchWorkspace] = useReducer(
     rendererWorkspaceReducer,
@@ -54,7 +56,6 @@ export function App() {
   const [delimiter, setDelimiter] = useState('');
   const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
-  const [recentSources, setRecentSources] = useState<RecentCsvSource[]>([]);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
   const [exportRequest, setExportRequest] = useState<{
     workingCsvId: string;
@@ -73,11 +74,8 @@ export function App() {
   );
   const activeTabId = workspaceState.activeTabId;
 
-  const activeCsv =
-    openTabs.find(
-      (tab): tab is Extract<OpenRendererTab, { kind: 'csv' }> =>
-        tab.id === activeTabId && tab.kind === 'csv',
-    )?.csv ?? null;
+  const activeTab = openTabs.find((tab) => tab.id === activeTabId) ?? null;
+  const activeCsv = activeTab?.kind === 'csv' ? activeTab.csv : null;
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', themeMode === 'dark');
@@ -87,7 +85,7 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    window.csvViewer
+    runtime
       .healthCheck()
       .then((value) => {
         if (!cancelled) setHealth({ status: 'healthy', value });
@@ -103,42 +101,31 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [runtime]);
 
   useEffect(() => {
-    void refreshRecentSources();
-  }, []);
-
-  useEffect(() => {
-    return window.csvViewer.onComparisonEvent((event) => {
+    return runtime.onComparisonEvent((event) => {
       dispatchWorkspace({ type: 'comparison-event', event });
     });
-  }, []);
+  }, [runtime]);
 
+  // One handler per intent, so a new CsvViewerIntent cannot compile until this dispatch covers it.
   useEffect(() => {
-    const removeOpenListener = window.csvViewer.onOpenCsvRequest(() => {
-      void openCsv();
-    });
-    const removeReopenListener = window.csvViewer.onReopenCsvRequest(() => {
-      void reopenActiveTab();
-    });
-    const removeExportListener = window.csvViewer.onExportCsvRequest(() => {
-      if (!activeCsv) return;
-      setExportRequest((current) => ({
-        workingCsvId: activeCsv.workingCsvId,
-        sequence: (current?.sequence ?? 0) + 1,
-      }));
-    });
-    const removeCloseListener = window.csvViewer.onCloseTabRequest(() => {
-      const tab = openTabs.find((candidate) => candidate.id === activeTabId);
-      if (tab) void closeTab(tab);
-    });
-    return () => {
-      removeOpenListener();
-      removeReopenListener();
-      removeExportListener();
-      removeCloseListener();
+    const handlers: Record<CsvViewerIntent, () => void> = {
+      'open-csv': () => void openCsv(),
+      'reopen-csv': () => void reopenActiveTab(),
+      'export-csv': () => {
+        if (!activeCsv) return;
+        setExportRequest((current) => ({
+          workingCsvId: activeCsv.workingCsvId,
+          sequence: (current?.sequence ?? 0) + 1,
+        }));
+      },
+      'close-tab': () => {
+        if (activeTab) void closeTab(activeTab);
+      },
     };
+    return runtime.onIntent((intent) => handlers[intent]());
   });
 
   useEffect(() => {
@@ -151,14 +138,6 @@ export function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
-
-  async function refreshRecentSources() {
-    try {
-      setRecentSources(await window.csvViewer.getRecentCsvSources());
-    } catch {
-      setRecentSources([]);
-    }
-  }
 
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
@@ -186,9 +165,8 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await window.csvViewer.openCsv(options);
+      const result = await runtime.openCsv(options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open CSV.');
     } finally {
@@ -205,12 +183,10 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await window.csvViewer.openRecentCsv(sourceId, options);
+      const result = await runtime.openRecentCsv(sourceId, options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open recent CSV.');
-      await refreshRecentSources();
     } finally {
       setIsOpening(false);
     }
@@ -226,9 +202,8 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await window.csvViewer.reopenCsv(activeCsv.workingCsvId, options);
+      const result = await runtime.reopenCsv(activeCsv.workingCsvId, options);
       applyOpenResult(result);
-      if (result.status === 'opened') await refreshRecentSources();
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to reopen CSV.');
     } finally {
@@ -241,7 +216,7 @@ export function App() {
     try {
       setCandidatePicker({
         baseline: activeCsv,
-        candidates: await window.csvViewer.getComparisonCandidates(activeCsv.workingCsvId),
+        candidates: await runtime.getComparisonCandidates(activeCsv.workingCsvId),
       });
     } catch (error: unknown) {
       setOpenError(
@@ -252,10 +227,10 @@ export function App() {
 
   async function chooseCandidate(candidateId: string) {
     if (!candidatePicker) return;
-    const result = await window.csvViewer.openComparison(
-      candidatePicker.baseline.workingCsvId,
+    const result = await runtime.openComparison({
+      baselineId: candidatePicker.baseline.workingCsvId,
       candidateId,
-    );
+    });
     if (result.status === 'rejected') {
       setOpenError(result.fault.message);
       return;
@@ -268,11 +243,11 @@ export function App() {
   async function closeTab(tab: OpenRendererTab) {
     try {
       if (tab.kind === 'comparison') {
-        const result = await window.csvViewer.closeComparison(tab.comparison.comparisonId);
+        const result = await runtime.closeComparison(tab.comparison.comparisonId);
         if (result.status === 'failed') setOpenError(result.failure.message);
         return;
       }
-      let result = await window.csvViewer.closeCsv({ workingCsvId: tab.csv.workingCsvId });
+      let result = await runtime.closeCsv({ workingCsvId: tab.csv.workingCsvId });
       while (result.status === 'confirmation-required') {
         const dependentNames = result.impact.dependentComparisons.map(
           (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
@@ -286,7 +261,7 @@ export function App() {
           .filter(Boolean)
           .join('\n\n');
         if (!window.confirm(`Close ${tab.csv.file.name}?\n\n${impact}`)) return;
-        result = await window.csvViewer.closeCsv({
+        result = await runtime.closeCsv({
           workingCsvId: tab.csv.workingCsvId,
           confirmedImpact: result.impact,
         });
@@ -483,7 +458,6 @@ export function App() {
           isOpening={isOpening}
           errorMessage={openError}
           dialectError={dialectError}
-          recentSources={recentSources}
           onOpenCsv={openCsv}
           onOpenRecent={openRecentCsv}
         />

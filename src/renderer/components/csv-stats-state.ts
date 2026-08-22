@@ -1,4 +1,4 @@
-import type { CsvColumn } from '../../shared/ipc';
+import type { CsvColumn } from '../../shared/csv-viewer-contract';
 
 export function resolveStatsColumnOnOpen({
   columns,

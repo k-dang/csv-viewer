@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { ComparisonView, WorkingCsvView } from '../../shared/ipc';
+import type { ComparisonView, WorkingCsvView } from '../../shared/csv-viewer-contract';
 
 export type OpenRendererTab =
   | { kind: 'csv'; id: string; csv: WorkingCsvView }
