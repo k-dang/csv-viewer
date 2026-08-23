@@ -1,35 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, WorkingCsvView } from '../shared/csv-viewer-contract';
+import type { ComparisonView } from '../shared/csv-viewer-contract';
+import { comparisonFixture, workingCsvFixture } from './testing/csv-fixtures';
 import {
   initialRendererWorkspace,
   projectOpenTabs,
   rendererWorkspaceReducer,
 } from './workspace-tabs';
 
-function csv(workingCsvId: string): WorkingCsvView {
-  return {
-    workingCsvId,
-    dataRevision: 0,
-    file: { sourceId: workingCsvId, location: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
-    columns: [{ name: 'id', type: 'VARCHAR' }],
-    rowCount: 1,
-    dialect: {},
-    editState: { workingCsvId, hasUnexportedChanges: false, canUndo: false, canRedo: false },
-  };
-}
-
-function comparison(version = 1): ComparisonView {
-  return {
-    comparisonId: 'comparison-1',
-    version,
-    baseline: csv('a'),
-    candidate: csv('b'),
-    availableKeyColumns: ['id'],
-    operation: null,
-    applied: null,
-    lastAttempt: null,
-  };
-}
+const csv = (workingCsvId: string) => workingCsvFixture({ workingCsvId });
+const comparison = (version = 1) =>
+  comparisonFixture({ version, baseline: csv('a'), candidate: csv('b') });
 
 describe('rendererWorkspaceReducer', () => {
   it('opens, orders, selects, and closes heterogeneous tabs atomically', () => {

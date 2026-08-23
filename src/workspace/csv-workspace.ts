@@ -3,7 +3,7 @@ import { CsvComparisonService } from './csv-comparison-service';
 import { WorkingCsvStore } from './working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 import type {
-  BeginComparisonIpcResult,
+  BeginComparisonResult,
   BeginComparisonRequest,
   CancelComparisonRequest,
   CancelComparisonResult,
@@ -162,7 +162,7 @@ export class CsvWorkspace implements CsvWorkspaceOperations {
    * Starts a Comparison operation and returns immediately. Terminal outcomes arrive through
    * Comparison events, so nothing live crosses the seam.
    */
-  async beginComparison(request: BeginComparisonRequest): Promise<BeginComparisonIpcResult> {
+  async beginComparison(request: BeginComparisonRequest): Promise<BeginComparisonResult> {
     const result = this.comparisonStore.begin(request);
     if (result.status !== 'accepted') return result;
     void result.completion.catch((error) => {

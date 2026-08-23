@@ -364,7 +364,7 @@ export type BeginComparisonRequest =
   | { kind: 'apply-key'; comparisonId: ComparisonId; key: string[] }
   | { kind: 'refresh'; comparisonId: ComparisonId };
 
-export type BeginComparisonIpcResult =
+export type BeginComparisonResult =
   | { status: 'accepted'; operationId: ComparisonOperationId }
   | { status: 'busy'; activeOperationId: ComparisonOperationId }
   | { status: 'rejected'; fault: ComparisonFault };
@@ -426,16 +426,13 @@ export const csvViewerIntents = ['open-csv', 'reopen-csv', 'export-csv', 'close-
 
 export type CsvViewerIntent = (typeof csvViewerIntents)[number];
 
-/** Hosts validate what crosses their boundary before it reaches React. */
 export function isCsvViewerIntent(value: unknown): value is CsvViewerIntent {
   return csvViewerIntents.includes(value as CsvViewerIntent);
 }
 
 /**
  * Genuine differences between runtimes, stated up front rather than discovered through failures.
- * A capability is declared once a caller reads it: export delivery, cancellation immediacy, and the
- * capacity envelope join this type in the tickets that introduce their first consumer, which are
- * also the tickets that establish their real shape.
+ * A capability is declared once a caller reads it.
  */
 export type CsvViewerRuntimeCapabilities = {
   /** Recent CSV Sources can be listed and reopened. False when source identity does not outlive the session. */
@@ -454,7 +451,7 @@ export type CsvWorkspaceOperations = {
   getComparisonCandidates: (baselineId: WorkingCsvId) => Promise<ComparisonCandidate[]>;
   openComparison: (request: OpenComparisonRequest) => Promise<OpenComparisonResult>;
   getComparisonState: (comparisonId: ComparisonId) => Promise<ComparisonView | null>;
-  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonIpcResult>;
+  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonResult>;
   cancelComparison: (request: CancelComparisonRequest) => Promise<CancelComparisonResult>;
   getComparisonWindow: (request: ComparisonWindowRequest) => Promise<ComparisonWindowOutcome>;
   swapComparison: (comparisonId: ComparisonId) => Promise<ComparisonMutationOutcome>;

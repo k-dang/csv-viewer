@@ -84,7 +84,7 @@ export type ComparisonAttemptOutcome =
       comparison: ComparisonView | null;
     };
 
-export type BeginComparisonResult =
+export type BeginComparisonAttempt =
   | {
       status: 'accepted';
       operationId: ComparisonOperationId;
@@ -197,7 +197,7 @@ export class CsvComparisonService {
     return entity ? this.project(entity) : null;
   }
 
-  begin(request: BeginComparisonRequest): BeginComparisonResult {
+  begin(request: BeginComparisonRequest): BeginComparisonAttempt {
     if (this.lifecycle !== 'active') {
       return rejected('source-not-found', 'The CSV workspace is closing.');
     }

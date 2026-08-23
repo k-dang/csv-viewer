@@ -1,38 +1,27 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, WorkingCsvView } from '../../shared/csv-viewer-contract';
+import type { ComparisonView } from '../../shared/csv-viewer-contract';
+import { comparisonFixture, workingCsvFixture } from '../testing/csv-fixtures';
 import { withRuntime } from '../testing/test-csv-viewer-runtime';
 import { ComparisonCandidateDialog } from './comparison-candidate-dialog';
 import { ComparisonTab } from './comparison-tab';
 
-function workingCsv(workingCsvId: string): WorkingCsvView {
-  return {
+const workingCsv = (workingCsvId: string) =>
+  workingCsvFixture({
     workingCsvId,
-    dataRevision: 0,
-    file: { sourceId: workingCsvId, location: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
     columns: [
       { name: 'id', type: 'VARCHAR' },
       { name: 'value', type: 'VARCHAR' },
     ],
-    rowCount: 1,
-    dialect: {},
-    editState: { workingCsvId, hasUnexportedChanges: false, canUndo: false, canRedo: false },
-  };
-}
+  });
 
-function comparison(overrides: Partial<ComparisonView> = {}): ComparisonView {
-  return {
-    comparisonId: 'comparison-1',
-    version: 1,
+const comparison = (overrides: Partial<ComparisonView> = {}) =>
+  comparisonFixture({
     baseline: workingCsv('baseline'),
     candidate: workingCsv('candidate'),
     availableKeyColumns: ['id', 'value'],
-    operation: null,
-    applied: null,
-    lastAttempt: null,
     ...overrides,
-  };
-}
+  });
 
 const presentation = {
   draftKey: ['id'],

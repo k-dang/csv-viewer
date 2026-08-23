@@ -187,7 +187,6 @@ function createApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-/** Application-menu commands reach the renderer as domain intents, never as menu command names. */
 function sendIntent(intent: CsvViewerIntent) {
   focusedWindow()?.webContents.send(ipcChannels.intent, intent);
 }

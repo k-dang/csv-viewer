@@ -203,7 +203,6 @@ export function App() {
     setIsOpening(true);
     try {
       const result = await runtime.reopenCsv(activeCsv.workingCsvId, options);
-      // The workspace has already dropped this Working CSV, so the Tab showing it is stale.
       if (result.status === 'working-csv-not-found') {
         forgetWorkingCsv(activeCsv.workingCsvId);
         return;

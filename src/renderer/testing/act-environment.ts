@@ -1,0 +1,14 @@
+import { afterEach, beforeEach } from 'vitest';
+
+/**
+ * react-test-renderer refuses act() unless this global is set, and leaving it set leaks into the
+ * sibling test files sharing the worker. Call once at the top of a file that renders with act().
+ */
+export function enableActEnvironment() {
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+  afterEach(() => {
+    delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+  });
+}

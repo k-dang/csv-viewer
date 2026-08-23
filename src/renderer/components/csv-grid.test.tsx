@@ -1,15 +1,14 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CsvEditState } from '../../shared/csv-viewer-contract';
+import { enableActEnvironment } from '../testing/act-environment';
 import { workingCsvFixture } from '../testing/csv-fixtures';
 import { createTestCsvViewerRuntime, withRuntime } from '../testing/test-csv-viewer-runtime';
 import { CsvGrid } from './csv-grid';
 
 vi.mock('ag-grid-react', () => ({ AgGridReact: () => null }));
 
-afterEach(() => {
-  delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
-});
+enableActEnvironment();
 
 describe('CsvGrid edit state', () => {
   it('reports clean export state after an edited Working CSV is reopened', async () => {
@@ -28,7 +27,6 @@ describe('CsvGrid edit state', () => {
       .mockResolvedValueOnce(editedWorkingCsv.editState)
       .mockResolvedValueOnce(reopenedWorkingCsv.editState);
     const runtime = createTestCsvViewerRuntime({ getCsvEditState });
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const onUnexportedChangesChange = vi.fn();
     let renderer: ReactTestRenderer;
 
@@ -65,22 +63,13 @@ describe('CsvGrid edit state', () => {
 
   it('ignores an edit-state response that arrives after the Working CSV changed', async () => {
     const firstWorkingCsv = workingCsvFixture({ workingCsvId: 'working-csv-1' });
-    const secondWorkingCsv = workingCsvFixture({
-      workingCsvId: 'working-csv-2',
-      file: {
-        sourceId: 'source-2',
-        location: '/data/second.csv',
-        name: 'second.csv',
-        sizeBytes: 24,
-      },
-    });
+    const secondWorkingCsv = workingCsvFixture({ workingCsvId: 'working-csv-2' });
     const pending = new Map<string, (editState: CsvEditState) => void>();
     const getCsvEditState = vi.fn(
       ({ workingCsvId }: { workingCsvId: string }) =>
         new Promise<CsvEditState>((resolve) => pending.set(workingCsvId, resolve)),
     );
     const runtime = createTestCsvViewerRuntime({ getCsvEditState });
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const onUnexportedChangesChange = vi.fn();
     let renderer: ReactTestRenderer;
 

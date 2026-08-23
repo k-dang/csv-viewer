@@ -1,16 +1,11 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RecentCsvSource } from '../../shared/csv-viewer-contract';
+import { enableActEnvironment } from '../testing/act-environment';
 import { createTestCsvViewerRuntime, withRuntime } from '../testing/test-csv-viewer-runtime';
 import { EmptyCsvState } from './empty-csv-state';
 
-beforeEach(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
-
-afterEach(() => {
-  delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
-});
+enableActEnvironment();
 
 const recentSources: RecentCsvSource[] = [
   {
@@ -42,15 +37,15 @@ function renderedText(renderer: ReactTestRenderer): string {
 describe('EmptyCsvState', () => {
   it('offers Recent CSV Sources on a runtime that can reopen them', async () => {
     const getRecentCsvSources = vi.fn().mockResolvedValue(recentSources);
-    let renderer: ReactTestRenderer;
+    let renderer!: ReactTestRenderer;
 
     await act(async () => {
       renderer = create(emptyState(createTestCsvViewerRuntime({ getRecentCsvSources })));
     });
 
     expect(getRecentCsvSources).toHaveBeenCalledOnce();
-    expect(renderedText(renderer!)).toContain('Recent CSV Sources');
-    expect(renderedText(renderer!)).toContain('sales.csv');
+    expect(renderedText(renderer)).toContain('Recent CSV Sources');
+    expect(renderedText(renderer)).toContain('sales.csv');
   });
 
   it('neither requests nor offers Recent CSV Sources on a runtime that cannot reopen them', async () => {
@@ -59,15 +54,15 @@ describe('EmptyCsvState', () => {
       getRecentCsvSources,
       capabilities: { recentCsvSources: false },
     });
-    let renderer: ReactTestRenderer;
+    let renderer!: ReactTestRenderer;
 
     await act(async () => {
       renderer = create(emptyState(runtime));
     });
 
     expect(getRecentCsvSources).not.toHaveBeenCalled();
-    expect(renderedText(renderer!)).not.toContain('Recent CSV Sources');
-    expect(renderedText(renderer!)).not.toContain('sales.csv');
+    expect(renderedText(renderer)).not.toContain('Recent CSV Sources');
+    expect(renderedText(renderer)).not.toContain('sales.csv');
   });
 
   /** A CSV Source that has become unreachable must drop off the list after a failed open. */
@@ -77,7 +72,7 @@ describe('EmptyCsvState', () => {
       .mockResolvedValueOnce(recentSources)
       .mockResolvedValueOnce([]);
     const runtime = createTestCsvViewerRuntime({ getRecentCsvSources });
-    let renderer: ReactTestRenderer;
+    let renderer!: ReactTestRenderer;
 
     await act(async () => {
       renderer = create(emptyState(runtime));
@@ -90,6 +85,6 @@ describe('EmptyCsvState', () => {
     });
 
     expect(getRecentCsvSources).toHaveBeenCalledTimes(2);
-    expect(renderedText(renderer!)).not.toContain('sales.csv');
+    expect(renderedText(renderer)).not.toContain('sales.csv');
   });
 });

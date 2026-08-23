@@ -17,8 +17,12 @@
         "no-restricted-imports": [
           "error",
           {
-            "paths": ["electron", "@duckdb/node-api", "fs", "path", "os", "child_process", "worker_threads"],
-            "patterns": ["node:*", "**/main/**", "**/preload/**", "**/renderer/**"]
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^(electron|@duckdb/node-api)(/|$)|/(main|preload|renderer)/",
+                "message": "The shared workspace must run unchanged in a browser page: no Electron, no Node, no runtime-specific tree."
+              }
+            ]
           }
         ]
       }
@@ -33,8 +37,12 @@
         "no-restricted-imports": [
           "error",
           {
-            "paths": ["electron", "fs", "path", "os", "child_process", "worker_threads"],
-            "patterns": ["node:*", "**/main/**", "**/preload/**", "**/renderer/**"]
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/(main|preload|renderer)/",
+                "message": "Only the native DuckDB driver is exempt here: no Electron, no Node, no runtime-specific tree."
+              }
+            ]
           }
         ]
       }
@@ -47,33 +55,21 @@
         "no-restricted-imports": [
           "error",
           {
-            "paths": ["electron", "fs", "path", "os", "child_process", "worker_threads"],
-            "patterns": ["node:*", "**/ipc-channels", "**/workspace/**", "**/main/**", "**/preload/**"]
-          }
-        ],
-        "no-restricted-properties": [
-          "error",
-          {
-            "object": "window",
-            "property": "csvViewer",
-            "message": "Take the runtime from useCsvViewerRuntime() instead of the Electron preload global."
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/ipc-channels$|/(main|preload|workspace)/",
+                "message": "The renderer reaches its host through the injected CsvViewerRuntime, never through Electron, Node, or a transport name."
+              }
+            ]
           }
         ]
       }
     },
-    // The composition root's adapter is the one module allowed to read the preload bridge.
+    // Tests build real CSV Sources on disk and drive the native driver directly.
     {
-      "files": ["src/renderer/electron-runtime.ts"],
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
-        "no-restricted-properties": "off"
-      }
-    },
-    // Tests and test fixtures build real CSV Sources on disk and drive the native driver directly.
-    {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "src/main/testing/**"],
-      "rules": {
-        "no-restricted-imports": "off",
-        "no-restricted-properties": "off"
+        "no-restricted-imports": "off"
       }
     }
   ]

@@ -3,10 +3,7 @@ import type { CsvViewerRuntime } from '../shared/csv-viewer-contract';
 
 const CsvViewerRuntimeContext = createContext<CsvViewerRuntime | null>(null);
 
-/**
- * Injects the host runtime at the composition root. Desktop passes the Electron bridge, web passes
- * in-page wiring, and tests pass a plain object; React below this point sees only the contract.
- */
+/** Injects the host runtime at the composition root; React below this point sees only the contract. */
 export function CsvViewerRuntimeProvider({
   runtime,
   children,
