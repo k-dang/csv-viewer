@@ -1,0 +1,76 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["dist-electron", "dist-renderer", "release", "src/renderer/components/ui"],
+  "rules": {
+    // Every hit in this codebase is a deliberate snapshot taken before the loop body deletes from
+    // the collection it is iterating (worker disposal, comparison close, artifact retirement).
+    // Dropping the spread would skip entries, so the rule is wrong here rather than the code.
+    "unicorn/no-useless-spread": "off"
+  },
+  "overrides": [
+    // The shared workspace runs in the Electron main process today and in a browser page once the
+    // web runtime lands, so it stays free of Electron, Node, and runtime-specific trees. The native
+    // DuckDB driver stays in the duckdb modules the web adapter will sit beside.
+    {
+      "files": ["src/workspace/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^(electron|@duckdb/node-api)(/|$)|/(main|preload|renderer)/",
+                "message": "The shared workspace must run unchanged in a browser page: no Electron, no Node, no runtime-specific tree."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // The two named database modules are where the native driver is allowed to live.
+    {
+      "files": [
+        "src/workspace/duckdb/duckdb-database.ts",
+        "src/workspace/duckdb/duckdb-comparison-executor.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/(main|preload|renderer)/",
+                "message": "Only the native DuckDB driver is exempt here: no Electron, no Node, no runtime-specific tree."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // The renderer reaches its host only through the injected CsvViewerRuntime: no Electron, no
+    // Node, no transport names, and no reaching into the workspace or main trees.
+    {
+      "files": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/ipc-channels$|/(main|preload|workspace)/",
+                "message": "The renderer reaches its host through the injected CsvViewerRuntime, never through Electron, Node, or a transport name."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // Tests build real CSV Sources on disk and drive the native driver directly.
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
+}

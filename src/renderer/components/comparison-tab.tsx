@@ -10,9 +10,10 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import type { ComparisonPhase, ComparisonSummary, ComparisonView } from '../../shared/ipc';
+import type { ComparisonPhase, ComparisonSummary, ComparisonView } from '../../shared/csv-viewer-contract';
 import type { ComparisonTabPresentation } from '../workspace-tabs';
 import { ComparisonGrid } from './comparison-grid';
+import { useCsvViewerRuntime } from '../csv-viewer-runtime';
 
 export type { ComparisonTabPresentation } from '../workspace-tabs';
 
@@ -27,6 +28,7 @@ export function ComparisonTab({
   onPresentationChange: (next: ComparisonTabPresentation) => void;
   themeMode: 'light' | 'dark';
 }) {
+  const runtime = useCsvViewerRuntime();
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedAttemptId, setDismissedAttemptId] = useState<string | null>(null);
   const [hiddenDiagnosticsAttemptId, setHiddenDiagnosticsAttemptId] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function ComparisonTab({
   async function begin(kind: 'apply-key' | 'refresh') {
     setActionError(null);
     try {
-      const outcome = await window.csvViewer.beginComparison(
+      const outcome = await runtime.beginComparison(
         kind === 'apply-key'
           ? { kind, comparisonId: comparison.comparisonId, key: presentation.draftKey }
           : { kind, comparisonId: comparison.comparisonId },
@@ -73,7 +75,7 @@ export function ComparisonTab({
   async function swap() {
     setActionError(null);
     try {
-      const outcome = await window.csvViewer.swapComparison(comparison.comparisonId);
+      const outcome = await runtime.swapComparison(comparison.comparisonId);
       if (outcome.status === 'rejected') setActionError(outcome.fault.message);
     } catch (error) {
       setActionError(actionFailureMessage(error, 'Unable to swap comparison sides.'));
@@ -83,7 +85,7 @@ export function ComparisonTab({
   async function cancel(operationId: string) {
     setActionError(null);
     try {
-      await window.csvViewer.cancelComparison({
+      await runtime.cancelComparison({
         comparisonId: comparison.comparisonId,
         operationId,
       });

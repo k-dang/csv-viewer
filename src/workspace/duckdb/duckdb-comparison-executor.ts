@@ -6,8 +6,8 @@ import type {
   CsvColumn,
   SourceKeyDiagnostics,
   WorkingCsvId,
-} from '../../shared/ipc';
-import { csvInternalRowIdField } from '../../shared/ipc';
+} from '../../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../../shared/csv-viewer-contract';
 import { toError } from '../../shared/errors';
 import type {
   ComparisonExecutor,

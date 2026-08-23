@@ -7,8 +7,9 @@
   "scripts": {
     "clean": "node scripts/clean-build.cjs",
     "dev": "tsc -p tsconfig.electron.json && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/launch-electron.cjs .\"",
-    "build": "pnpm run clean && pnpm run typecheck && node scripts/check-workspace-isolation.mjs && vite build && tsc -p tsconfig.electron.json",
+    "build": "pnpm run clean && pnpm run typecheck && pnpm run lint && vite build && tsc -p tsconfig.electron.json",
     "package": "pnpm run build && electron-builder --publish never",
+    "lint": "oxlint --deny-warnings",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "start": "pnpm run build && node scripts/launch-electron.cjs ."
@@ -50,6 +51,7 @@
     "@types/react-test-renderer": "19.1.0",
     "electron": "^38.8.6",
     "electron-builder": "^26.8.1",
+    "oxlint": "^1.79.0",
     "react-test-renderer": "19.1.1",
     "vitest": "^4.1.5"
   },

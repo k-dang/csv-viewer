@@ -4,7 +4,7 @@ import type {
   ComparisonOperationId,
   ComparisonSummary,
   SourceKeyDiagnostics,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,

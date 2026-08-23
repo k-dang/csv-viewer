@@ -1,13 +1,12 @@
 import type { MenuItemConstructorOptions } from 'electron';
+import type { CsvViewerIntent } from '../shared/csv-viewer-contract';
 
 type ApplicationMenuOptions = {
   platform: NodeJS.Platform;
   appName: string;
   isDevelopment: boolean;
-  onOpenCsv: () => void;
-  onReopenCsv: () => void;
-  onExportCsv: () => void;
-  onCloseTab: () => void;
+  /** Native menu commands leave this module as domain intents; no command names travel onward. */
+  onIntent: (intent: CsvViewerIntent) => void;
   onAbout: () => void;
 };
 
@@ -15,10 +14,7 @@ export function buildApplicationMenuTemplate({
   platform,
   appName,
   isDevelopment,
-  onOpenCsv,
-  onReopenCsv,
-  onExportCsv,
-  onCloseTab,
+  onIntent,
   onAbout,
 }: ApplicationMenuOptions): MenuItemConstructorOptions[] {
   const fileMenu: MenuItemConstructorOptions = {
@@ -27,22 +23,22 @@ export function buildApplicationMenuTemplate({
       {
         label: 'Open CSV...',
         accelerator: 'CmdOrCtrl+O',
-        click: onOpenCsv,
+        click: () => onIntent('open-csv'),
       },
       {
         label: 'Reopen CSV',
         accelerator: 'CmdOrCtrl+R',
-        click: onReopenCsv,
+        click: () => onIntent('reopen-csv'),
       },
       {
         label: 'Export CSV...',
         accelerator: 'CmdOrCtrl+Shift+E',
-        click: onExportCsv,
+        click: () => onIntent('export-csv'),
       },
       {
         label: 'Close Tab',
         accelerator: 'CmdOrCtrl+W',
-        click: onCloseTab,
+        click: () => onIntent('close-tab'),
       },
       { type: 'separator' },
       platform === 'darwin' ? { role: 'close' } : { role: 'quit' },

@@ -3,7 +3,7 @@ import { CsvComparisonService } from './csv-comparison-service';
 import { WorkingCsvStore } from './working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 import type {
-  BeginComparisonIpcResult,
+  BeginComparisonResult,
   BeginComparisonRequest,
   CancelComparisonRequest,
   CancelComparisonResult,
@@ -32,13 +32,14 @@ import type {
   CsvRowWindowRequest,
   CsvSourceId,
   OpenComparisonRequest,
+  CsvWorkspaceOperations,
   OpenComparisonResult,
   OpenCsvResult,
   RecentCsvSource,
   ReplaceWorkingCsvOutcome,
   WorkingCsvId,
   WorkingCsvView,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 export type WorkspaceCloseImpact = {
   workingCsvsWithUnexportedChanges: Array<{ workingCsvId: WorkingCsvId; fileName: string }>;
@@ -55,7 +56,7 @@ export type ConfirmWorkspaceCloseOutcome =
  * up in the page. Everything below it - the Working CSV store, edit history, query construction,
  * comparison orchestration, and database access - is internal implementation.
  */
-export class CsvWorkspace {
+export class CsvWorkspace implements CsvWorkspaceOperations {
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
   private disposal: Promise<void> | null = null;
@@ -161,7 +162,7 @@ export class CsvWorkspace {
    * Starts a Comparison operation and returns immediately. Terminal outcomes arrive through
    * Comparison events, so nothing live crosses the seam.
    */
-  async beginComparison(request: BeginComparisonRequest): Promise<BeginComparisonIpcResult> {
+  async beginComparison(request: BeginComparisonRequest): Promise<BeginComparisonResult> {
     const result = this.comparisonStore.begin(request);
     if (result.status !== 'accepted') return result;
     void result.completion.catch((error) => {

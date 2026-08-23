@@ -6,7 +6,7 @@ import type {
   ComparisonView,
   WorkingCsvView,
   WorkingCsvId,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 import type { OpenRendererTab } from './components/tab-strip';
 
 export type ComparisonTabPresentation = {

@@ -1,7 +1,7 @@
 import { FileSpreadsheet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import type { CsvSourceId, RecentCsvSource } from '../../shared/ipc';
+import type { CsvSourceId, RecentCsvSource } from '../../shared/csv-viewer-contract';
 import { formatFileSize } from './csv-format';
 
 export function RecentCsvSourceList({

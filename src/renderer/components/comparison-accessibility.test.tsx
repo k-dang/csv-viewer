@@ -1,37 +1,27 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, WorkingCsvView } from '../../shared/ipc';
+import type { ComparisonView } from '../../shared/csv-viewer-contract';
+import { comparisonFixture, workingCsvFixture } from '../testing/csv-fixtures';
+import { withRuntime } from '../testing/test-csv-viewer-runtime';
 import { ComparisonCandidateDialog } from './comparison-candidate-dialog';
 import { ComparisonTab } from './comparison-tab';
 
-function workingCsv(workingCsvId: string): WorkingCsvView {
-  return {
+const workingCsv = (workingCsvId: string) =>
+  workingCsvFixture({
     workingCsvId,
-    dataRevision: 0,
-    file: { sourceId: workingCsvId, location: `C:/${workingCsvId}.csv`, name: `${workingCsvId}.csv`, sizeBytes: 10 },
     columns: [
       { name: 'id', type: 'VARCHAR' },
       { name: 'value', type: 'VARCHAR' },
     ],
-    rowCount: 1,
-    dialect: {},
-    editState: { workingCsvId, hasUnexportedChanges: false, canUndo: false, canRedo: false },
-  };
-}
+  });
 
-function comparison(overrides: Partial<ComparisonView> = {}): ComparisonView {
-  return {
-    comparisonId: 'comparison-1',
-    version: 1,
+const comparison = (overrides: Partial<ComparisonView> = {}) =>
+  comparisonFixture({
     baseline: workingCsv('baseline'),
     candidate: workingCsv('candidate'),
     availableKeyColumns: ['id', 'value'],
-    operation: null,
-    applied: null,
-    lastAttempt: null,
     ...overrides,
-  };
-}
+  });
 
 const presentation = {
   draftKey: ['id'],
@@ -73,18 +63,20 @@ describe('Comparison accessibility semantics', () => {
 
   it('announces progress politely and exposes a keyboard-operable Cancel action', () => {
     const markup = renderToStaticMarkup(
-      <ComparisonTab
-        comparison={comparison({
-          operation: {
-            operationId: 'operation-1',
-            intent: 'apply-key',
-            phase: 'comparing',
-          },
-        })}
-        presentation={presentation}
-        onPresentationChange={vi.fn()}
-        themeMode="light"
-      />,
+      withRuntime(
+        <ComparisonTab
+          comparison={comparison({
+            operation: {
+              operationId: 'operation-1',
+              intent: 'apply-key',
+              phase: 'comparing',
+            },
+          })}
+          presentation={presentation}
+          onPresentationChange={vi.fn()}
+          themeMode="light"
+        />,
+      ),
     );
 
     expect(markup).toContain('aria-live="polite"');
@@ -95,32 +87,34 @@ describe('Comparison accessibility semantics', () => {
 
   it('marks invalid-key diagnostics as a programmatically focusable alert with bounded evidence', () => {
     const markup = renderToStaticMarkup(
-      <ComparisonTab
-        comparison={comparison({
-          lastAttempt: {
-            attemptId: 'attempt-1',
-            status: 'invalid-key',
-            diagnostics: {
-              key: ['id'],
-              baseline: {
-                blankRowCount: 1,
-                duplicateGroupCount: 0,
-                blankExamples: [{ rowId: '1', keyValues: [null] }],
-                duplicateExamples: [],
-              },
-              candidate: {
-                blankRowCount: 0,
-                duplicateGroupCount: 1,
-                blankExamples: [],
-                duplicateExamples: [{ keyValues: ['2'], rowCount: 2, rowIds: ['1', '2'] }],
+      withRuntime(
+        <ComparisonTab
+          comparison={comparison({
+            lastAttempt: {
+              attemptId: 'attempt-1',
+              status: 'invalid-key',
+              diagnostics: {
+                key: ['id'],
+                baseline: {
+                  blankRowCount: 1,
+                  duplicateGroupCount: 0,
+                  blankExamples: [{ rowId: '1', keyValues: [null] }],
+                  duplicateExamples: [],
+                },
+                candidate: {
+                  blankRowCount: 0,
+                  duplicateGroupCount: 1,
+                  blankExamples: [],
+                  duplicateExamples: [{ keyValues: ['2'], rowCount: 2, rowIds: ['1', '2'] }],
+                },
               },
             },
-          },
-        })}
-        presentation={presentation}
-        onPresentationChange={vi.fn()}
-        themeMode="dark"
-      />,
+          })}
+          presentation={presentation}
+          onPresentationChange={vi.fn()}
+          themeMode="dark"
+        />,
+      ),
     );
 
     expect(markup).toContain('role="alert"');

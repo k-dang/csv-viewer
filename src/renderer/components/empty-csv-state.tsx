@@ -1,24 +1,46 @@
+import { useEffect, useState } from 'react';
 import { FileSpreadsheet, FolderOpen, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldError, FieldGroup, FieldTitle } from '@/components/ui/field';
-import type { CsvSourceId, RecentCsvSource } from '../../shared/ipc';
+import type { CsvSourceId, RecentCsvSource } from '../../shared/csv-viewer-contract';
 import { RecentCsvSourceList } from './recent-csv-source-list';
+import { useCsvViewerRuntime } from '../csv-viewer-runtime';
 
 export function EmptyCsvState({
   isOpening,
   errorMessage,
   dialectError,
-  recentSources,
   onOpenCsv,
   onOpenRecent,
 }: {
   isOpening: boolean;
   errorMessage: string | null;
   dialectError: string | null;
-  recentSources: RecentCsvSource[];
   onOpenCsv: () => void;
   onOpenRecent: (sourceId: CsvSourceId) => void;
 }) {
+  const runtime = useCsvViewerRuntime();
+  const [recentSources, setRecentSources] = useState<RecentCsvSource[]>([]);
+
+  // A runtime without durable CSV Source identity cannot reopen anything, so the list is neither
+  // requested nor offered. Each finished open attempt refreshes it, so a CSV Source that has since
+  // become unreachable drops off the list rather than lingering as a broken choice.
+  useEffect(() => {
+    if (!runtime.capabilities.recentCsvSources || isOpening) return;
+    let cancelled = false;
+    runtime
+      .getRecentCsvSources()
+      .then((sources) => {
+        if (!cancelled) setRecentSources(sources);
+      })
+      .catch(() => {
+        if (!cancelled) setRecentSources([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runtime, isOpening]);
+
   return (
     <section
       className="grid w-[min(440px,calc(100vw_-_32px))] grid-cols-1 items-center gap-6 self-center justify-self-center rounded-lg border bg-card/95 p-6 shadow-sm md:w-[min(680px,calc(100vw_-_48px))] md:grid-cols-[104px_minmax(0,1fr)] md:p-8"

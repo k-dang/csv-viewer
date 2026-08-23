@@ -17,8 +17,9 @@ import type {
   CsvColumnValueCounts,
   CsvFilterDescriptor,
   WorkingCsvView,
-} from '../../shared/ipc';
+} from '../../shared/csv-viewer-contract';
 import { formatCellValue, formatNumber } from './csv-format';
+import { useCsvViewerRuntime } from '../csv-viewer-runtime';
 
 type StatsState =
   | { status: 'loading' }
@@ -42,13 +43,14 @@ export function CsvStatsPanel({
   onColumnChange: (column: string) => void;
   onClose: () => void;
 }) {
+  const runtime = useCsvViewerRuntime();
   const [statsState, setStatsState] = useState<StatsState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
 
     setStatsState({ status: 'loading' });
-    window.csvViewer
+    runtime
       .getCsvColumnValueCounts({
         workingCsvId: workingCsv.workingCsvId,
         column: selectedColumn,
@@ -72,7 +74,7 @@ export function CsvStatsPanel({
     return () => {
       cancelled = true;
     };
-  }, [workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
+  }, [runtime, workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
 
   return (
     <aside className="grid min-h-0 w-full min-w-0 grid-rows-[auto_1fr] border-l bg-card md:w-[320px]" aria-label="Stats Panel">

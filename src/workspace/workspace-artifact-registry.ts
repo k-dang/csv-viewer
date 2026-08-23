@@ -2,7 +2,7 @@ import type {
   ComparisonId,
   ComparisonOperationId,
   WorkingCsvId,
-} from '../shared/ipc';
+} from '../shared/csv-viewer-contract';
 
 export type WorkspaceArtifactOwner =
   | { kind: 'working-csv'; workingCsvId: WorkingCsvId }

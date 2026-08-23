@@ -1,4 +1,4 @@
-import type { CsvDialectOptions } from '../../shared/ipc';
+import type { CsvDialectOptions } from '../../shared/csv-viewer-contract';
 
 export type CsvHeaderMode = 'auto' | 'yes' | 'no';
 

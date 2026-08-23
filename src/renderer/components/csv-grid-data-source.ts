@@ -6,12 +6,12 @@ import type {
   WorkingCsvView,
   CsvSortDescriptor,
   CsvTextFilterOperator,
-  CsvViewerApi,
-} from '../../shared/ipc';
+  CsvViewerRuntime,
+} from '../../shared/csv-viewer-contract';
 
 export function createCsvGridDataSource(
   workingCsv: WorkingCsvView,
-  api: Pick<CsvViewerApi, 'getCsvRows'>,
+  runtime: Pick<CsvViewerRuntime, 'getCsvRows'>,
   onFilteredRowCount?: (rowCount: number) => void,
   search = '',
   requestState: { latestRequestId: number } = { latestRequestId: 0 },
@@ -32,7 +32,7 @@ export function createCsvGridDataSource(
 
       onQueryState?.('querying');
 
-      api
+      runtime
         .getCsvRows({ workingCsvId: workingCsv.workingCsvId, offset, limit, ...query })
         .then((window) => {
           if (requestId !== requestState.latestRequestId) {

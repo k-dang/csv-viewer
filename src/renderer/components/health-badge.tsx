@@ -1,7 +1,7 @@
 import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { HealthStatus } from '../../shared/ipc';
+import type { HealthStatus } from '../../shared/csv-viewer-contract';
 
 export type HealthState =
   | { status: 'checking' }

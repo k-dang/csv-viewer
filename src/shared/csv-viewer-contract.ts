@@ -217,6 +217,13 @@ export type OpenCsvResult =
   | { status: 'failed'; message: string }
   | { status: 'cancelled' };
 
+/**
+ * Reopen additionally reports that the workspace no longer holds the Working CSV, which means the
+ * renderer is showing a Tab the workspace has already dropped. An unreachable CSV Source is a
+ * `failed` outcome instead.
+ */
+export type ReopenCsvResult = OpenCsvResult | { status: 'working-csv-not-found' };
+
 export type CloseImpact = {
   hasUnexportedChanges: boolean;
   dependentComparisons: Array<{
@@ -357,7 +364,7 @@ export type BeginComparisonRequest =
   | { kind: 'apply-key'; comparisonId: ComparisonId; key: string[] }
   | { kind: 'refresh'; comparisonId: ComparisonId };
 
-export type BeginComparisonIpcResult =
+export type BeginComparisonResult =
   | { status: 'accepted'; operationId: ComparisonOperationId }
   | { status: 'busy'; activeOperationId: ComparisonOperationId }
   | { status: 'rejected'; fault: ComparisonFault };
@@ -411,16 +418,40 @@ export type ComparisonMutationOutcome =
   | { status: 'changed'; comparison: ComparisonView }
   | { status: 'rejected'; fault: ComparisonFault };
 
-export type CsvViewerApi = {
-  healthCheck: () => Promise<HealthStatus>;
+/**
+ * Application-level requests raised outside React - today the desktop application menu. Runtimes
+ * translate their own command mechanics into these intents before they reach the renderer.
+ */
+export const csvViewerIntents = ['open-csv', 'reopen-csv', 'export-csv', 'close-tab'] as const;
+
+export type CsvViewerIntent = (typeof csvViewerIntents)[number];
+
+export function isCsvViewerIntent(value: unknown): value is CsvViewerIntent {
+  return csvViewerIntents.includes(value as CsvViewerIntent);
+}
+
+/**
+ * Genuine differences between runtimes, stated up front rather than discovered through failures.
+ * A capability is declared once a caller reads it.
+ */
+export type CsvViewerRuntimeCapabilities = {
+  /** Recent CSV Sources can be listed and reopened. False when source identity does not outlive the session. */
+  recentCsvSources: boolean;
+};
+
+/**
+ * The domain operations the shared workspace owns. `CsvWorkspace implements` this, and the host
+ * contract below is derived from it, so one declaration fixes each operation's shape and a host
+ * gaining a capability can never break the runtime-neutral workspace.
+ */
+export type CsvWorkspaceOperations = {
   openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   openRecentCsv: (sourceId: CsvSourceId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
   closeCsv: (request: CloseWorkingCsvRequest) => Promise<CloseWorkingCsvOutcome>;
   getComparisonCandidates: (baselineId: WorkingCsvId) => Promise<ComparisonCandidate[]>;
-  openComparison: (baselineId: WorkingCsvId, candidateId: WorkingCsvId) => Promise<OpenComparisonResult>;
+  openComparison: (request: OpenComparisonRequest) => Promise<OpenComparisonResult>;
   getComparisonState: (comparisonId: ComparisonId) => Promise<ComparisonView | null>;
-  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonIpcResult>;
+  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonResult>;
   cancelComparison: (request: CancelComparisonRequest) => Promise<CancelComparisonResult>;
   getComparisonWindow: (request: ComparisonWindowRequest) => Promise<ComparisonWindowOutcome>;
   swapComparison: (comparisonId: ComparisonId) => Promise<ComparisonMutationOutcome>;
@@ -436,39 +467,24 @@ export type CsvViewerApi = {
   exportCsv: (request: CsvExportRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
   undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
   redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  onOpenCsvRequest: (callback: () => void) => () => void;
-  onReopenCsvRequest: (callback: () => void) => () => void;
-  onExportCsvRequest: (callback: () => void) => () => void;
-  onCloseTabRequest: (callback: () => void) => () => void;
+  reopenCsv: (
+    workingCsvId: WorkingCsvId,
+    options?: CsvDialectOptions,
+  ) => Promise<ReplaceWorkingCsvOutcome>;
 };
 
-export const ipcChannels = {
-  healthCheck: 'app:health-check',
-  openCsv: 'csv:open',
-  openRecentCsv: 'csv:open-recent',
-  reopenCsv: 'csv:reopen',
-  closeCsv: 'csv:close',
-  getComparisonCandidates: 'comparison:candidates',
-  openComparison: 'comparison:open',
-  getComparisonState: 'comparison:get-state',
-  beginComparison: 'comparison:begin',
-  cancelComparison: 'comparison:cancel',
-  getComparisonWindow: 'comparison:get-window',
-  swapComparison: 'comparison:swap',
-  closeComparison: 'comparison:close',
-  comparisonStateChanged: 'comparison:state-changed',
-  getRecentCsvSources: 'csv:get-recent-sources',
-  getCsvRows: 'csv:get-rows',
-  getCsvColumnValueCounts: 'csv:get-column-value-counts',
-  editCsvCell: 'csv:edit-cell',
-  deleteCsvRows: 'csv:delete-rows',
-  insertCsvRow: 'csv:insert-row',
-  getCsvEditState: 'csv:get-edit-state',
-  exportCsv: 'csv:export',
-  undoCsvEdit: 'csv:undo-edit',
-  redoCsvEdit: 'csv:redo-edit',
-  menuOpenCsv: 'menu:open-csv',
-  menuReopenCsv: 'menu:reopen-csv',
-  menuExportCsv: 'menu:export-csv',
-  menuCloseTab: 'menu:close-tab',
-} as const;
+/**
+ * The renderer's only view of its host: the workspace surface, explicit capabilities, and intent
+ * subscriptions. Desktop supplies an IPC proxy over the main-process workspace, web supplies
+ * in-page wiring, and tests supply a plain object.
+ *
+ * `reopenCsv` is restated because the host owns it: it wraps the workspace operation in a discard
+ * confirmation and can therefore report `cancelled`, which the workspace has no notion of.
+ */
+export type CsvViewerRuntime = Omit<CsvWorkspaceOperations, 'reopenCsv'> & {
+  capabilities: CsvViewerRuntimeCapabilities;
+  healthCheck: () => Promise<HealthStatus>;
+  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<ReopenCsvResult>;
+  onIntent: (callback: (intent: CsvViewerIntent) => void) => () => void;
+};
+

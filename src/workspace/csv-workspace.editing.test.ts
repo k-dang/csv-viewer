@@ -1,6 +1,6 @@
 import { link, readFile, rename } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField, type CsvRow, type WorkingCsvId } from '../shared/ipc';
+import { csvInternalRowIdField, type CsvRow, type WorkingCsvId } from '../shared/csv-viewer-contract';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
 
 let fixture: CsvWorkspaceFixture;
