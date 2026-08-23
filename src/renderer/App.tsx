@@ -203,6 +203,11 @@ export function App() {
     setIsOpening(true);
     try {
       const result = await runtime.reopenCsv(activeCsv.workingCsvId, options);
+      // The workspace has already dropped this Working CSV, so the Tab showing it is stale.
+      if (result.status === 'working-csv-not-found') {
+        forgetWorkingCsv(activeCsv.workingCsvId);
+        return;
+      }
       applyOpenResult(result);
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to reopen CSV.');
@@ -277,16 +282,21 @@ export function App() {
           event: { kind: 'closed', comparisonId },
         });
       }
-      dispatchWorkspace({ type: 'close-csv', workingCsvId: tab.csv.workingCsvId });
-      setWorkingCsvIdsWithUnexportedChanges((current) => {
-        if (!current.has(tab.csv.workingCsvId)) return current;
-        const next = new Set(current);
-        next.delete(tab.csv.workingCsvId);
-        return next;
-      });
+      forgetWorkingCsv(tab.csv.workingCsvId);
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to close the Tab.');
     }
+  }
+
+  /** Drops the Tab and its export bookkeeping once the workspace no longer holds the Working CSV. */
+  function forgetWorkingCsv(workingCsvId: string) {
+    dispatchWorkspace({ type: 'close-csv', workingCsvId });
+    setWorkingCsvIdsWithUnexportedChanges((current) => {
+      if (!current.has(workingCsvId)) return current;
+      const next = new Set(current);
+      next.delete(workingCsvId);
+      return next;
+    });
   }
 
   function cycleActiveTab(direction: 1 | -1) {

@@ -32,7 +32,7 @@ import {
   type CsvExportRequest,
   type HealthStatus,
   type OpenComparisonRequest,
-  type OpenCsvResult,
+  type ReopenCsvResult,
 } from '../shared/csv-viewer-contract';
 
 const electronRoot = __dirname;
@@ -213,9 +213,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     ipcChannels.reopenCsv,
-    async (_event, workingCsvId: string, options?: CsvDialectOptions): Promise<OpenCsvResult> => {
+    async (_event, workingCsvId: string, options?: CsvDialectOptions): Promise<ReopenCsvResult> => {
       const existing = await workspace.getWorkingCsv(workingCsvId);
-      if (!existing) return { status: 'cancelled' };
+      if (!existing) return { status: 'working-csv-not-found' };
 
       if (existing.editState.hasUnexportedChanges) {
         const canContinue = await confirmDiscardChanges(existing.file.name);
@@ -223,9 +223,7 @@ function registerIpcHandlers() {
       }
 
       const replacement = await workspace.reopenCsv(workingCsvId, options);
-      // The workspace does not know this Working CSV, so the renderer is holding a Tab the main
-      // process has already dropped. An unreachable CSV Source is a `failed` outcome, not this one.
-      if (replacement.status === 'working-csv-not-found') return { status: 'cancelled' };
+      if (replacement.status === 'working-csv-not-found') return { status: 'working-csv-not-found' };
       if (replacement.status === 'failed') {
         return { status: 'failed', message: replacement.failure.message };
       }

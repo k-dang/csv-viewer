@@ -217,6 +217,13 @@ export type OpenCsvResult =
   | { status: 'failed'; message: string }
   | { status: 'cancelled' };
 
+/**
+ * Reopen additionally reports that the workspace no longer holds the Working CSV, which means the
+ * renderer is showing a Tab the workspace has already dropped. An unreachable CSV Source is a
+ * `failed` outcome instead.
+ */
+export type ReopenCsvResult = OpenCsvResult | { status: 'working-csv-not-found' };
+
 export type CloseImpact = {
   hasUnexportedChanges: boolean;
   dependentComparisons: Array<{
@@ -480,7 +487,7 @@ export type CsvWorkspaceOperations = {
 export type CsvViewerRuntime = Omit<CsvWorkspaceOperations, 'reopenCsv'> & {
   capabilities: CsvViewerRuntimeCapabilities;
   healthCheck: () => Promise<HealthStatus>;
-  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
+  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<ReopenCsvResult>;
   onIntent: (callback: (intent: CsvViewerIntent) => void) => () => void;
 };
 
