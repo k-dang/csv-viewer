@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DesktopWorkspaceHost } from '../desktop-workspace-host';
@@ -11,6 +11,7 @@ import type {
 } from '../../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from '../../workspace/comparison-executor';
 import { CsvWorkspace } from '../../workspace/csv-workspace';
+import type { CapturedCsvExport, WorkspaceContractFixture } from './workspace-contract-fixture';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -26,7 +27,8 @@ export type ScriptedPrompts = {
  * A CsvWorkspace backed by a temporary directory and scripted prompts. Tests drive the workspace
  * seam only; the desktop host supplies CSV Source identity, description, and export delivery.
  */
-export class CsvWorkspaceFixture {
+export class CsvWorkspaceFixture implements WorkspaceContractFixture {
+  private readonly sourcePaths = new Map<CsvSourceId, string>();
   private readonly outcomes = new Map<ComparisonOperationId, ComparisonAttemptOutcomeView>();
   private readonly outcomeWaiters = new Map<
     ComparisonOperationId,
@@ -87,7 +89,20 @@ export class CsvWorkspaceFixture {
   }
 
   sourceId(filePath: string): Promise<CsvSourceId> {
-    return this.host.registerSource(filePath);
+    return this.host.registerSource(filePath).then((sourceId) => {
+      this.sourcePaths.set(sourceId, filePath);
+      return sourceId;
+    });
+  }
+
+  async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
+    return this.sourceId(await this.writeSource(fileName, contents));
+  }
+
+  async removeSource(sourceId: CsvSourceId): Promise<void> {
+    const sourcePath = this.sourcePaths.get(sourceId);
+    if (!sourcePath) throw new Error(`Unknown test CSV Source ${sourceId}.`);
+    await unlink(sourcePath);
   }
 
   /** Opens an existing CSV Source and fails the test when the workspace rejects it. */
@@ -115,6 +130,15 @@ export class CsvWorkspaceFixture {
     const destinationPath = this.file(fileName);
     this.prompts.exportChoices.push(destinationPath);
     return destinationPath;
+  }
+
+  captureNextExport(fileName: string): CapturedCsvExport {
+    const destinationPath = this.queueExportTo(fileName);
+    return { readText: () => readFile(destinationPath, 'utf8') };
+  }
+
+  async replaceSourceContents(fileName: string, contents: string): Promise<void> {
+    await writeFile(this.file(fileName), contents);
   }
 
   awaitComparisonOutcome(

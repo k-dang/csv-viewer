@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type {
   ComparisonOperationId,
@@ -13,6 +12,10 @@ import type {
 } from './comparison-executor';
 import type { CsvWorkspace } from './csv-workspace';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import {
+  workspaceContractFactories,
+  type WorkspaceContractFixture,
+} from '../main/testing/workspace-contract-fixture';
 
 const validDiagnostics: SourceKeyDiagnostics = {
   blankRowCount: 0,
@@ -65,12 +68,26 @@ async function waitForComparing(workspace: CsvWorkspace, comparisonId: string): 
   throw new Error('Comparison did not reach comparing.');
 }
 
-describe('CsvWorkspace lifecycle', () => {
-  it('executes, reads, swaps, and cleans up a real DuckDB comparison', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-
+function contractIt(
+  name: string,
+  testCase: (fixture: WorkspaceContractFixture) => Promise<void>,
+): void {
+  it.each(workspaceContractFactories)(`$name ${name}`, async ({ create }) => {
+    const fixture = await create();
     try {
+      await testCase(fixture);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+describe('CsvWorkspace lifecycle', () => {
+  contractIt(
+    'executes, reads, swaps, and cleans up a real comparison',
+    async (fixture) => {
+      const workspace = fixture.workspace;
+
       const baseline = await fixture.openSource(
         'baseline.csv',
         'id,value\n1,old\n2,same\n3,baseline-only\n5,also-baseline-only\n',
@@ -131,7 +148,7 @@ describe('CsvWorkspace lifecycle', () => {
         ['5', 'baseline-only'],
       ]);
 
-      await writeFile(fixture.file('baseline.csv'), 'id,replacement\n1,x\n');
+      await fixture.replaceSourceContents('baseline.csv', 'id,replacement\n1,x\n');
       const replacement = await workspace.reopenCsv(baseline.workingCsvId);
       expect(replacement.status).toBe('replaced');
       await expect(workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toMatchObject({
@@ -166,10 +183,8 @@ describe('CsvWorkspace lifecycle', () => {
         status: 'closed',
         comparisonId,
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
   it('reserves a confirmed source close and blocks every mutator while it runs', async () => {
     const executor = new ControlledExecutor();
@@ -282,14 +297,13 @@ describe('CsvWorkspace lifecycle', () => {
     }
   });
 
-  it('projects current row and edit state for an open Working CSV', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
-      const filePath = await fixture.writeSource('working.csv', 'id,value\n1,a\n');
-      const workingCsv = await fixture.open(filePath);
+  contractIt(
+    'projects current row and edit state for an open Working CSV',
+    async (fixture) => {
+      const workspace = fixture.workspace;
+      const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
       await expect(
-        workspace.openRecentCsv(await fixture.sourceId(filePath)),
+        workspace.openRecentCsv(workingCsv.file.sourceId),
       ).resolves.toMatchObject({
         status: 'already-open',
         workingCsv: { workingCsvId: workingCsv.workingCsvId },
@@ -311,17 +325,15 @@ describe('CsvWorkspace lifecycle', () => {
         dataRevision: 2,
         editState: { hasUnexportedChanges: false, canUndo: false, canRedo: true },
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
-  it('derives close impact from Unexported Changes independently of undo and redo', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'derives close impact from Unexported Changes independently of undo and redo',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
-      fixture.queueExportTo('exported.csv');
+      fixture.captureNextExport('exported.csv');
       await workspace.editCsvCell({
         workingCsvId: workingCsv.workingCsvId,
         rowId: '1',
@@ -349,10 +361,8 @@ describe('CsvWorkspace lifecycle', () => {
           workingCsvsWithUnexportedChanges: [{ workingCsvId: workingCsv.workingCsvId }],
         },
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
   it('revalidates aggregate Unexported Changes and Comparison impact before window close', async () => {
     const fixture = await CsvWorkspaceFixture.create(new ControlledExecutor());
@@ -400,13 +410,11 @@ describe('CsvWorkspace lifecycle', () => {
     }
   });
 
-  it('rejects new Working CSV work once disposal starts', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
+  contractIt('rejects new Working CSV work once disposal starts', async (fixture) => {
     const workspace = fixture.workspace;
     const baseline = await fixture.openSource('baseline.csv', 'id,value\n1,a\n');
     const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,b\n');
-    const latePath = await fixture.writeSource('late.csv', 'id,value\n1,c\n');
-    const lateSourceId = await fixture.sourceId(latePath);
+    const lateSourceId = await fixture.registerSource('late.csv', 'id,value\n1,c\n');
 
     const disposal = workspace.dispose();
     await expect(workspace.openRecentCsv(lateSourceId)).resolves.toMatchObject({
@@ -434,12 +442,11 @@ describe('CsvWorkspace lifecycle', () => {
     await fixture.dispose();
   });
 
-  it('waits for a Working CSV open admitted before disposal', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
+  contractIt('waits for a Working CSV open admitted before disposal', async (fixture) => {
     const workspace = fixture.workspace;
-    const filePath = await fixture.writeSource('working.csv', 'id,value\n1,a\n');
+    const sourceId = await fixture.registerSource('working.csv', 'id,value\n1,a\n');
 
-    const opening = workspace.openRecentCsv(await fixture.sourceId(filePath));
+    const opening = workspace.openRecentCsv(sourceId);
     const disposal = workspace.dispose();
     const opened = await opening;
     expect(opened.status).toBe('opened');
@@ -450,10 +457,10 @@ describe('CsvWorkspace lifecycle', () => {
     await fixture.dispose();
   });
 
-  it('waits for an admitted row read and rejects later reads while closing', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'waits for an admitted row read and rejects later reads while closing',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n2,b\n');
 
       const admittedRead = workspace.getCsvRows({
@@ -472,15 +479,13 @@ describe('CsvWorkspace lifecycle', () => {
       ).rejects.toThrow('Working CSV is closing.');
       await expect(admittedRead).resolves.toMatchObject({ filteredRowCount: 2 });
       await expect(close).resolves.toMatchObject({ status: 'closed' });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
-  it('waits for an admitted edit before calculating close impact', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'waits for an admitted edit before calculating close impact',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
 
       const edit = workspace.editCsvCell({
@@ -496,13 +501,10 @@ describe('CsvWorkspace lifecycle', () => {
         status: 'confirmation-required',
         impact: { hasUnexportedChanges: true },
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
-  it('shares one idempotent disposal operation', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
+  contractIt('shares one idempotent disposal operation', async (fixture) => {
     const first = fixture.workspace.dispose();
     const second = fixture.workspace.dispose();
     expect(second).toBe(first);

@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ComparisonRow,
@@ -6,21 +5,13 @@ import type {
   ComparisonWindow,
   WorkingCsvView,
 } from '../shared/csv-viewer-contract';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import {
+  workspaceContractFactories,
+  type WorkspaceContractFixture,
+  type WorkspaceContractFactory,
+} from '../main/testing/workspace-contract-fixture';
 
-type Fixture = CsvWorkspaceFixture;
-
-const fixtures: Fixture[] = [];
-
-afterEach(async () => {
-  await Promise.all(fixtures.splice(0).map((value) => value.dispose()));
-});
-
-async function fixture(): Promise<Fixture> {
-  const value = await CsvWorkspaceFixture.create();
-  fixtures.push(value);
-  return value;
-}
+type Fixture = WorkspaceContractFixture;
 
 function openCsv(value: Fixture, fileName: string, contents: string): Promise<WorkingCsvView> {
   return value.openSource(fileName, contents);
@@ -110,7 +101,25 @@ function observableRow(row: ComparisonRow) {
   };
 }
 
-describe('CsvWorkspace Comparison verification contract', () => {
+for (const factory of workspaceContractFactories) {
+  describe(`${factory.name} CsvWorkspace Comparison contract`, () => {
+    defineComparisonContract(factory.create);
+  });
+}
+
+function defineComparisonContract(create: WorkspaceContractFactory['create']) {
+  const fixtures: Fixture[] = [];
+
+  afterEach(async () => {
+    await Promise.all(fixtures.splice(0).map((value) => value.dispose()));
+  });
+
+  async function fixture(): Promise<Fixture> {
+    const value = await create();
+    fixtures.push(value);
+    return value;
+  }
+
   it.each([
     {
       name: 'zero rows',
@@ -543,6 +552,51 @@ describe('CsvWorkspace Comparison verification contract', () => {
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'no-applied-key' } });
   });
 
+  it('cancels at a cooperative statement boundary without publishing a result', async () => {
+    const contractFixture = await fixture();
+    const baseline = await openCsv(contractFixture, 'baseline.csv', 'id,value\n1,old\n');
+    const candidate = await openCsv(contractFixture, 'candidate.csv', 'id,value\n1,new\n');
+    const comparison = await openComparison(contractFixture, baseline, candidate);
+    const summarizing = new Promise<void>((resolve) => {
+      const unsubscribe = contractFixture.workspace.onComparisonEvent((event) => {
+        if (
+          event.kind === 'changed' &&
+          event.comparison.comparisonId === comparison.comparisonId &&
+          event.comparison.operation?.phase === 'summarizing'
+        ) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+
+    const started = await contractFixture.workspace.beginComparison({
+      kind: 'apply-key',
+      comparisonId: comparison.comparisonId,
+      key: ['id'],
+    });
+    if (started.status !== 'accepted') throw new Error(`Comparison was ${started.status}.`);
+    await summarizing;
+
+    await expect(
+      contractFixture.workspace.cancelComparison({
+        comparisonId: comparison.comparisonId,
+        operationId: started.operationId,
+      }),
+    ).resolves.toEqual({ status: 'requested' });
+    await expect(contractFixture.awaitComparisonOutcome(started.operationId)).resolves.toEqual({
+      attemptId: started.operationId,
+      status: 'cancelled',
+    });
+    await expect(
+      contractFixture.workspace.getComparisonState(comparison.comparisonId),
+    ).resolves.toMatchObject({
+        operation: null,
+        applied: null,
+        lastAttempt: { attemptId: started.operationId, status: 'cancelled' },
+    });
+  });
+
   it('handles key-only data, zero and maximum windows, and Swap sides without recomputation', async () => {
     const value = await fixture();
     const baseline = await openCsv(value, 'baseline.csv', ['id', '1', '2', ''].join('\n'));
@@ -638,9 +692,52 @@ describe('CsvWorkspace Comparison verification contract', () => {
     ]);
   });
 
+  it('closes dependent Comparisons and releases their published results with a CSV Source', async () => {
+    const contractFixture = await fixture();
+    const baseline = await openCsv(contractFixture, 'baseline.csv', 'id,value\n1,old\n');
+    const candidate = await openCsv(contractFixture, 'candidate.csv', 'id,value\n1,new\n');
+    const comparison = await openComparison(contractFixture, baseline, candidate);
+    const applied = await applyKey(contractFixture, comparison.comparisonId, ['id']);
+    if (!applied.applied) throw new Error('Comparison has no applied result.');
+
+    const confirmation = await contractFixture.workspace.closeCsv({
+      workingCsvId: baseline.workingCsvId,
+    });
+    if (confirmation.status !== 'confirmation-required') {
+      throw new Error(`CSV Source close completed as ${confirmation.status}.`);
+    }
+
+    await expect(
+      contractFixture.workspace.closeCsv({
+        workingCsvId: baseline.workingCsvId,
+        confirmedImpact: confirmation.impact,
+      }),
+    ).resolves.toEqual({
+      status: 'closed',
+      closedWorkingCsvId: baseline.workingCsvId,
+      closedComparisonIds: [comparison.comparisonId],
+    });
+    await expect(contractFixture.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toBeNull();
+    await expect(contractFixture.workspace.getWorkingCsv(candidate.workingCsvId)).resolves.toEqual(
+      candidate,
+    );
+    await expect(
+      contractFixture.workspace.getComparisonState(comparison.comparisonId),
+    ).resolves.toBeNull();
+    await expect(
+      contractFixture.workspace.getComparisonWindow({
+        comparisonId: comparison.comparisonId,
+        resultToken: applied.applied.resultToken,
+        offset: 0,
+        limit: 100,
+        rows: 'all',
+        columns: 'csv-order',
+      }),
+    ).resolves.toEqual({ status: 'comparison-not-found' });
+  });
+
   it('marks every Working CSV data mutation Outdated while queries and Export CSV remain current', async () => {
     const value = await fixture();
-    const baselinePath = value.file('baseline.csv');
     const baseline = await openCsv(value, 'baseline.csv', ['id,value', '1,old', ''].join('\n'));
     const candidate = await openCsv(
       value,
@@ -666,7 +763,7 @@ describe('CsvWorkspace Comparison verification contract', () => {
       column: 'value',
       search: 'old',
     });
-    value.queueExportTo('exported-copy.csv');
+    value.captureNextExport('exported-copy.csv');
     await value.workspace.exportCsv({ workingCsvId: baseline.workingCsvId });
     await expect(value.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toMatchObject({
       dataRevision: initialRevision,
@@ -727,7 +824,7 @@ describe('CsvWorkspace Comparison verification contract', () => {
     ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
     await refresh(value, comparison.comparisonId);
 
-    await writeFile(baselinePath, ['id,value', '1,replaced', ''].join('\n'));
+    await value.replaceSourceContents('baseline.csv', ['id,value', '1,replaced', ''].join('\n'));
     const replacement = await value.workspace.reopenCsv(baseline.workingCsvId);
     expect(replacement).toMatchObject({
       status: 'replaced',
@@ -737,4 +834,4 @@ describe('CsvWorkspace Comparison verification contract', () => {
       (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
     ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
   });
-});
+}

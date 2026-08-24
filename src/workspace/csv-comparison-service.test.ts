@@ -13,7 +13,10 @@ import type {
   StoredComparisonWindow,
 } from './comparison-executor';
 import type { CsvWorkspace } from './csv-workspace';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import {
+  workspaceContractFactories,
+  type WorkspaceContractFixture,
+} from '../main/testing/workspace-contract-fixture';
 
 function workingCsv(
   workingCsvId: string,
@@ -82,6 +85,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   disposeCalled = false;
   readonly droppedArtifacts: string[] = [];
   private readonly pendingSnapshots = new Map<string, (error: Error) => void>();
+  private readonly snapshotStartWaiters = new Map<string, () => void>();
   private readonly pendingDrops: Array<() => void> = [];
   private readonly pendingReleases: Array<() => void> = [];
 
@@ -93,6 +97,8 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
     if (!this.deferSnapshots) return emptySummary;
     return new Promise((_resolve, reject) => {
       this.pendingSnapshots.set(request.artifactId, reject);
+      this.snapshotStartWaiters.get(request.artifactId)?.();
+      this.snapshotStartWaiters.delete(request.artifactId);
     });
   }
 
@@ -132,6 +138,11 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
 
   releaseWorkers(): void {
     for (const resolve of this.pendingReleases.splice(0)) resolve();
+  }
+
+  awaitSnapshotStart(artifactId: string): Promise<void> {
+    if (this.pendingSnapshots.has(artifactId)) return Promise.resolve();
+    return new Promise((resolve) => this.snapshotStartWaiters.set(artifactId, resolve));
   }
 
   async dispose(): Promise<void> {
@@ -198,6 +209,20 @@ async function waitForWorkspaceIdle(
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error('Comparison did not settle.');
+}
+
+function contractIt(
+  name: string,
+  testCase: (fixture: WorkspaceContractFixture) => Promise<void>,
+): void {
+  it.each(workspaceContractFactories)(`$name ${name}`, async ({ create }) => {
+    const fixture = await create();
+    try {
+      await testCase(fixture);
+    } finally {
+      await fixture.dispose();
+    }
+  });
 }
 
 describe('CsvComparisonService interaction contract', () => {
@@ -315,10 +340,10 @@ describe('CsvComparisonService interaction contract', () => {
     });
   });
 
-  it('keeps the old result readable while a draft key fails validation, then marks it outdated', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'keeps the old result readable while a draft key fails validation, then marks it outdated',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const baseline = await fixture.openSource(
         'a.csv',
         'id,name,status\n1,Ada,active\n2,Bob,old\n',
@@ -376,15 +401,13 @@ describe('CsvComparisonService interaction contract', () => {
       ).resolves.toMatchObject({
         applied: { freshness: { kind: 'outdated', changedSides: ['baseline'] } },
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
-  it('serves bounded presentation windows and invalidates the old token after Swap sides', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'serves bounded presentation windows and invalidates the old token after Swap sides',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const baseline = await fixture.openSource(
         'a.csv',
         'id,name,status\n1,Ada,old\n2,Bob,same\n',
@@ -463,15 +486,13 @@ describe('CsvComparisonService interaction contract', () => {
           ],
         },
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
-  it('awaits active work and emits no changed state after closing a Comparison', async () => {
-    const fixture = await CsvWorkspaceFixture.create();
-    const workspace = fixture.workspace;
-    try {
+  contractIt(
+    'awaits active work and emits no changed state after closing a Comparison',
+    async (fixture) => {
+      const workspace = fixture.workspace;
       const baseline = await fixture.openSource('a.csv', 'id,value\n1,a\n2,b\n');
       const candidate = await fixture.openSource('b.csv', 'id,value\n1,a\n2,c\n');
       const opened = await workspace.openComparison({
@@ -494,10 +515,8 @@ describe('CsvComparisonService interaction contract', () => {
       await expect(
         workspace.getComparisonState(opened.comparison.comparisonId),
       ).resolves.toBeNull();
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    },
+  );
 
   it('makes operation completion awaitable before publishing the running state', async () => {
     const store = new FakeCsvStore();
@@ -545,6 +564,7 @@ describe('CsvComparisonService interaction contract', () => {
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
     await waitForPhase(service, opened.comparison.comparisonId, 'comparing');
+    await executor.awaitSnapshotStart(begun.operationId);
     await expect(
       service.cancel({
         comparisonId: opened.comparison.comparisonId,
@@ -555,7 +575,12 @@ describe('CsvComparisonService interaction contract', () => {
     });
 
     const cancelled = await waitForIdle(service, opened.comparison.comparisonId);
-    expect(cancelled?.lastAttempt?.status).toBe('cancelled');
+    expect(cancelled).toMatchObject({
+      applied: null,
+      lastAttempt: { attemptId: begun.operationId, status: 'cancelled' },
+    });
+    expect(executor.droppedArtifacts).toContain(begun.operationId);
+    expect(executor.releaseAttemptCount).toBeGreaterThan(0);
     await service.dispose();
   });
 

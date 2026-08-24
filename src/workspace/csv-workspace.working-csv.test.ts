@@ -1,27 +1,36 @@
-import { link } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField, type CsvRow, type WorkingCsvId } from '../shared/csv-viewer-contract';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import {
+  workspaceContractFactories,
+  type WorkspaceContractFixture,
+  type WorkspaceContractFactory,
+} from '../main/testing/workspace-contract-fixture';
 
-let fixture: CsvWorkspaceFixture;
-
-beforeEach(async () => {
-  fixture = await CsvWorkspaceFixture.create();
-});
-
-afterEach(async () => {
-  await fixture.dispose();
-});
-
-function workspace() {
-  return fixture.workspace;
+for (const factory of workspaceContractFactories) {
+  describe(`${factory.name} CsvWorkspace Working CSV contract`, () => {
+    defineWorkingCsvContract(factory.create);
+  });
 }
 
-async function editState(workingCsvId: WorkingCsvId) {
-  return workspace().getCsvEditState({ workingCsvId });
-}
+function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
+  let fixture: WorkspaceContractFixture;
 
-describe('CsvWorkspace Working CSV querying', () => {
+  beforeEach(async () => {
+    fixture = await create();
+  });
+
+  afterEach(async () => {
+    await fixture.dispose();
+  });
+
+  function workspace() {
+    return fixture.workspace;
+  }
+
+  async function editState(workingCsvId: WorkingCsvId) {
+    return workspace().getCsvEditState({ workingCsvId });
+  }
+
   it('opens a CSV Source and returns its description, inferred columns, and row count', async () => {
     const workingCsv = await fixture.openSource(
       'people.csv',
@@ -29,7 +38,7 @@ describe('CsvWorkspace Working CSV querying', () => {
     );
 
     expect(workingCsv.file.name).toBe('people.csv');
-    expect(workingCsv.file.location).toBe(fixture.file('people.csv'));
+    expect(workingCsv.file.location).toEqual(expect.any(String));
     expect(workingCsv.file.sourceId).toBeTruthy();
     expect(workingCsv.file.sizeBytes).toBeGreaterThan(0);
     expect(workingCsv.rowCount).toBe(2);
@@ -124,14 +133,14 @@ describe('CsvWorkspace Working CSV querying', () => {
   });
 
   it('reports why a CSV Source could not be opened', async () => {
-    const filePath = await fixture.writeSource(
+    const sourceId = await fixture.registerSource(
       'invalid-delimiter.csv',
       ['name,age', 'Ada,37'].join('\n'),
     );
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
-      workspace().openRecentCsv(await fixture.sourceId(filePath), { delimiter: '||' }),
+      workspace().openRecentCsv(sourceId, { delimiter: '||' }),
     ).resolves.toMatchObject({
       status: 'failed',
       message: expect.stringContaining('Delimiter must be exactly one character'),
@@ -178,16 +187,10 @@ describe('CsvWorkspace Working CSV querying', () => {
   });
 
   it('gives a known CSV Source at most one Working CSV', async () => {
-    const filePath = await fixture.writeSource('dedupe.csv', ['a', '1'].join('\n'));
-    const aliasPath = fixture.file('dedupe-alias.csv');
-    await link(filePath, aliasPath);
-    const workingCsv = await fixture.open(filePath);
+    const workingCsv = await fixture.openSource('dedupe.csv', ['a', '1'].join('\n'));
 
     await expect(
-      workspace().openRecentCsv(await fixture.sourceId(filePath)),
-    ).resolves.toEqual({ status: 'already-open', workingCsv });
-    await expect(
-      workspace().openRecentCsv(await fixture.sourceId(aliasPath)),
+      workspace().openRecentCsv(workingCsv.file.sourceId),
     ).resolves.toEqual({ status: 'already-open', workingCsv });
   });
 
@@ -223,8 +226,7 @@ describe('CsvWorkspace Working CSV querying', () => {
   });
 
   it('closes a Working CSV and leaves other Working CSVs untouched', async () => {
-    const firstPath = await fixture.writeSource('close-first.csv', ['a', '1'].join('\n'));
-    const first = await fixture.open(firstPath);
+    const first = await fixture.openSource('close-first.csv', ['a', '1'].join('\n'));
     const second = await fixture.openSource('close-second.csv', ['b', '2'].join('\n'));
 
     await expect(
@@ -235,9 +237,9 @@ describe('CsvWorkspace Working CSV querying', () => {
     await expect(
       workspace().getCsvRows({ workingCsvId: first.workingCsvId, offset: 0, limit: 1 }),
     ).rejects.toThrow('Working CSV is no longer active');
-    await expect(workspace().openRecentCsv(await fixture.sourceId(firstPath))).resolves.toMatchObject(
-      { status: 'opened' },
-    );
+    await expect(workspace().openRecentCsv(first.file.sourceId)).resolves.toMatchObject({
+      status: 'opened',
+    });
 
     const secondRows = await workspace().getCsvRows({
       workingCsvId: second.workingCsvId,
@@ -691,7 +693,7 @@ describe('CsvWorkspace Working CSV querying', () => {
     expect(parameterizedSearch.rows).toEqual([]);
   });
 
-});
+}
 
 function rowIds(rows: CsvRow[]): string[] {
   return rows.map((row) => row[csvInternalRowIdField]);
