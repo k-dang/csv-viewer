@@ -95,14 +95,17 @@ function observableRow(row: ComparisonRow) {
 }
 
 describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contract', ({ create }) => {
-  let value: WorkspaceContractFixture;
+  let value!: WorkspaceContractFixture;
+  let fixtureCreated = false;
 
   beforeEach(async () => {
+    fixtureCreated = false;
     value = await create();
+    fixtureCreated = true;
   });
 
   afterEach(async () => {
-    await value.dispose();
+    if (fixtureCreated) await value.dispose();
   });
 
   it.each([
