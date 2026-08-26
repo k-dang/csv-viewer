@@ -7,3 +7,4 @@ release/
 fixtures/validation/
 .cursor/skills/verify-csv-viewer/runs/
 .cursor/skills/verify-csv-viewer/evidence/
+*.tsbuildinfo

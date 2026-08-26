@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DesktopWorkspaceHost } from '../desktop-workspace-host';
@@ -11,6 +11,7 @@ import type {
 } from '../../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from '../../workspace/comparison-executor';
 import { CsvWorkspace } from '../../workspace/csv-workspace';
+import type { WorkspaceContractFixture } from './workspace-contract-fixture';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -26,7 +27,7 @@ export type ScriptedPrompts = {
  * A CsvWorkspace backed by a temporary directory and scripted prompts. Tests drive the workspace
  * seam only; the desktop host supplies CSV Source identity, description, and export delivery.
  */
-export class CsvWorkspaceFixture {
+export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   private readonly outcomes = new Map<ComparisonOperationId, ComparisonAttemptOutcomeView>();
   private readonly outcomeWaiters = new Map<
     ComparisonOperationId,
@@ -90,6 +91,14 @@ export class CsvWorkspaceFixture {
     return this.host.registerSource(filePath);
   }
 
+  async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
+    return this.sourceId(await this.writeSource(fileName, contents));
+  }
+
+  async removeSource(fileName: string): Promise<void> {
+    await unlink(this.file(fileName));
+  }
+
   /** Opens an existing CSV Source and fails the test when the workspace rejects it. */
   async open(filePath: string, options?: CsvDialectOptions): Promise<WorkingCsvView> {
     const result = await this.workspace.openRecentCsv(await this.sourceId(filePath), options);
@@ -110,11 +119,14 @@ export class CsvWorkspaceFixture {
     return this.open(await this.writeSource(fileName, contents), options);
   }
 
-  /** Points the next Export CSV at `fileName` and returns the destination path. */
-  queueExportTo(fileName: string): string {
+  captureNextExport(fileName: string): () => Promise<string> {
     const destinationPath = this.file(fileName);
     this.prompts.exportChoices.push(destinationPath);
-    return destinationPath;
+    return () => readFile(destinationPath, 'utf8');
+  }
+
+  async replaceSourceContents(fileName: string, contents: string): Promise<void> {
+    await this.writeSource(fileName, contents);
   }
 
   awaitComparisonOutcome(
