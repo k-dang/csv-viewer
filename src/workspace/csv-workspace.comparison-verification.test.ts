@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   ComparisonRow,
   ComparisonView,
@@ -8,17 +8,10 @@ import type {
 import {
   workspaceContractFactories,
   type WorkspaceContractFixture,
-  type WorkspaceContractFactory,
 } from '../main/testing/workspace-contract-fixture';
 
-type Fixture = WorkspaceContractFixture;
-
-function openCsv(value: Fixture, fileName: string, contents: string): Promise<WorkingCsvView> {
-  return value.openSource(fileName, contents);
-}
-
 async function openComparison(
-  value: Fixture,
+  value: WorkspaceContractFixture,
   baseline: WorkingCsvView,
   candidate: WorkingCsvView,
 ): Promise<ComparisonView> {
@@ -32,7 +25,7 @@ async function openComparison(
 
 /** Runs a Comparison operation to its terminal outcome through Comparison events. */
 async function runComparison(
-  value: Fixture,
+  value: WorkspaceContractFixture,
   comparisonId: string,
   key?: string[],
 ): Promise<{ status: string; comparison: ComparisonView }> {
@@ -47,7 +40,7 @@ async function runComparison(
 }
 
 async function applyKey(
-  value: Fixture,
+  value: WorkspaceContractFixture,
   comparisonId: string,
   key: string[],
 ): Promise<ComparisonView> {
@@ -56,20 +49,20 @@ async function applyKey(
   return completed.comparison;
 }
 
-async function refresh(value: Fixture, comparisonId: string): Promise<ComparisonView> {
+async function refresh(value: WorkspaceContractFixture, comparisonId: string): Promise<ComparisonView> {
   const completed = await runComparison(value, comparisonId);
   if (completed.status !== 'applied') throw new Error(`Refresh completed as ${completed.status}.`);
   return completed.comparison;
 }
 
-async function comparisonState(value: Fixture, comparisonId: string): Promise<ComparisonView> {
+async function comparisonState(value: WorkspaceContractFixture, comparisonId: string): Promise<ComparisonView> {
   const comparison = await value.workspace.getComparisonState(comparisonId);
   if (!comparison) throw new Error('Comparison disappeared.');
   return comparison;
 }
 
 async function readWindow(
-  value: Fixture,
+  value: WorkspaceContractFixture,
   comparison: ComparisonView,
   options: {
     offset?: number;
@@ -101,24 +94,16 @@ function observableRow(row: ComparisonRow) {
   };
 }
 
-for (const factory of workspaceContractFactories) {
-  describe(`${factory.name} CsvWorkspace Comparison contract`, () => {
-    defineComparisonContract(factory.create);
-  });
-}
+describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contract', ({ create }) => {
+  let value: WorkspaceContractFixture;
 
-function defineComparisonContract(create: WorkspaceContractFactory['create']) {
-  const fixtures: Fixture[] = [];
+  beforeEach(async () => {
+    value = await create();
+  });
 
   afterEach(async () => {
-    await Promise.all(fixtures.splice(0).map((value) => value.dispose()));
+    await value.dispose();
   });
-
-  async function fixture(): Promise<Fixture> {
-    const value = await create();
-    fixtures.push(value);
-    return value;
-  }
 
   it.each([
     {
@@ -146,9 +131,8 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
       expected: { changed: 2, baselineOnly: 0, candidateOnly: 0, unchanged: 0, total: 2 },
     },
   ])('summarizes $name from literal expected outcomes', async ({ baseline, candidate, expected }) => {
-    const value = await fixture();
-    const baselineCsv = await openCsv(value, 'baseline.csv', baseline);
-    const candidateCsv = await openCsv(value, 'candidate.csv', candidate);
+    const baselineCsv = await value.openSource('baseline.csv', baseline);
+    const candidateCsv = await value.openSource('candidate.csv', candidate);
     const comparison = await openComparison(value, baselineCsv, candidateCsv);
 
     const applied = await applyKey(value, comparison.comparisonId, ['id']);
@@ -157,10 +141,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('aligns a composite key with exact cells, all classifications, binary ordering, and a final partial window', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(
-      value,
-      'baseline.csv',
+    const baseline = await value.openSource('baseline.csv',
       [
         'group,id,status,code,note',
         'A,10,Same,001,"quoted, value"',
@@ -170,9 +151,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
         '',
       ].join('\n'),
     );
-    const candidate = await openCsv(
-      value,
-      'candidate.csv',
+    const candidate = await value.openSource('candidate.csv',
       [
         'note,code,status,id,group',
         '"quoted, value",1,Same,10,A',
@@ -286,10 +265,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('returns complete invalid-key counts with bounded non-overlapping evidence', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(
-      value,
-      'invalid-baseline.csv',
+    const baseline = await value.openSource('invalid-baseline.csv',
       [
         'group,id,value',
         ',blank-1,x',
@@ -318,9 +294,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
         '',
       ].join('\n'),
     );
-    const candidate = await openCsv(
-      value,
-      'invalid-candidate.csv',
+    const candidate = await value.openSource('invalid-candidate.csv',
       [
         'group,id,value',
         'A,1,one',
@@ -371,10 +345,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('distinguishes null, empty, case, whitespace, leading zeros, literal NULL, and quoted text exactly', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(
-      value,
-      'exact-baseline.csv',
+    const baseline = await value.openSource('exact-baseline.csv',
       [
         'id,value',
         '1,',
@@ -388,9 +359,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
         '',
       ].join('\n'),
     );
-    const candidate = await openCsv(
-      value,
-      'exact-candidate.csv',
+    const candidate = await value.openSource('exact-candidate.csv',
       [
         'id,value',
         '1,',
@@ -483,20 +452,13 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('reports compatibility and key-shape faults through typed workspace outcomes', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(
-      value,
-      'baseline.csv',
+    const baseline = await value.openSource('baseline.csv',
       ['"select","odd name","quote""name"', '1,alpha,value', ''].join('\n'),
     );
-    const compatible = await openCsv(
-      value,
-      'compatible.csv',
+    const compatible = await value.openSource('compatible.csv',
       ['"quote""name","select","odd name"', 'value,1,alpha', ''].join('\n'),
     );
-    const incompatible = await openCsv(
-      value,
-      'incompatible.csv',
+    const incompatible = await value.openSource('incompatible.csv',
       ['"select","odd name",extra', '1,alpha,value', ''].join('\n'),
     );
 
@@ -553,12 +515,13 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('cancels at a cooperative statement boundary without publishing a result', async () => {
-    const contractFixture = await fixture();
-    const baseline = await openCsv(contractFixture, 'baseline.csv', 'id,value\n1,old\n');
-    const candidate = await openCsv(contractFixture, 'candidate.csv', 'id,value\n1,new\n');
-    const comparison = await openComparison(contractFixture, baseline, candidate);
+    const [baseline, candidate] = await Promise.all([
+      value.openSource('baseline.csv', 'id,value\n1,old\n'),
+      value.openSource('candidate.csv', 'id,value\n1,new\n'),
+    ]);
+    const comparison = await openComparison(value, baseline, candidate);
     const summarizing = new Promise<void>((resolve) => {
-      const unsubscribe = contractFixture.workspace.onComparisonEvent((event) => {
+      const unsubscribe = value.workspace.onComparisonEvent((event) => {
         if (
           event.kind === 'changed' &&
           event.comparison.comparisonId === comparison.comparisonId &&
@@ -570,7 +533,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
       });
     });
 
-    const started = await contractFixture.workspace.beginComparison({
+    const started = await value.workspace.beginComparison({
       kind: 'apply-key',
       comparisonId: comparison.comparisonId,
       key: ['id'],
@@ -579,28 +542,29 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
     await summarizing;
 
     await expect(
-      contractFixture.workspace.cancelComparison({
+      value.workspace.cancelComparison({
         comparisonId: comparison.comparisonId,
         operationId: started.operationId,
       }),
     ).resolves.toEqual({ status: 'requested' });
-    await expect(contractFixture.awaitComparisonOutcome(started.operationId)).resolves.toEqual({
+    await expect(value.awaitComparisonOutcome(started.operationId)).resolves.toEqual({
       attemptId: started.operationId,
       status: 'cancelled',
     });
     await expect(
-      contractFixture.workspace.getComparisonState(comparison.comparisonId),
+      value.workspace.getComparisonState(comparison.comparisonId),
     ).resolves.toMatchObject({
-        operation: null,
-        applied: null,
-        lastAttempt: { attemptId: started.operationId, status: 'cancelled' },
+      operation: null,
+      applied: null,
+      lastAttempt: { attemptId: started.operationId, status: 'cancelled' },
     });
   });
 
   it('handles key-only data, zero and maximum windows, and Swap sides without recomputation', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(value, 'baseline.csv', ['id', '1', '2', ''].join('\n'));
-    const candidate = await openCsv(value, 'candidate.csv', ['id', '1', '3', ''].join('\n'));
+    const [baseline, candidate] = await Promise.all([
+      value.openSource('baseline.csv', ['id', '1', '2', ''].join('\n')),
+      value.openSource('candidate.csv', ['id', '1', '3', ''].join('\n')),
+    ]);
     const comparison = await openComparison(value, baseline, candidate);
     const applied = await applyKey(value, comparison.comparisonId, ['id']);
     if (!applied.applied) throw new Error('Comparison has no applied result.');
@@ -693,14 +657,15 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('closes dependent Comparisons and releases their published results with a CSV Source', async () => {
-    const contractFixture = await fixture();
-    const baseline = await openCsv(contractFixture, 'baseline.csv', 'id,value\n1,old\n');
-    const candidate = await openCsv(contractFixture, 'candidate.csv', 'id,value\n1,new\n');
-    const comparison = await openComparison(contractFixture, baseline, candidate);
-    const applied = await applyKey(contractFixture, comparison.comparisonId, ['id']);
+    const [baseline, candidate] = await Promise.all([
+      value.openSource('baseline.csv', 'id,value\n1,old\n'),
+      value.openSource('candidate.csv', 'id,value\n1,new\n'),
+    ]);
+    const comparison = await openComparison(value, baseline, candidate);
+    const applied = await applyKey(value, comparison.comparisonId, ['id']);
     if (!applied.applied) throw new Error('Comparison has no applied result.');
 
-    const confirmation = await contractFixture.workspace.closeCsv({
+    const confirmation = await value.workspace.closeCsv({
       workingCsvId: baseline.workingCsvId,
     });
     if (confirmation.status !== 'confirmation-required') {
@@ -708,7 +673,7 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
     }
 
     await expect(
-      contractFixture.workspace.closeCsv({
+      value.workspace.closeCsv({
         workingCsvId: baseline.workingCsvId,
         confirmedImpact: confirmation.impact,
       }),
@@ -717,15 +682,15 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
       closedWorkingCsvId: baseline.workingCsvId,
       closedComparisonIds: [comparison.comparisonId],
     });
-    await expect(contractFixture.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toBeNull();
-    await expect(contractFixture.workspace.getWorkingCsv(candidate.workingCsvId)).resolves.toEqual(
+    await expect(value.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toBeNull();
+    await expect(value.workspace.getWorkingCsv(candidate.workingCsvId)).resolves.toEqual(
       candidate,
     );
     await expect(
-      contractFixture.workspace.getComparisonState(comparison.comparisonId),
+      value.workspace.getComparisonState(comparison.comparisonId),
     ).resolves.toBeNull();
     await expect(
-      contractFixture.workspace.getComparisonWindow({
+      value.workspace.getComparisonWindow({
         comparisonId: comparison.comparisonId,
         resultToken: applied.applied.resultToken,
         offset: 0,
@@ -737,11 +702,8 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
   });
 
   it('marks every Working CSV data mutation Outdated while queries and Export CSV remain current', async () => {
-    const value = await fixture();
-    const baseline = await openCsv(value, 'baseline.csv', ['id,value', '1,old', ''].join('\n'));
-    const candidate = await openCsv(
-      value,
-      'candidate.csv',
+    const baseline = await value.openSource('baseline.csv', ['id,value', '1,old', ''].join('\n'));
+    const candidate = await value.openSource('candidate.csv',
       ['id,value', '1,new', ''].join('\n'),
     );
     const comparison = await openComparison(value, baseline, candidate);
@@ -834,4 +796,4 @@ function defineComparisonContract(create: WorkspaceContractFactory['create']) {
       (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
     ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
   });
-}
+});

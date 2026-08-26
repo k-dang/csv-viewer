@@ -11,7 +11,7 @@ import type {
 } from '../../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from '../../workspace/comparison-executor';
 import { CsvWorkspace } from '../../workspace/csv-workspace';
-import type { CapturedCsvExport, WorkspaceContractFixture } from './workspace-contract-fixture';
+import type { WorkspaceContractFixture } from './workspace-contract-fixture';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -28,7 +28,6 @@ export type ScriptedPrompts = {
  * seam only; the desktop host supplies CSV Source identity, description, and export delivery.
  */
 export class CsvWorkspaceFixture implements WorkspaceContractFixture {
-  private readonly sourcePaths = new Map<CsvSourceId, string>();
   private readonly outcomes = new Map<ComparisonOperationId, ComparisonAttemptOutcomeView>();
   private readonly outcomeWaiters = new Map<
     ComparisonOperationId,
@@ -89,20 +88,15 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   sourceId(filePath: string): Promise<CsvSourceId> {
-    return this.host.registerSource(filePath).then((sourceId) => {
-      this.sourcePaths.set(sourceId, filePath);
-      return sourceId;
-    });
+    return this.host.registerSource(filePath);
   }
 
   async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
     return this.sourceId(await this.writeSource(fileName, contents));
   }
 
-  async removeSource(sourceId: CsvSourceId): Promise<void> {
-    const sourcePath = this.sourcePaths.get(sourceId);
-    if (!sourcePath) throw new Error(`Unknown test CSV Source ${sourceId}.`);
-    await unlink(sourcePath);
+  async removeSource(fileName: string): Promise<void> {
+    await unlink(this.file(fileName));
   }
 
   /** Opens an existing CSV Source and fails the test when the workspace rejects it. */
@@ -125,20 +119,14 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.open(await this.writeSource(fileName, contents), options);
   }
 
-  /** Points the next Export CSV at `fileName` and returns the destination path. */
-  queueExportTo(fileName: string): string {
+  captureNextExport(fileName: string): () => Promise<string> {
     const destinationPath = this.file(fileName);
     this.prompts.exportChoices.push(destinationPath);
-    return destinationPath;
-  }
-
-  captureNextExport(fileName: string): CapturedCsvExport {
-    const destinationPath = this.queueExportTo(fileName);
-    return { readText: () => readFile(destinationPath, 'utf8') };
+    return () => readFile(destinationPath, 'utf8');
   }
 
   async replaceSourceContents(fileName: string, contents: string): Promise<void> {
-    await writeFile(this.file(fileName), contents);
+    await this.writeSource(fileName, contents);
   }
 
   awaitComparisonOutcome(

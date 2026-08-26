@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
   ComparisonSummary,
+  ComparisonView,
   WorkingCsvView,
   SourceKeyDiagnostics,
 } from '../shared/csv-viewer-contract';
@@ -13,10 +14,7 @@ import type {
   StoredComparisonWindow,
 } from './comparison-executor';
 import type { CsvWorkspace } from './csv-workspace';
-import {
-  workspaceContractFactories,
-  type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+import { contractIt } from '../main/testing/workspace-contract-fixture';
 
 function workingCsv(
   workingCsvId: string,
@@ -85,7 +83,6 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   disposeCalled = false;
   readonly droppedArtifacts: string[] = [];
   private readonly pendingSnapshots = new Map<string, (error: Error) => void>();
-  private readonly snapshotStartWaiters = new Map<string, () => void>();
   private readonly pendingDrops: Array<() => void> = [];
   private readonly pendingReleases: Array<() => void> = [];
 
@@ -97,8 +94,6 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
     if (!this.deferSnapshots) return emptySummary;
     return new Promise((_resolve, reject) => {
       this.pendingSnapshots.set(request.artifactId, reject);
-      this.snapshotStartWaiters.get(request.artifactId)?.();
-      this.snapshotStartWaiters.delete(request.artifactId);
     });
   }
 
@@ -140,9 +135,8 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
     for (const resolve of this.pendingReleases.splice(0)) resolve();
   }
 
-  awaitSnapshotStart(artifactId: string): Promise<void> {
-    if (this.pendingSnapshots.has(artifactId)) return Promise.resolve();
-    return new Promise((resolve) => this.snapshotStartWaiters.set(artifactId, resolve));
+  hasPendingSnapshot(artifactId: string): boolean {
+    return this.pendingSnapshots.has(artifactId);
   }
 
   async dispose(): Promise<void> {
@@ -154,75 +148,43 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   }
 }
 
-async function waitForIdle(service: CsvComparisonService, comparisonId: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+const settles = { interval: 1 };
+
+function waitForIdle(service: CsvComparisonService, comparisonId: string) {
+  return vi.waitUntil(() => {
     const state = service.getState(comparisonId);
-    if (!state?.operation) return state;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('Comparison did not settle.');
+    return state && !state.operation ? state : false;
+  }, settles);
 }
 
-async function waitForPhase(
+function waitForPhase(
   service: CsvComparisonService,
   comparisonId: string,
   phase: 'validating' | 'comparing' | 'summarizing',
 ) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const state = service.getState(comparisonId);
-    if (state?.operation?.phase === phase) return state.operation;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error(`Comparison did not reach ${phase}.`);
+  return vi.waitUntil(() => {
+    const operation = service.getState(comparisonId)?.operation;
+    return operation?.phase === phase ? operation : false;
+  }, settles);
 }
 
-async function waitForArtifactDrop(
-  executor: ScriptedComparisonExecutor,
-  artifactId: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (executor.droppedArtifacts.includes(artifactId)) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error(`Comparison artifact ${artifactId} was not retired.`);
+function waitForArtifactDrop(executor: ScriptedComparisonExecutor, artifactId: string) {
+  return vi.waitUntil(() => executor.droppedArtifacts.includes(artifactId), settles);
 }
 
-async function waitForReleaseAttemptCount(
-  executor: ScriptedComparisonExecutor,
-  expectedCount: number,
-): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (executor.releaseAttemptCount >= expectedCount) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error(`Comparison worker release attempt count did not reach ${expectedCount}.`);
+function waitForReleaseAttemptCount(executor: ScriptedComparisonExecutor, expectedCount: number) {
+  return vi.waitUntil(() => executor.releaseAttemptCount >= expectedCount, settles);
 }
 
-/** Polls the workspace until the Comparison has no operation in flight. */
-async function waitForWorkspaceIdle(
+/** Waits until the Comparison has no operation in flight. */
+function waitForWorkspaceIdle(
   workspace: CsvWorkspace,
   comparisonId: string,
 ): Promise<ComparisonView> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  return vi.waitUntil(async () => {
     const comparison = await workspace.getComparisonState(comparisonId);
-    if (comparison && !comparison.operation) return comparison;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('Comparison did not settle.');
-}
-
-function contractIt(
-  name: string,
-  testCase: (fixture: WorkspaceContractFixture) => Promise<void>,
-): void {
-  it.each(workspaceContractFactories)(`$name ${name}`, async ({ create }) => {
-    const fixture = await create();
-    try {
-      await testCase(fixture);
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    return comparison && !comparison.operation ? comparison : false;
+  }, settles);
 }
 
 describe('CsvComparisonService interaction contract', () => {
@@ -333,7 +295,7 @@ describe('CsvComparisonService interaction contract', () => {
     });
     executor.releaseDrops();
     const outcome = await refresh.completion;
-    expect(outcome.status).toBe('applied');
+    if (outcome.status !== 'applied') throw new Error(`Refresh completed as ${outcome.status}.`);
     expect(outcome.comparison.applied?.freshness).toEqual({
       kind: 'outdated',
       changedSides: ['baseline'],
@@ -493,8 +455,10 @@ describe('CsvComparisonService interaction contract', () => {
     'awaits active work and emits no changed state after closing a Comparison',
     async (fixture) => {
       const workspace = fixture.workspace;
-      const baseline = await fixture.openSource('a.csv', 'id,value\n1,a\n2,b\n');
-      const candidate = await fixture.openSource('b.csv', 'id,value\n1,a\n2,c\n');
+      const [baseline, candidate] = await Promise.all([
+        fixture.openSource('a.csv', 'id,value\n1,a\n2,b\n'),
+        fixture.openSource('b.csv', 'id,value\n1,a\n2,c\n'),
+      ]);
       const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
@@ -563,8 +527,7 @@ describe('CsvComparisonService interaction contract', () => {
       key: ['id'],
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
-    await waitForPhase(service, opened.comparison.comparisonId, 'comparing');
-    await executor.awaitSnapshotStart(begun.operationId);
+    await vi.waitUntil(() => executor.hasPendingSnapshot(begun.operationId), { interval: 1 });
     await expect(
       service.cancel({
         comparisonId: opened.comparison.comparisonId,

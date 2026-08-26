@@ -39,14 +39,18 @@ describe('DesktopWorkspaceHost behavior', () => {
       value: 'Grace',
     });
     fixture.prompts.exportChoices.push(sourceAliasPath);
-    const outputPath = fixture.queueExportTo('protected-output.csv');
+    const readExported = fixture.captureNextExport('protected-output.csv');
 
     await expect(
       fixture.workspace.exportCsv({ workingCsvId: workingCsv.workingCsvId }),
     ).resolves.toMatchObject({ hasUnexportedChanges: false });
     expect(fixture.prompts.sourceConflictCount).toBe(1);
+    expect(fixture.prompts.defaultExportPaths).toEqual([
+      fixture.file('protected-source-edited.csv'),
+      fixture.file('protected-source-edited.csv'),
+    ]);
     await expect(readFile(filePath, 'utf8')).resolves.toBe('name\nAda\n');
-    await expect(readFile(outputPath, 'utf8')).resolves.toContain('Grace');
+    await expect(readExported()).resolves.toContain('Grace');
   });
 
   it('retains CSV Source identity when the source is moved after opening', async () => {
@@ -58,7 +62,7 @@ describe('DesktopWorkspaceHost behavior', () => {
     const workingCsv = await fixture.open(filePath);
     await rename(filePath, movedSourcePath);
     fixture.prompts.exportChoices.push(movedSourcePath);
-    fixture.queueExportTo('moved-output.csv');
+    fixture.captureNextExport('moved-output.csv');
 
     await fixture.workspace.exportCsv({
       workingCsvId: workingCsv.workingCsvId,
@@ -104,9 +108,9 @@ describe('DesktopWorkspaceHost behavior', () => {
       'export-during-delivery.csv',
       'name\nAda\nGrace\n',
     );
-    fixture.queueExportTo('delivered.csv');
-    const prompting = deferred();
-    const release = deferred();
+    const readExported = fixture.captureNextExport('delivered.csv');
+    const prompting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     fixture.prompts.holdExportPrompt = () => {
       prompting.resolve();
       return release.promise;
@@ -132,9 +136,7 @@ describe('DesktopWorkspaceHost behavior', () => {
     await expect(exporting).resolves.toMatchObject({
       hasUnexportedChanges: false,
     });
-    await expect(
-      readFile(fixture.file('delivered.csv'), 'utf8'),
-    ).resolves.toContain('Grace');
+    await expect(readExported()).resolves.toContain('Grace');
   });
 
   it('keeps later edits unexported when desktop delivery contains an earlier revision', async () => {
@@ -143,9 +145,9 @@ describe('DesktopWorkspaceHost behavior', () => {
       'name,code\nAda,001\n',
     );
     const request = { workingCsvId: workingCsv.workingCsvId };
-    fixture.queueExportTo('raced.csv');
-    const prompting = deferred();
-    const release = deferred();
+    const readExported = fixture.captureNextExport('raced.csv');
+    const prompting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     fixture.prompts.holdExportPrompt = () => {
       prompting.resolve();
       return release.promise;
@@ -164,9 +166,7 @@ describe('DesktopWorkspaceHost behavior', () => {
     await expect(exporting).resolves.toMatchObject({
       hasUnexportedChanges: true,
     });
-    await expect(
-      readFile(fixture.file('raced.csv'), 'utf8'),
-    ).resolves.toContain('001');
+    await expect(readExported()).resolves.toContain('001');
     await expect(fixture.workspace.undoCsvEdit(request)).resolves.toMatchObject(
       {
         hasUnexportedChanges: false,
@@ -174,11 +174,3 @@ describe('DesktopWorkspaceHost behavior', () => {
     );
   });
 });
-
-function deferred(): { promise: Promise<void>; resolve(): void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
   ComparisonSummary,
@@ -12,10 +12,7 @@ import type {
 } from './comparison-executor';
 import type { CsvWorkspace } from './csv-workspace';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
-import {
-  workspaceContractFactories,
-  type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+import { contractIt } from '../main/testing/workspace-contract-fixture';
 
 const validDiagnostics: SourceKeyDiagnostics = {
   blankRowCount: 0,
@@ -59,27 +56,11 @@ class ControlledExecutor implements ComparisonExecutor {
   }
 }
 
-async function waitForComparing(workspace: CsvWorkspace, comparisonId: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const comparison = await workspace.getComparisonState(comparisonId);
-    if (comparison?.operation?.phase === 'comparing') return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error('Comparison did not reach comparing.');
-}
-
-function contractIt(
-  name: string,
-  testCase: (fixture: WorkspaceContractFixture) => Promise<void>,
-): void {
-  it.each(workspaceContractFactories)(`$name ${name}`, async ({ create }) => {
-    const fixture = await create();
-    try {
-      await testCase(fixture);
-    } finally {
-      await fixture.dispose();
-    }
-  });
+function waitForComparing(workspace: CsvWorkspace, comparisonId: string): Promise<boolean> {
+  return vi.waitUntil(
+    async () => (await workspace.getComparisonState(comparisonId))?.operation?.phase === 'comparing',
+    { interval: 1 },
+  );
 }
 
 describe('CsvWorkspace lifecycle', () => {
@@ -191,8 +172,10 @@ describe('CsvWorkspace lifecycle', () => {
     const fixture = await CsvWorkspaceFixture.create(executor);
     const workspace = fixture.workspace;
     try {
-      const baseline = await fixture.openSource('baseline.csv', 'id,value\n1,a\n');
-      const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,b\n');
+      const [baseline, candidate] = await Promise.all([
+        fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
+        fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
+      ]);
       const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
@@ -261,8 +244,10 @@ describe('CsvWorkspace lifecycle', () => {
     const fixture = await CsvWorkspaceFixture.create(executor);
     const workspace = fixture.workspace;
     try {
-      const baseline = await fixture.openSource('baseline.csv', 'id,value\n1,a\n');
-      const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,b\n');
+      const [baseline, candidate] = await Promise.all([
+        fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
+        fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
+      ]);
       const opened = await workspace.openComparison({
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
@@ -304,10 +289,7 @@ describe('CsvWorkspace lifecycle', () => {
       const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
       await expect(
         workspace.openRecentCsv(workingCsv.file.sourceId),
-      ).resolves.toMatchObject({
-        status: 'already-open',
-        workingCsv: { workingCsvId: workingCsv.workingCsvId },
-      });
+      ).resolves.toEqual({ status: 'already-open', workingCsv });
       await expect(workspace.reopenCsv('missing-working-csv')).resolves.toEqual({
         status: 'working-csv-not-found',
       });
@@ -368,8 +350,10 @@ describe('CsvWorkspace lifecycle', () => {
     const fixture = await CsvWorkspaceFixture.create(new ControlledExecutor());
     const workspace = fixture.workspace;
     try {
-      const baseline = await fixture.openSource('baseline.csv', 'id,value\n1,a\n');
-      const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,b\n');
+      const [baseline, candidate] = await Promise.all([
+        fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
+        fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
+      ]);
       await workspace.editCsvCell({
         workingCsvId: baseline.workingCsvId,
         rowId: '1',
@@ -412,8 +396,10 @@ describe('CsvWorkspace lifecycle', () => {
 
   contractIt('rejects new Working CSV work once disposal starts', async (fixture) => {
     const workspace = fixture.workspace;
-    const baseline = await fixture.openSource('baseline.csv', 'id,value\n1,a\n');
-    const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,b\n');
+    const [baseline, candidate] = await Promise.all([
+      fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
+      fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
+    ]);
     const lateSourceId = await fixture.registerSource('late.csv', 'id,value\n1,c\n');
 
     const disposal = workspace.dispose();
@@ -438,8 +424,6 @@ describe('CsvWorkspace lifecycle', () => {
     await expect(
       workspace.getCsvRows({ workingCsvId: baseline.workingCsvId, offset: 0, limit: 100 }),
     ).rejects.toThrow('CSV workspace is disposing.');
-
-    await fixture.dispose();
   });
 
   contractIt('waits for a Working CSV open admitted before disposal', async (fixture) => {
@@ -453,8 +437,6 @@ describe('CsvWorkspace lifecycle', () => {
     await disposal;
     if (opened.status !== 'opened') throw new Error('open was not admitted');
     await expect(workspace.getWorkingCsv(opened.workingCsv.workingCsvId)).resolves.toBeNull();
-
-    await fixture.dispose();
   });
 
   contractIt(
@@ -508,6 +490,5 @@ describe('CsvWorkspace lifecycle', () => {
     const first = fixture.workspace.dispose();
     const second = fixture.workspace.dispose();
     expect(second).toBe(first);
-    await fixture.dispose();
   });
 });

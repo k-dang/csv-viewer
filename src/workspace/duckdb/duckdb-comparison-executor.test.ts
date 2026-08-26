@@ -2,28 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { DuckDBConnection } from '@duckdb/node-api';
 import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve(value: T | PromiseLike<T>): void;
-  reject(error: Error): void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: Deferred<T>['resolve'];
-  let reject!: Deferred<T>['reject'];
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
-
 describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('interrupts an active operation before releasing its dedicated connection', async () => {
     let interrupted = false;
     let closed = false;
-    const queryStarted = createDeferred<void>();
-    const query = createDeferred<never>();
+    const queryStarted = Promise.withResolvers<void>();
+    const query = Promise.withResolvers<never>();
     const connection = {
       runAndReadAll: () => {
         queryStarted.resolve();
@@ -60,8 +44,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
 
   it('releases a worker when cancellation wins the connection race', async () => {
     let closed = false;
-    const connectionRequested = createDeferred<void>();
-    const workerConnection = createDeferred<DuckDBConnection>();
+    const connectionRequested = Promise.withResolvers<void>();
+    const workerConnection = Promise.withResolvers<DuckDBConnection>();
     const connection = {
       interrupt: () => undefined,
       closeSync: () => {
@@ -211,6 +195,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     for (const artifactId of ['first', 'second']) {
       await executor.createSnapshot({
         artifactId,
+        comparisonId: 'comparison',
         baselineId: 'baseline',
         candidateId: 'candidate',
         key: ['id'],

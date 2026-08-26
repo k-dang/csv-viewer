@@ -1,18 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField, type CsvRow, type WorkingCsvId } from '../shared/csv-viewer-contract';
+import { csvInternalRowIdField, type WorkingCsvId } from '../shared/csv-viewer-contract';
 import {
+  expectVisibleRows,
+  rowIds,
   workspaceContractFactories,
   type WorkspaceContractFixture,
-  type WorkspaceContractFactory,
 } from '../main/testing/workspace-contract-fixture';
 
-for (const factory of workspaceContractFactories) {
-  describe(`${factory.name} CsvWorkspace Working CSV contract`, () => {
-    defineWorkingCsvContract(factory.create);
-  });
-}
-
-function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
+describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contract', ({ create }) => {
   let fixture: WorkspaceContractFixture;
 
   beforeEach(async () => {
@@ -38,7 +33,6 @@ function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
     );
 
     expect(workingCsv.file.name).toBe('people.csv');
-    expect(workingCsv.file.location).toEqual(expect.any(String));
     expect(workingCsv.file.sourceId).toBeTruthy();
     expect(workingCsv.file.sizeBytes).toBeGreaterThan(0);
     expect(workingCsv.rowCount).toBe(2);
@@ -47,7 +41,7 @@ function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
     await expect(workspace().getWorkingCsv(workingCsv.workingCsvId)).resolves.toEqual(workingCsv);
   });
 
-  it('handles quoted fields and escaped delimiters through DuckDB CSV parsing', async () => {
+  it('handles quoted fields, escaped quotes, and embedded delimiters', async () => {
     const workingCsv = await fixture.openSource(
       'quoted.csv',
       ['name,note', 'Ada,"uses commas, quotes ""well"", and new lines"', 'Grace,"plain"'].join('\n'),
@@ -184,14 +178,6 @@ function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
     expect(firstRows.filteredRowCount).toBe(1);
     expect(secondRows.filteredRowCount).toBe(2);
     expect(second.columns.map((column) => column.name)).toEqual(['b', 'c']);
-  });
-
-  it('gives a known CSV Source at most one Working CSV', async () => {
-    const workingCsv = await fixture.openSource('dedupe.csv', ['a', '1'].join('\n'));
-
-    await expect(
-      workspace().openRecentCsv(workingCsv.file.sourceId),
-    ).resolves.toEqual({ status: 'already-open', workingCsv });
   });
 
   it('keeps edit journals independent per Working CSV', async () => {
@@ -692,13 +678,4 @@ function defineWorkingCsvContract(create: WorkspaceContractFactory['create']) {
     expect(parameterizedSearch.filteredRowCount).toBe(0);
     expect(parameterizedSearch.rows).toEqual([]);
   });
-
-}
-
-function rowIds(rows: CsvRow[]): string[] {
-  return rows.map((row) => row[csvInternalRowIdField]);
-}
-
-function expectVisibleRows(rows: CsvRow[]) {
-  return expect(rows.map(({ [csvInternalRowIdField]: _rowId, ...visibleRow }) => visibleRow));
-}
+});
