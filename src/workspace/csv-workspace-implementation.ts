@@ -301,10 +301,6 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 }
 
-/**
- * Creates the runtime-neutral product seam used by desktop today and the browser next. Tests pass
- * an executor to drive Comparison execution and lifecycle races.
- */
 function requiresConfirmation(impact: CloseImpact): boolean {
   return impact.hasUnexportedChanges || impact.dependentComparisons.length > 0;
 }

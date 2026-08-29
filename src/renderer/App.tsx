@@ -217,18 +217,22 @@ export function App() {
 
   async function chooseCandidate(candidateId: string) {
     if (!candidatePicker) return;
-    const result = await viewer.call({
-      operation: 'comparison.open',
-      baselineId: candidatePicker.baseline.workingCsvId,
-      candidateId,
-    });
-    if (result.status === 'rejected') {
-      setOpenError(result.fault.message);
-      return;
+    try {
+      const result = await viewer.call({
+        operation: 'comparison.open',
+        baselineId: candidatePicker.baseline.workingCsvId,
+        candidateId,
+      });
+      if (result.status === 'rejected') {
+        setOpenError(result.fault.message);
+        return;
+      }
+      const comparison = result.comparison;
+      dispatchWorkspace({ type: 'open-comparison', comparison });
+      setCandidatePicker(null);
+    } catch (error: unknown) {
+      setOpenError(error instanceof Error ? error.message : 'Unable to open Comparison.');
     }
-    const comparison = result.comparison;
-    dispatchWorkspace({ type: 'open-comparison', comparison });
-    setCandidatePicker(null);
   }
 
   async function closeTab(tab: OpenRendererTab) {
