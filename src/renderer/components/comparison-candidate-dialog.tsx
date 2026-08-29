@@ -17,8 +17,7 @@ export function ComparisonCandidateDialog({
   const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
     const focusable = () => [
       ...(dialog?.querySelectorAll<HTMLElement>(
@@ -71,25 +70,16 @@ export function ComparisonCandidateDialog({
         <header className="flex items-start justify-between gap-4 border-b p-5">
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
-              Baseline · {baseline.file.name}
+              Baseline · {baseline.source.name}
             </p>
             <h2 id="comparison-candidate-title" className="mt-1 text-xl font-semibold">
               Choose a Candidate
             </h2>
-            <p
-              id="comparison-candidate-description"
-              className="mt-1 text-sm text-muted-foreground"
-            >
+            <p id="comparison-candidate-description" className="mt-1 text-sm text-muted-foreground">
               Comparison uses the complete Working CSV, including Unexported Changes.
             </p>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Close Candidate picker"
-            onClick={onClose}
-          >
+          <Button type="button" variant="ghost" size="icon" aria-label="Close Candidate picker" onClick={onClose}>
             <X />
           </Button>
         </header>
@@ -124,11 +114,9 @@ export function ComparisonCandidateDialog({
                   <FileSpreadsheet className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold">
-                    {candidate.workingCsv.file.name}
-                  </span>
+                  <span className="block truncate font-semibold">{candidate.workingCsv.source.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">
-                    {candidate.workingCsv.file.location}
+                    {candidate.workingCsv.source.location}
                   </span>
                   <span
                     className={
@@ -140,9 +128,7 @@ export function ComparisonCandidateDialog({
                     {explanation}
                   </span>
                 </span>
-                {compatible ? (
-                  <ArrowLeftRight className="size-4 shrink-0 text-muted-foreground" />
-                ) : null}
+                {compatible ? <ArrowLeftRight className="size-4 shrink-0 text-muted-foreground" /> : null}
               </button>
             );
           })}

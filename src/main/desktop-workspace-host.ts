@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { toError } from '../shared/errors';
+import { electronCsvViewerCapabilities } from '../shared/electron-csv-viewer-capabilities';
 import type { CsvSourceId, RecentCsvSource } from '../shared/csv-viewer-contract';
 import {
   CsvSourceUnavailableError,
@@ -27,6 +28,8 @@ export type DesktopWorkspacePrompts = {
   chooseExportDestination(defaultPath: string): Promise<string | null>;
   /** Tell the user their chosen destination is the CSV Source, then re-prompt. */
   showSourceConflict(): Promise<void>;
+  /** Ask whether Unexported Changes may be discarded before reopening a Working CSV. */
+  confirmDiscardChanges(sourceName: string): Promise<boolean>;
 };
 
 type RegisteredSource = {
@@ -40,6 +43,7 @@ type RegisteredSource = {
  * and Electron prompts stay here; the workspace only ever sees opaque CSV Source identity.
  */
 export class DesktopWorkspaceHost implements CsvWorkspaceHost {
+  readonly capabilities = electronCsvViewerCapabilities;
   private readonly sources = new Map<CsvSourceId, RegisteredSource>();
   private readonly sourceIdsByIdentity = new Map<string, CsvSourceId>();
 
@@ -87,10 +91,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     };
   }
 
-  async withEngineSource<T>(
-    sourceId: CsvSourceId,
-    use: (engineSourceReference: string) => Promise<T>,
-  ): Promise<T> {
+  async withEngineSource<T>(sourceId: CsvSourceId, use: (engineSourceReference: string) => Promise<T>): Promise<T> {
     return use(this.requireSource(sourceId).filePath);
   }
 
@@ -147,10 +148,11 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     }
   }
 
-  private async isSourceDestination(
-    sourceId: CsvSourceId,
-    destinationPath: string,
-  ): Promise<boolean> {
+  confirmDiscardChanges(sourceName: string): Promise<boolean> {
+    return this.prompts.confirmDiscardChanges(sourceName);
+  }
+
+  private async isSourceDestination(sourceId: CsvSourceId, destinationPath: string): Promise<boolean> {
     const sourceIdentity = this.sources.get(sourceId)?.identity;
     if (!sourceIdentity) return false;
     const destinationIdentity = await captureFileIdentity(destinationPath);
@@ -201,10 +203,7 @@ function toSourceUnavailableError(error: unknown): Error {
     return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
   }
   if (error.code === 'EACCES' || error.code === 'EPERM') {
-    return new CsvSourceUnavailableError(
-      'permission-denied',
-      'Permission was denied for the CSV Source.',
-    );
+    return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
   }
   console.error('Unable to read the CSV Source.', error);
   return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');

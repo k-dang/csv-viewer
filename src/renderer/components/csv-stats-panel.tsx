@@ -6,20 +6,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import { FieldError } from '@/components/ui/field';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import type {
-  CsvColumnValueCounts,
-  CsvFilterDescriptor,
-  WorkingCsvView,
-} from '../../shared/csv-viewer-contract';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { CsvColumnValueCounts, CsvFilterDescriptor, WorkingCsvView } from '../../shared/csv-viewer-contract';
 import { formatCellValue, formatNumber } from './csv-format';
-import { useCsvViewerRuntime } from '../csv-viewer-runtime';
+import { useCsvViewer } from '../csv-viewer';
 
 type StatsState =
   | { status: 'loading' }
@@ -43,15 +33,16 @@ export function CsvStatsPanel({
   onColumnChange: (column: string) => void;
   onClose: () => void;
 }) {
-  const runtime = useCsvViewerRuntime();
+  const viewer = useCsvViewer();
   const [statsState, setStatsState] = useState<StatsState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
 
     setStatsState({ status: 'loading' });
-    runtime
-      .getCsvColumnValueCounts({
+    viewer
+      .call({
+        operation: 'csv.get-column-value-counts',
         workingCsvId: workingCsv.workingCsvId,
         column: selectedColumn,
         filters,
@@ -74,17 +65,27 @@ export function CsvStatsPanel({
     return () => {
       cancelled = true;
     };
-  }, [runtime, workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
+  }, [viewer, workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
 
   return (
-    <aside className="grid min-h-0 w-full min-w-0 grid-rows-[auto_1fr] border-l bg-card md:w-[320px]" aria-label="Stats Panel">
+    <aside
+      className="grid min-h-0 w-full min-w-0 grid-rows-[auto_1fr] border-l bg-card md:w-[320px]"
+      aria-label="Stats Panel"
+    >
       <div className="border-b px-4 py-3">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <BarChart3 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <h3 className="truncate text-sm font-semibold text-foreground">Column Value Counts</h3>
           </div>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose} title="Close stats panel" aria-label="Close stats panel">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            title="Close stats panel"
+            aria-label="Close stats panel"
+          >
             <X />
           </Button>
         </div>
@@ -121,9 +122,7 @@ export function CsvStatsPanel({
             </FieldError>
           ) : null}
 
-          {statsState.status === 'ready' ? (
-            <ColumnValueCountsList counts={statsState.counts} />
-          ) : null}
+          {statsState.status === 'ready' ? <ColumnValueCountsList counts={statsState.counts} /> : null}
         </div>
       </ScrollArea>
     </aside>
@@ -148,13 +147,19 @@ function ColumnValueCountsList({ counts }: { counts: CsvColumnValueCounts }) {
 
       <Card className="gap-0 overflow-hidden rounded-md py-0 shadow-none">
         {counts.values.map((value) => (
-          <CardContent key={`${value.value ?? '<null>'}:${value.count}`} className="grid grid-cols-[1fr_auto] gap-3 border-b px-3 py-2 last:border-b-0">
+          <CardContent
+            key={`${value.value ?? '<null>'}:${value.count}`}
+            className="grid grid-cols-[1fr_auto] gap-3 border-b px-3 py-2 last:border-b-0"
+          >
             <div className="min-w-0">
               <div className="truncate text-sm font-medium text-foreground" title={formatStatsValue(value.value)}>
                 {formatStatsValue(value.value)}
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value.percentOfScope))}%` }} />
+                <div
+                  className="h-full rounded-full bg-primary"
+                  style={{ width: `${Math.max(0, Math.min(100, value.percentOfScope))}%` }}
+                />
               </div>
             </div>
             <div className="text-right">

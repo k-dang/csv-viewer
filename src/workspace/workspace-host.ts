@@ -1,4 +1,4 @@
-import type { CsvSourceId, RecentCsvSource } from '../shared/csv-viewer-contract';
+import type { CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from '../shared/csv-viewer-contract';
 
 export type CsvSourceDescription = {
   sourceId: CsvSourceId;
@@ -27,6 +27,7 @@ export type CsvSourceUnavailableCode = 'missing-source' | 'permission-denied' | 
  * language and opaque CSV Source identity; paths and browser handles stay inside implementations.
  */
 export interface CsvWorkspaceHost {
+  readonly capabilities: CsvViewerCapabilities;
   /** Ask the user for one CSV Source. Resolves to null when the selection is cancelled. */
   acquireSource(): Promise<CsvSourceId | null>;
   describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription>;
@@ -35,13 +36,11 @@ export interface CsvWorkspaceHost {
    * the reference the engine reads it by. The reference is an opaque string the workspace passes
    * through to its reader; hosts do not build SQL.
    */
-  withEngineSource<T>(
-    sourceId: CsvSourceId,
-    use: (engineSourceReference: string) => Promise<T>,
-  ): Promise<T>;
+  withEngineSource<T>(sourceId: CsvSourceId, use: (engineSourceReference: string) => Promise<T>): Promise<T>;
   deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery>;
   recentSources(): Promise<RecentCsvSource[]>;
   recordRecentSource(sourceId: CsvSourceId): Promise<void>;
+  confirmDiscardChanges(sourceName: string): Promise<boolean>;
 }
 
 export class CsvSourceUnavailableError extends Error {

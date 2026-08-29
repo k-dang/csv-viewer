@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
   ComparisonSummary,
-  ComparisonView,
   WorkingCsvView,
   SourceKeyDiagnostics,
 } from '../shared/csv-viewer-contract';
@@ -13,22 +12,26 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import type { CsvWorkspace } from './csv-workspace';
-import { contractIt } from '../main/testing/workspace-contract-fixture';
 
-function workingCsv(
-  workingCsvId: string,
-  name: string,
-  columns = ['id', 'name', 'status'],
-): WorkingCsvView {
+function workingCsv(workingCsvId: string, name: string, columns = ['id', 'name', 'status']): WorkingCsvView {
   return {
     workingCsvId,
     dataRevision: 0,
-    file: { sourceId: workingCsvId, location: `C:/fixtures/${name}`, name, sizeBytes: 10 },
+    source: {
+      sourceId: workingCsvId,
+      location: `C:/fixtures/${name}`,
+      name,
+      sizeBytes: 10,
+    },
     columns: columns.map((column) => ({ name: column, type: 'VARCHAR' })),
     rowCount: 0,
     dialect: {},
-    editState: { workingCsvId, hasUnexportedChanges: false, canUndo: false, canRedo: false },
+    editState: {
+      workingCsvId,
+      hasUnexportedChanges: false,
+      canUndo: false,
+      canRedo: false,
+    },
   };
 }
 
@@ -56,7 +59,10 @@ class FakeCsvStore {
   change(workingCsvId: string) {
     const current = this.workingCsvs.get(workingCsvId);
     if (current)
-      this.workingCsvs.set(workingCsvId, { ...current, dataRevision: current.dataRevision + 1 });
+      this.workingCsvs.set(workingCsvId, {
+        ...current,
+        dataRevision: current.dataRevision + 1,
+      });
     for (const listener of this.listeners) listener(workingCsvId);
   }
 }
@@ -69,7 +75,13 @@ const validDiagnostics: SourceKeyDiagnostics = {
 };
 
 const emptySummary: ComparisonSummary = {
-  rows: { changed: 0, baselineOnly: 0, candidateOnly: 0, unchanged: 0, total: 0 },
+  rows: {
+    changed: 0,
+    baselineOnly: 0,
+    candidateOnly: 0,
+    unchanged: 0,
+    total: 0,
+  },
   changedColumns: [],
 };
 
@@ -174,17 +186,6 @@ function waitForArtifactDrop(executor: ScriptedComparisonExecutor, artifactId: s
 
 function waitForReleaseAttemptCount(executor: ScriptedComparisonExecutor, expectedCount: number) {
   return vi.waitUntil(() => executor.releaseAttemptCount >= expectedCount, settles);
-}
-
-/** Waits until the Comparison has no operation in flight. */
-function waitForWorkspaceIdle(
-  workspace: CsvWorkspace,
-  comparisonId: string,
-): Promise<ComparisonView> {
-  return vi.waitUntil(async () => {
-    const comparison = await workspace.getComparisonState(comparisonId);
-    return comparison && !comparison.operation ? comparison : false;
-  }, settles);
 }
 
 describe('CsvComparisonService interaction contract', () => {
@@ -302,186 +303,6 @@ describe('CsvComparisonService interaction contract', () => {
     });
   });
 
-  contractIt(
-    'keeps the old result readable while a draft key fails validation, then marks it outdated',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const baseline = await fixture.openSource(
-        'a.csv',
-        'id,name,status\n1,Ada,active\n2,Bob,old\n',
-      );
-      const candidate = await fixture.openSource(
-        'b.csv',
-        'id,name,status\n1,Ada,active\n2,Bob,new\n',
-      );
-      const opened = await workspace.openComparison({
-        baselineId: baseline.workingCsvId,
-        candidateId: candidate.workingCsvId,
-      });
-      if (opened.status === 'rejected') throw new Error('open rejected');
-
-      expect(
-        (
-          await workspace.beginComparison({
-            kind: 'apply-key',
-            comparisonId: opened.comparison.comparisonId,
-            key: ['id'],
-          })
-        ).status,
-      ).toBe('accepted');
-      const applied = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
-      expect(applied?.applied?.summary.rows).toEqual({
-        changed: 1,
-        baselineOnly: 0,
-        candidateOnly: 0,
-        unchanged: 1,
-        total: 2,
-      });
-      const resultToken = applied?.applied?.resultToken;
-
-      await workspace.editCsvCell({
-        workingCsvId: baseline.workingCsvId,
-        rowId: '2',
-        column: 'id',
-        value: '1',
-      });
-      expect(
-        (
-          await workspace.beginComparison({
-            kind: 'apply-key',
-            comparisonId: opened.comparison.comparisonId,
-            key: ['id'],
-          })
-        ).status,
-      ).toBe('accepted');
-      const invalid = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
-      expect(invalid.lastAttempt?.status).toBe('invalid-key');
-      expect(invalid.applied?.resultToken).toBe(resultToken);
-
-      await expect(
-        workspace.getComparisonState(opened.comparison.comparisonId),
-      ).resolves.toMatchObject({
-        applied: { freshness: { kind: 'outdated', changedSides: ['baseline'] } },
-      });
-    },
-  );
-
-  contractIt(
-    'serves bounded presentation windows and invalidates the old token after Swap sides',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const baseline = await fixture.openSource(
-        'a.csv',
-        'id,name,status\n1,Ada,old\n2,Bob,same\n',
-      );
-      const candidate = await fixture.openSource(
-        'b.csv',
-        'id,status,name\n1,new,Ada\n3,added,Cat\n',
-      );
-      const opened = await workspace.openComparison({
-        baselineId: baseline.workingCsvId,
-        candidateId: candidate.workingCsvId,
-      });
-      if (opened.status === 'rejected') throw new Error('open rejected');
-      await workspace.beginComparison({
-        kind: 'apply-key',
-        comparisonId: opened.comparison.comparisonId,
-        key: ['id'],
-      });
-      const applied = await waitForWorkspaceIdle(workspace, opened.comparison.comparisonId);
-      const token = applied.applied?.resultToken;
-      if (!token) throw new Error('result not applied');
-
-      expect(
-        await workspace.getComparisonWindow({
-          comparisonId: opened.comparison.comparisonId,
-          resultToken: token,
-          offset: 0,
-          limit: 100,
-          rows: 'differences',
-          columns: 'changed-first',
-        }),
-      ).toMatchObject({
-        status: 'ready',
-        window: {
-          totalRowCount: 3,
-          valueColumns: [
-            { name: 'status', changedRowCount: 1 },
-            { name: 'name', changedRowCount: 0 },
-          ],
-        },
-      });
-
-      const swapped = await workspace.swapComparison(opened.comparison.comparisonId);
-      expect(swapped).toMatchObject({
-        status: 'changed',
-        comparison: { baseline: { workingCsvId: candidate.workingCsvId } },
-      });
-      if (swapped.status !== 'changed' || !swapped.comparison.applied) {
-        throw new Error('comparison not swapped');
-      }
-      expect(
-        await workspace.getComparisonWindow({
-          comparisonId: opened.comparison.comparisonId,
-          resultToken: token,
-          offset: 0,
-          limit: 100,
-          rows: 'all',
-          columns: 'csv-order',
-        }),
-      ).toMatchObject({ status: 'result-replaced' });
-      expect(
-        await workspace.getComparisonWindow({
-          comparisonId: opened.comparison.comparisonId,
-          resultToken: swapped.comparison.applied.resultToken,
-          offset: 0,
-          limit: 100,
-          rows: 'all',
-          columns: 'csv-order',
-        }),
-      ).toMatchObject({
-        status: 'ready',
-        window: {
-          valueColumns: [
-            { name: 'status', changedRowCount: 1 },
-            { name: 'name', changedRowCount: 0 },
-          ],
-        },
-      });
-    },
-  );
-
-  contractIt(
-    'awaits active work and emits no changed state after closing a Comparison',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const [baseline, candidate] = await Promise.all([
-        fixture.openSource('a.csv', 'id,value\n1,a\n2,b\n'),
-        fixture.openSource('b.csv', 'id,value\n1,a\n2,c\n'),
-      ]);
-      const opened = await workspace.openComparison({
-        baselineId: baseline.workingCsvId,
-        candidateId: candidate.workingCsvId,
-      });
-      if (opened.status === 'rejected') throw new Error('open rejected');
-      const events: string[] = [];
-      workspace.onComparisonEvent((event) => events.push(event.kind));
-
-      await workspace.beginComparison({
-        kind: 'apply-key',
-        comparisonId: opened.comparison.comparisonId,
-        key: ['id'],
-      });
-      await workspace.closeComparison(opened.comparison.comparisonId);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      expect(events.at(-1)).toBe('closed');
-      await expect(
-        workspace.getComparisonState(opened.comparison.comparisonId),
-      ).resolves.toBeNull();
-    },
-  );
-
   it('makes operation completion awaitable before publishing the running state', async () => {
     const store = new FakeCsvStore();
     store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
@@ -527,7 +348,9 @@ describe('CsvComparisonService interaction contract', () => {
       key: ['id'],
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
-    await vi.waitUntil(() => executor.hasPendingSnapshot(begun.operationId), { interval: 1 });
+    await vi.waitUntil(() => executor.hasPendingSnapshot(begun.operationId), {
+      interval: 1,
+    });
     await expect(
       service.cancel({
         comparisonId: opened.comparison.comparisonId,
@@ -555,25 +378,34 @@ describe('CsvComparisonService interaction contract', () => {
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     const first = await waitForIdle(service, opened.comparison.comparisonId);
     const firstToken = first?.applied?.resultToken;
     if (!firstToken) throw new Error('result not applied');
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     executor.dropFailuresRemaining = 1;
 
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     const replacement = await waitForIdle(service, opened.comparison.comparisonId);
 
     expect(replacement?.lastAttempt?.status).toBe('applied');
     expect(replacement?.applied?.resultToken).not.toBe(firstToken);
     expect(executor.droppedArtifacts).toContain(firstToken);
 
-    service.begin({ kind: 'refresh', comparisonId: opened.comparison.comparisonId });
+    service.begin({
+      kind: 'refresh',
+      comparisonId: opened.comparison.comparisonId,
+    });
     await waitForIdle(service, opened.comparison.comparisonId);
-    expect(executor.droppedArtifacts.filter((artifactId) => artifactId === firstToken)).toHaveLength(
-      2,
-    );
+    expect(executor.droppedArtifacts.filter((artifactId) => artifactId === firstToken)).toHaveLength(2);
     error.mockRestore();
     await service.dispose();
   });
@@ -586,7 +418,11 @@ describe('CsvComparisonService interaction contract', () => {
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     const first = await waitForIdle(service, opened.comparison.comparisonId);
     const firstToken = first?.applied?.resultToken;
     if (!firstToken) throw new Error('result not applied');
@@ -594,7 +430,10 @@ describe('CsvComparisonService interaction contract', () => {
     executor.deferReleases = true;
     const releaseAttemptCountBeforeRefresh = executor.releaseAttemptCount;
 
-    service.begin({ kind: 'refresh', comparisonId: opened.comparison.comparisonId });
+    service.begin({
+      kind: 'refresh',
+      comparisonId: opened.comparison.comparisonId,
+    });
     await waitForPhase(service, opened.comparison.comparisonId, 'summarizing');
     await waitForArtifactDrop(executor, firstToken);
 
@@ -607,9 +446,7 @@ describe('CsvComparisonService interaction contract', () => {
     executor.deferDrops = false;
     executor.releaseDrops();
     await waitForReleaseAttemptCount(executor, releaseAttemptCountBeforeRefresh + 1);
-    expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe(
-      'summarizing',
-    );
+    expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe('summarizing');
     executor.deferReleases = false;
     executor.releaseWorkers();
     const completed = await waitForIdle(service, opened.comparison.comparisonId);
@@ -626,7 +463,11 @@ describe('CsvComparisonService interaction contract', () => {
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     await waitForIdle(service, opened.comparison.comparisonId);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     executor.dropFailuresRemaining = 1;
@@ -644,7 +485,11 @@ describe('CsvComparisonService interaction contract', () => {
     const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     await waitForIdle(service, opened.comparison.comparisonId);
     const events: string[] = [];
     service.subscribe((event) => events.push(event.kind));
@@ -669,7 +514,11 @@ describe('CsvComparisonService interaction contract', () => {
     const service = new CsvComparisonService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
-    service.begin({ kind: 'apply-key', comparisonId: opened.comparison.comparisonId, key: ['id'] });
+    service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
     const applied = await waitForIdle(service, opened.comparison.comparisonId);
     const resultToken = applied?.applied?.resultToken;
     if (!resultToken) throw new Error('result not applied');

@@ -1,19 +1,11 @@
 import { useEffect, useRef, useState, type HTMLAttributes } from 'react';
-import {
-  AlertTriangle,
-  ArrowDown,
-  ArrowLeftRight,
-  ArrowUp,
-  Loader2,
-  RefreshCw,
-  Rows3,
-} from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ComparisonPhase, ComparisonSummary, ComparisonView } from '../../shared/csv-viewer-contract';
 import type { ComparisonTabPresentation } from '../workspace-tabs';
 import { ComparisonGrid } from './comparison-grid';
-import { useCsvViewerRuntime } from '../csv-viewer-runtime';
+import { useCsvViewer } from '../csv-viewer';
 
 export type { ComparisonTabPresentation } from '../workspace-tabs';
 
@@ -28,7 +20,7 @@ export function ComparisonTab({
   onPresentationChange: (next: ComparisonTabPresentation) => void;
   themeMode: 'light' | 'dark';
 }) {
-  const runtime = useCsvViewerRuntime();
+  const viewer = useCsvViewer();
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedAttemptId, setDismissedAttemptId] = useState<string | null>(null);
   const [hiddenDiagnosticsAttemptId, setHiddenDiagnosticsAttemptId] = useState<string | null>(null);
@@ -61,10 +53,15 @@ export function ComparisonTab({
   async function begin(kind: 'apply-key' | 'refresh') {
     setActionError(null);
     try {
-      const outcome = await runtime.beginComparison(
+      const outcome = await viewer.call(
         kind === 'apply-key'
-          ? { kind, comparisonId: comparison.comparisonId, key: presentation.draftKey }
-          : { kind, comparisonId: comparison.comparisonId },
+          ? {
+              operation: 'comparison.begin',
+              kind,
+              comparisonId: comparison.comparisonId,
+              key: presentation.draftKey,
+            }
+          : { operation: 'comparison.begin', kind, comparisonId: comparison.comparisonId },
       );
       if (outcome.status === 'rejected') setActionError(outcome.fault.message);
     } catch (error) {
@@ -75,7 +72,10 @@ export function ComparisonTab({
   async function swap() {
     setActionError(null);
     try {
-      const outcome = await runtime.swapComparison(comparison.comparisonId);
+      const outcome = await viewer.call({
+        operation: 'comparison.swap',
+        comparisonId: comparison.comparisonId,
+      });
       if (outcome.status === 'rejected') setActionError(outcome.fault.message);
     } catch (error) {
       setActionError(actionFailureMessage(error, 'Unable to swap comparison sides.'));
@@ -85,7 +85,8 @@ export function ComparisonTab({
   async function cancel(operationId: string) {
     setActionError(null);
     try {
-      await runtime.cancelComparison({
+      await viewer.call({
+        operation: 'comparison.cancel',
         comparisonId: comparison.comparisonId,
         operationId,
       });
@@ -96,9 +97,7 @@ export function ComparisonTab({
 
   const attempt = comparison.lastAttempt;
   const diagnostics =
-    attempt?.status === 'invalid-key' && hiddenDiagnosticsAttemptId !== attempt.attemptId
-      ? attempt.diagnostics
-      : null;
+    attempt?.status === 'invalid-key' && hiddenDiagnosticsAttemptId !== attempt.attemptId ? attempt.diagnostics : null;
   const operation = comparison.operation;
   const operationLabel = operation ? formatOperationLabel(operation.phase) : null;
 
@@ -118,24 +117,19 @@ export function ComparisonTab({
         <div className="flex flex-wrap items-stretch gap-3">
           <SourceCard
             label="Baseline"
-            name={comparison.baseline.file.name}
-            location={comparison.baseline.file.location}
+            name={comparison.baseline.source.name}
+            location={comparison.baseline.source.location}
           />
           <div className="flex items-center">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={swap}
-              disabled={Boolean(comparison.operation)}
-            >
+            <Button type="button" variant="outline" onClick={swap} disabled={Boolean(comparison.operation)}>
               <ArrowLeftRight />
               Swap sides
             </Button>
           </div>
           <SourceCard
             label="Candidate"
-            name={comparison.candidate.file.name}
-            location={comparison.candidate.file.location}
+            name={comparison.candidate.source.name}
+            location={comparison.candidate.source.location}
           />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Button
@@ -166,13 +160,8 @@ export function ComparisonTab({
             ))}
           </div>
           {presentation.draftKey.length > 0 ? (
-            <div
-              className="mt-3 flex flex-wrap items-center gap-2"
-              aria-label="Composite key order"
-            >
-              <span className="text-xs font-semibold uppercase text-muted-foreground">
-                Key order
-              </span>
+            <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="Composite key order">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">Key order</span>
               {presentation.draftKey.map((column, index) => (
                 <span
                   key={column}
@@ -194,9 +183,7 @@ export function ComparisonTab({
                     variant="ghost"
                     size="icon-xs"
                     aria-label={`Move ${column} later`}
-                    disabled={
-                      index === presentation.draftKey.length - 1 || Boolean(comparison.operation)
-                    }
+                    disabled={index === presentation.draftKey.length - 1 || Boolean(comparison.operation)}
                     onClick={() => moveDraft(index, 1)}
                   >
                     <ArrowDown />
@@ -214,17 +201,11 @@ export function ComparisonTab({
               Apply key
             </Button>
             {comparison.applied ? (
-              <span className="text-xs text-muted-foreground">
-                Applied key: {comparison.applied.key.join(' + ')}
-              </span>
+              <span className="text-xs text-muted-foreground">Applied key: {comparison.applied.key.join(' + ')}</span>
             ) : null}
           </div>
           {diagnostics ? (
-            <KeyDiagnostics
-              comparison={comparison}
-              diagnostics={diagnostics}
-              focusRef={diagnosticSummaryRef}
-            />
+            <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={diagnosticSummaryRef} />
           ) : null}
         </fieldset>
       </div>
@@ -252,13 +233,11 @@ export function ComparisonTab({
         ) : comparison.applied?.freshness.kind === 'outdated' ? (
           <StatusBanner tone="warning" aria-live="polite">
             <AlertTriangle className="size-4" />
-            <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh
-            explicitly when you are ready.
+            <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh explicitly when you
+            are ready.
           </StatusBanner>
         ) : null}
-        {attempt?.status === 'cancelled' &&
-        comparison.applied &&
-        dismissedAttemptId !== attempt.attemptId ? (
+        {attempt?.status === 'cancelled' && comparison.applied && dismissedAttemptId !== attempt.attemptId ? (
           <StatusBanner tone="neutral" aria-live="polite">
             Comparison cancelled. The previous applied result was preserved.
             <Button
@@ -322,9 +301,7 @@ export function ComparisonTab({
             <AlertTriangle className="mx-auto mb-3 size-10 text-destructive" />
             <h2 className="text-xl font-semibold">Comparison failed</h2>
             <p className="mt-2 text-sm text-muted-foreground">{attempt.failure.message}</p>
-            <p className="mt-3 text-sm font-semibold">
-              Adjust the draft if needed, then choose Apply key to retry.
-            </p>
+            <p className="mt-3 text-sm font-semibold">Adjust the draft if needed, then choose Apply key to retry.</p>
           </div>
         </div>
       ) : attempt?.status === 'sources-changed' ? (
@@ -343,8 +320,8 @@ export function ComparisonTab({
             <Rows3 className="mx-auto mb-3 size-10 text-muted-foreground" />
             <h2 className="text-xl font-semibold">Choose a Comparison Key</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Select one or more shared columns above. Apply key validates presence and uniqueness
-              in both complete Working CSVs before computing results.
+              Select one or more shared columns above. Apply key validates presence and uniqueness in both complete
+              Working CSVs before computing results.
             </p>
             <p className="mt-3 text-sm font-semibold">
               Source filters, sorts, searches, and Stats state do not limit this comparison.
@@ -383,10 +360,7 @@ function StatusBanner({
           ? 'border-blue-400/40 bg-blue-100/60 dark:bg-blue-950/40'
           : 'border-border bg-muted/40';
   return (
-    <div
-      {...attributes}
-      className={`flex flex-wrap items-center gap-2 border-b px-4 py-2 ${colors}`}
-    >
+    <div {...attributes} className={`flex flex-wrap items-center gap-2 border-b px-4 py-2 ${colors}`}>
       {children}
     </div>
   );
@@ -402,9 +376,7 @@ function KeyDiagnostics({
   focusRef,
 }: {
   comparison: ComparisonView;
-  diagnostics: NonNullable<
-    Extract<ComparisonView['lastAttempt'], { status: 'invalid-key' }>
-  >['diagnostics'];
+  diagnostics: NonNullable<Extract<ComparisonView['lastAttempt'], { status: 'invalid-key' }>>['diagnostics'];
   focusRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const describe = (label: string, value: typeof diagnostics.baseline) =>
@@ -418,11 +390,11 @@ function KeyDiagnostics({
     >
       <p className="font-semibold">This draft is not a Valid Comparison Key.</p>
       <DiagnosticSide
-        summary={describe(comparison.baseline.file.name, diagnostics.baseline)}
+        summary={describe(comparison.baseline.source.name, diagnostics.baseline)}
         value={diagnostics.baseline}
       />
       <DiagnosticSide
-        summary={describe(comparison.candidate.file.name, diagnostics.candidate)}
+        summary={describe(comparison.candidate.source.name, diagnostics.candidate)}
         value={diagnostics.candidate}
       />
     </div>
@@ -434,9 +406,7 @@ function DiagnosticSide({
   value,
 }: {
   summary: string;
-  value: NonNullable<
-    Extract<ComparisonView['lastAttempt'], { status: 'invalid-key' }>
-  >['diagnostics']['baseline'];
+  value: NonNullable<Extract<ComparisonView['lastAttempt'], { status: 'invalid-key' }>>['diagnostics']['baseline'];
 }) {
   return (
     <div className="mt-1">
@@ -455,8 +425,7 @@ function DiagnosticSide({
             ))}
             {value.duplicateExamples.map((example) => (
               <li key={`duplicate-${JSON.stringify(example.keyValues)}`}>
-                Key {example.keyValues.join(' + ')} appears {example.rowCount} times (rows{' '}
-                {example.rowIds.join(', ')})
+                Key {example.keyValues.join(' + ')} appears {example.rowCount} times (rows {example.rowIds.join(', ')})
               </li>
             ))}
           </ul>
@@ -517,10 +486,7 @@ function Toggle<Value extends string>({
   onChange: (value: Value) => void;
 }) {
   return (
-    <div
-      className="inline-flex items-center rounded-md border bg-background p-0.5"
-      aria-label={label}
-    >
+    <div className="inline-flex items-center rounded-md border bg-background p-0.5" aria-label={label}>
       {options.map(([option, text]) => (
         <Button
           key={option}
@@ -552,8 +518,6 @@ function formatChangedSides(comparison: ComparisonView) {
   const freshness = comparison.applied?.freshness;
   if (!freshness || freshness.kind !== 'outdated') return 'A source';
   return freshness.changedSides
-    .map((side) =>
-      side === 'baseline' ? comparison.baseline.file.name : comparison.candidate.file.name,
-    )
+    .map((side) => (side === 'baseline' ? comparison.baseline.source.name : comparison.candidate.source.name))
     .join(' and ');
 }

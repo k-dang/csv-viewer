@@ -47,7 +47,7 @@
         ]
       }
     },
-    // The renderer reaches its host only through the injected CsvViewerRuntime: no Electron, no
+    // The renderer reaches its host only through the injected CsvViewer: no Electron, no
     // Node, no transport names, and no reaching into the workspace or main trees.
     {
       "files": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"],
@@ -58,7 +58,7 @@
             "patterns": [
               {
                 "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/ipc-channels$|/(main|preload|workspace)/",
-                "message": "The renderer reaches its host through the injected CsvViewerRuntime, never through Electron, Node, or a transport name."
+                "message": "The renderer reaches its host through the injected CsvViewer, never through Electron, Node, or a transport name."
               }
             ]
           }

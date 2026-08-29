@@ -10,29 +10,14 @@ import {
 } from 'electron';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
-import { CsvWorkspace, type WorkspaceCloseImpact } from '../workspace/csv-workspace';
+import { registerCsvViewerRequestHandler } from './csv-viewer-ipc';
+import { createCsvViewer } from '../workspace/csv-workspace';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
 import { ipcChannels } from '../shared/ipc-channels';
 import {
   supportedCsvFileExtensions,
-  type BeginComparisonRequest,
-  type CancelComparisonRequest,
-  type CloseWorkingCsvRequest,
-  type ComparisonEvent,
-  type ComparisonWindowRequest,
-  type CsvCellEditRequest,
-  type CsvColumnValueCountsRequest,
-  type CsvDeleteRowsRequest,
-  type CsvDialectOptions,
-  type CsvEditStateRequest,
-  type CsvInsertRowRequest,
-  type CsvRowWindowRequest,
-  type CsvSourceId,
-  type CsvViewerIntent,
-  type CsvExportRequest,
-  type HealthStatus,
-  type OpenComparisonRequest,
-  type ReopenCsvResult,
+  type CsvViewerEvent,
+  type WorkspaceCloseImpact,
 } from '../shared/csv-viewer-contract';
 
 const electronRoot = __dirname;
@@ -76,11 +61,12 @@ const workspaceHost = new DesktopWorkspaceHost(
         noLink: true,
       });
     },
+    confirmDiscardChanges,
   },
   // File name predates the Recent CSV Source vocabulary; kept so existing installs keep their list.
   path.join(app.getPath('userData'), 'recent-files.json'),
 );
-const workspace = new CsvWorkspace(workspaceHost);
+const workspace = createCsvViewer(workspaceHost);
 let workspaceCloseAuthorizedImpact: WorkspaceCloseImpact | undefined;
 let workspaceCloseConfirmation: Promise<WorkspaceCloseImpact | null> | null = null;
 
@@ -92,9 +78,7 @@ function focusedWindow(): BrowserWindow | undefined {
 
 async function showMessageBox(options: MessageBoxOptions): Promise<number> {
   const ownerWindow = focusedWindow();
-  const result = ownerWindow
-    ? await dialog.showMessageBox(ownerWindow, options)
-    : await dialog.showMessageBox(options);
+  const result = ownerWindow ? await dialog.showMessageBox(ownerWindow, options) : await dialog.showMessageBox(options);
   return result.response;
 }
 
@@ -144,7 +128,7 @@ function createWindow() {
     if (closeAllowed) return;
     event.preventDefault();
     void (async () => {
-      const initial = await workspace.confirmWindowClose();
+      const initial = await workspace.confirmClose();
       if (initial.status === 'ready') {
         closeAllowed = true;
         if (!mainWindow.isDestroyed()) mainWindow.close();
@@ -173,7 +157,10 @@ function createApplicationMenu() {
     platform: process.platform,
     appName: app.name,
     isDevelopment,
-    onIntent: sendIntent,
+    onIntent: (intent) => {
+      // A menu command acts on the window the user is looking at, not on every open window.
+      focusedWindow()?.webContents.send(ipcChannels.event, { type: 'intent', intent } satisfies CsvViewerEvent);
+    },
     onAbout: () => {
       void showMessageBox({
         type: 'info',
@@ -187,130 +174,18 @@ function createApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function sendIntent(intent: CsvViewerIntent) {
-  focusedWindow()?.webContents.send(ipcChannels.intent, intent);
+function sendEvent(event: CsvViewerEvent) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+    window.webContents.send(ipcChannels.event, event);
+  }
 }
 
-function registerIpcHandlers() {
-  ipcMain.handle(ipcChannels.healthCheck, (): HealthStatus => {
-    return {
-      ok: true,
-      process: 'main',
-      timestamp: new Date().toISOString(),
-    };
-  });
-
-  ipcMain.handle(ipcChannels.openCsv, (_event, options?: CsvDialectOptions) =>
-    workspace.openCsv(options),
-  );
-
-  ipcMain.handle(
-    ipcChannels.openRecentCsv,
-    (_event, sourceId: CsvSourceId, options?: CsvDialectOptions) =>
-      workspace.openRecentCsv(sourceId, options),
-  );
-
-  ipcMain.handle(
-    ipcChannels.reopenCsv,
-    async (_event, workingCsvId: string, options?: CsvDialectOptions): Promise<ReopenCsvResult> => {
-      const existing = await workspace.getWorkingCsv(workingCsvId);
-      if (!existing) return { status: 'working-csv-not-found' };
-
-      if (existing.editState.hasUnexportedChanges) {
-        const canContinue = await confirmDiscardChanges(existing.file.name);
-        if (!canContinue) return { status: 'cancelled' };
-      }
-
-      const replacement = await workspace.reopenCsv(workingCsvId, options);
-      if (replacement.status === 'working-csv-not-found') return { status: 'working-csv-not-found' };
-      if (replacement.status === 'failed') {
-        return { status: 'failed', message: replacement.failure.message };
-      }
-      return { status: 'opened', workingCsv: replacement.workingCsv };
-    },
-  );
-
-  ipcMain.handle(ipcChannels.closeCsv, (_event, request: CloseWorkingCsvRequest) =>
-    workspace.closeCsv(request),
-  );
-
-  ipcMain.handle(ipcChannels.getComparisonCandidates, (_event, baselineId: string) =>
-    workspace.getComparisonCandidates(baselineId),
-  );
-
-  ipcMain.handle(ipcChannels.openComparison, (_event, request: OpenComparisonRequest) =>
-    workspace.openComparison(request),
-  );
-
-  ipcMain.handle(ipcChannels.getComparisonState, (_event, comparisonId: string) =>
-    workspace.getComparisonState(comparisonId),
-  );
-
-  ipcMain.handle(ipcChannels.beginComparison, (_event, request: BeginComparisonRequest) =>
-    workspace.beginComparison(request),
-  );
-
-  ipcMain.handle(ipcChannels.cancelComparison, (_event, request: CancelComparisonRequest) =>
-    workspace.cancelComparison(request),
-  );
-
-  ipcMain.handle(ipcChannels.getComparisonWindow, (_event, request: ComparisonWindowRequest) =>
-    workspace.getComparisonWindow(request),
-  );
-
-  ipcMain.handle(ipcChannels.swapComparison, (_event, comparisonId: string) =>
-    workspace.swapComparison(comparisonId),
-  );
-
-  ipcMain.handle(ipcChannels.closeComparison, (_event, comparisonId: string) =>
-    workspace.closeComparison(comparisonId),
-  );
-
-  ipcMain.handle(ipcChannels.getRecentCsvSources, () => workspace.getRecentCsvSources());
-
-  ipcMain.handle(ipcChannels.getCsvRows, (_event, request: CsvRowWindowRequest) =>
-    workspace.getCsvRows(request),
-  );
-
-  ipcMain.handle(
-    ipcChannels.getCsvColumnValueCounts,
-    (_event, request: CsvColumnValueCountsRequest) => workspace.getCsvColumnValueCounts(request),
-  );
-
-  ipcMain.handle(ipcChannels.editCsvCell, (_event, request: CsvCellEditRequest) =>
-    workspace.editCsvCell(request),
-  );
-
-  ipcMain.handle(ipcChannels.deleteCsvRows, (_event, request: CsvDeleteRowsRequest) =>
-    workspace.deleteCsvRows(request),
-  );
-
-  ipcMain.handle(ipcChannels.insertCsvRow, (_event, request: CsvInsertRowRequest) =>
-    workspace.insertCsvRow(request),
-  );
-
-  ipcMain.handle(ipcChannels.getCsvEditState, (_event, request: CsvEditStateRequest) =>
-    workspace.getCsvEditState(request),
-  );
-
-  ipcMain.handle(ipcChannels.exportCsv, (_event, request: CsvExportRequest) =>
-    workspace.exportCsv(request),
-  );
-
-  ipcMain.handle(ipcChannels.undoCsvEdit, (_event, request: CsvEditStateRequest) =>
-    workspace.undoCsvEdit(request),
-  );
-
-  ipcMain.handle(ipcChannels.redoCsvEdit, (_event, request: CsvEditStateRequest) =>
-    workspace.redoCsvEdit(request),
-  );
-}
-
-async function confirmDiscardChanges(fileName: string): Promise<boolean> {
+async function confirmDiscardChanges(sourceName: string): Promise<boolean> {
   const response = await showMessageBox({
     type: 'warning',
     title: 'Unexported Changes',
-    message: `Discard Unexported Changes to ${fileName}?`,
+    message: `Discard Unexported Changes to ${sourceName}?`,
     detail: 'Changes not represented by an Export CSV will be lost.',
     buttons: ['Discard', 'Cancel'],
     defaultId: 1,
@@ -325,7 +200,7 @@ async function confirmWorkspaceClose(impact: WorkspaceCloseImpact): Promise<bool
   const details: string[] = [];
   if (impact.workingCsvsWithUnexportedChanges.length > 0) {
     details.push(
-      `Unexported Changes will be lost:\n${impact.workingCsvsWithUnexportedChanges.map((csv) => csv.fileName).join('\n')}`,
+      `Unexported Changes will be lost:\n${impact.workingCsvsWithUnexportedChanges.map((csv) => csv.sourceName).join('\n')}`,
     );
   }
   if (impact.dependentComparisons.length > 0) {
@@ -353,16 +228,14 @@ async function confirmCurrentWorkspaceImpact(
 ): Promise<WorkspaceCloseImpact | null> {
   let impact = initialImpact;
   while (await confirmWorkspaceClose(impact)) {
-    const rechecked = await workspace.confirmWindowClose(impact);
+    const rechecked = await workspace.confirmClose(impact);
     if (rechecked.status === 'ready') return impact;
     impact = rechecked.impact;
   }
   return null;
 }
 
-function confirmWorkspaceCloseOnce(
-  impact: WorkspaceCloseImpact,
-): Promise<WorkspaceCloseImpact | null> {
+function confirmWorkspaceCloseOnce(impact: WorkspaceCloseImpact): Promise<WorkspaceCloseImpact | null> {
   if (!workspaceCloseConfirmation) {
     workspaceCloseConfirmation = confirmCurrentWorkspaceImpact(impact).finally(() => {
       workspaceCloseConfirmation = null;
@@ -374,13 +247,8 @@ function confirmWorkspaceCloseOnce(
 app.whenReady().then(() => {
   registerContentSecurityPolicy();
   createApplicationMenu();
-  registerIpcHandlers();
-  workspace.onComparisonEvent((event: ComparisonEvent) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-      window.webContents.send(ipcChannels.comparisonStateChanged, event);
-    }
-  });
+  registerCsvViewerRequestHandler(ipcMain, workspace);
+  workspace.onEvent(sendEvent);
   createWindow();
 
   app.on('activate', () => {
@@ -406,7 +274,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (workspaceDisposalStarted) return;
   void (async () => {
-    const impact = await workspace.confirmWindowClose(workspaceCloseAuthorizedImpact);
+    const impact = await workspace.confirmClose(workspaceCloseAuthorizedImpact);
     if (impact.status === 'ready') {
       if (workspaceDisposalStarted || workspaceDisposed) return;
       workspaceDisposalStarted = true;

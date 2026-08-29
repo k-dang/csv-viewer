@@ -1,9 +1,3 @@
-export type HealthStatus = {
-  ok: true;
-  process: 'main';
-  timestamp: string;
-};
-
 export type WorkingCsvId = string;
 /** Opaque, runtime-scoped identity of a CSV Source. Never parsed or interpreted by consumers. */
 export type CsvSourceId = string;
@@ -16,7 +10,7 @@ export type CsvColumn = {
   type: string;
 };
 
-export type CsvFileMetadata = {
+export type CsvSourceMetadata = {
   sourceId: CsvSourceId;
   name: string;
   /** Where the CSV Source lives, in whatever terms the runtime can show the user. */
@@ -40,32 +34,16 @@ export const supportedCsvFileExtensions = ['csv', 'tsv', 'txt'] as const;
 export type WorkingCsvView = {
   workingCsvId: WorkingCsvId;
   dataRevision: number;
-  file: CsvFileMetadata;
+  source: CsvSourceMetadata;
   columns: CsvColumn[];
   rowCount: number;
   dialect: CsvDialectOptions;
   editState: CsvEditState;
 };
 
-export type WorkingCsvRef = Pick<WorkingCsvView, 'workingCsvId' | 'file' | 'columns'>;
+export type WorkingCsvRef = Pick<WorkingCsvView, 'workingCsvId' | 'source' | 'columns'>;
 
-export type WorkingCsvFailure = {
-  code: 'open-failed' | 'replace-failed';
-  message: string;
-  retryable: boolean;
-};
-
-export type OpenWorkingCsvOutcome =
-  | { status: 'opened'; workingCsv: WorkingCsvView }
-  | { status: 'existing'; workingCsv: WorkingCsvView }
-  | { status: 'failed'; failure: WorkingCsvFailure };
-
-export type ReplaceWorkingCsvOutcome =
-  | { status: 'replaced'; workingCsv: WorkingCsvView }
-  | { status: 'working-csv-not-found' }
-  | { status: 'failed'; failure: WorkingCsvFailure };
-
-export type RecentCsvSource = CsvFileMetadata & {
+export type RecentCsvSource = CsvSourceMetadata & {
   lastOpenedAt: string;
 };
 
@@ -80,13 +58,7 @@ export type CsvSortDescriptor = {
   direction: 'asc' | 'desc';
 };
 
-export type CsvTextFilterOperator =
-  | 'contains'
-  | 'notContains'
-  | 'equals'
-  | 'notEqual'
-  | 'startsWith'
-  | 'endsWith';
+export type CsvTextFilterOperator = 'contains' | 'notContains' | 'equals' | 'notEqual' | 'startsWith' | 'endsWith';
 
 export type CsvNumberFilterOperator =
   | 'equals'
@@ -204,6 +176,9 @@ export type CsvExportRequest = {
   workingCsvId: WorkingCsvId;
 };
 
+/** Tagged like every other outcome in this contract, so a second non-success arm costs no caller a reshape. */
+export type CsvExportOutcome = { status: 'exported'; editState: CsvEditState } | { status: 'cancelled' };
+
 export type CsvEditState = {
   workingCsvId: WorkingCsvId;
   hasUnexportedChanges: boolean;
@@ -216,13 +191,6 @@ export type OpenCsvResult =
   | { status: 'already-open'; workingCsv: WorkingCsvView }
   | { status: 'failed'; message: string }
   | { status: 'cancelled' };
-
-/**
- * Reopen additionally reports that the workspace no longer holds the Working CSV, which means the
- * renderer is showing a Tab the workspace has already dropped. An unreachable CSV Source is a
- * `failed` outcome instead.
- */
-export type ReopenCsvResult = OpenCsvResult | { status: 'working-csv-not-found' };
 
 export type CloseImpact = {
   hasUnexportedChanges: boolean;
@@ -253,6 +221,18 @@ export type CloseWorkingCsvOutcome =
         retryable: boolean;
       };
     };
+
+export type WorkspaceCloseImpact = {
+  workingCsvsWithUnexportedChanges: Array<{
+    workingCsvId: WorkingCsvId;
+    sourceName: string;
+  }>;
+  dependentComparisons: CloseImpact['dependentComparisons'];
+};
+
+export type ConfirmWorkspaceCloseOutcome =
+  | { status: 'ready' }
+  | { status: 'confirmation-required'; impact: WorkspaceCloseImpact };
 
 export type ComparisonSide = 'baseline' | 'candidate';
 export type ComparisonPhase = 'validating' | 'comparing' | 'summarizing';
@@ -306,7 +286,11 @@ export type SourceKeyDiagnostics = {
   blankRowCount: number;
   duplicateGroupCount: number;
   blankExamples: Array<{ rowId: string; keyValues: Array<string | null> }>;
-  duplicateExamples: Array<{ keyValues: string[]; rowCount: number; rowIds: string[] }>;
+  duplicateExamples: Array<{
+    keyValues: string[];
+    rowCount: number;
+    rowIds: string[];
+  }>;
 };
 
 export type ComparisonKeyDiagnostics = {
@@ -317,9 +301,17 @@ export type ComparisonKeyDiagnostics = {
 
 export type ComparisonAttemptOutcomeView =
   | { attemptId: string; status: 'applied' }
-  | { attemptId: string; status: 'invalid-key'; diagnostics: ComparisonKeyDiagnostics }
+  | {
+      attemptId: string;
+      status: 'invalid-key';
+      diagnostics: ComparisonKeyDiagnostics;
+    }
   | { attemptId: string; status: 'cancelled' }
-  | { attemptId: string; status: 'sources-changed'; changedSides: ComparisonSide[] }
+  | {
+      attemptId: string;
+      status: 'sources-changed';
+      changedSides: ComparisonSide[];
+    }
   | { attemptId: string; status: 'failed'; failure: ComparisonFailure };
 
 export type ComparisonFailure = {
@@ -410,7 +402,10 @@ export type ComparisonWindow = {
 
 export type ComparisonWindowOutcome =
   | { status: 'ready'; window: ComparisonWindow }
-  | { status: 'result-replaced'; currentResultToken: ComparisonResultToken | null }
+  | {
+      status: 'result-replaced';
+      currentResultToken: ComparisonResultToken | null;
+    }
   | { status: 'comparison-not-found' }
   | { status: 'rejected'; fault: ComparisonFault };
 
@@ -434,57 +429,122 @@ export function isCsvViewerIntent(value: unknown): value is CsvViewerIntent {
  * Genuine differences between runtimes, stated up front rather than discovered through failures.
  * A capability is declared once a caller reads it.
  */
-export type CsvViewerRuntimeCapabilities = {
+export type CsvViewerCapabilities = {
   /** Recent CSV Sources can be listed and reopened. False when source identity does not outlive the session. */
   recentCsvSources: boolean;
 };
 
-/**
- * The domain operations the shared workspace owns. `CsvWorkspace implements` this, and the host
- * contract below is derived from it, so one declaration fixes each operation's shape and a host
- * gaining a capability can never break the runtime-neutral workspace.
- */
-export type CsvWorkspaceOperations = {
-  openCsv: (options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  openRecentCsv: (sourceId: CsvSourceId, options?: CsvDialectOptions) => Promise<OpenCsvResult>;
-  closeCsv: (request: CloseWorkingCsvRequest) => Promise<CloseWorkingCsvOutcome>;
-  getComparisonCandidates: (baselineId: WorkingCsvId) => Promise<ComparisonCandidate[]>;
-  openComparison: (request: OpenComparisonRequest) => Promise<OpenComparisonResult>;
-  getComparisonState: (comparisonId: ComparisonId) => Promise<ComparisonView | null>;
-  beginComparison: (request: BeginComparisonRequest) => Promise<BeginComparisonResult>;
-  cancelComparison: (request: CancelComparisonRequest) => Promise<CancelComparisonResult>;
-  getComparisonWindow: (request: ComparisonWindowRequest) => Promise<ComparisonWindowOutcome>;
-  swapComparison: (comparisonId: ComparisonId) => Promise<ComparisonMutationOutcome>;
-  closeComparison: (comparisonId: ComparisonId) => Promise<CloseComparisonResult>;
-  onComparisonEvent: (callback: (event: ComparisonEvent) => void) => () => void;
-  getRecentCsvSources: () => Promise<RecentCsvSource[]>;
-  getCsvRows: (request: CsvRowWindowRequest) => Promise<CsvRowWindow>;
-  getCsvColumnValueCounts: (request: CsvColumnValueCountsRequest) => Promise<CsvColumnValueCounts>;
-  editCsvCell: (request: CsvCellEditRequest) => Promise<CsvCellEditResult>;
-  deleteCsvRows: (request: CsvDeleteRowsRequest) => Promise<CsvEditState>;
-  insertCsvRow: (request: CsvInsertRowRequest) => Promise<CsvEditState>;
-  getCsvEditState: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  exportCsv: (request: CsvExportRequest) => Promise<CsvEditState | { status: 'cancelled' }>;
-  undoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  redoCsvEdit: (request: CsvEditStateRequest) => Promise<CsvEditState>;
-  reopenCsv: (
-    workingCsvId: WorkingCsvId,
-    options?: CsvDialectOptions,
-  ) => Promise<ReplaceWorkingCsvOutcome>;
+export type CsvViewerOperationMap = {
+  'csv.open': {
+    request: { options?: CsvDialectOptions };
+    result: OpenCsvResult;
+  };
+  'csv.open-recent': {
+    request: { sourceId: CsvSourceId; options?: CsvDialectOptions };
+    result: OpenCsvResult;
+  };
+  'csv.reopen': {
+    request: { workingCsvId: WorkingCsvId; options?: CsvDialectOptions };
+    result: OpenCsvResult;
+  };
+  'csv.get-recent-sources': {
+    request: Record<never, never>;
+    result: RecentCsvSource[];
+  };
+  'csv.get-rows': {
+    request: CsvRowWindowRequest;
+    result: CsvRowWindow;
+  };
+  'csv.get-column-value-counts': {
+    request: CsvColumnValueCountsRequest;
+    result: CsvColumnValueCounts;
+  };
+  'csv.edit-cell': {
+    request: CsvCellEditRequest;
+    result: CsvCellEditResult;
+  };
+  'csv.delete-rows': {
+    request: CsvDeleteRowsRequest;
+    result: CsvEditState;
+  };
+  'csv.insert-row': {
+    request: CsvInsertRowRequest;
+    result: CsvEditState;
+  };
+  'csv.get-edit-state': {
+    request: CsvEditStateRequest;
+    result: CsvEditState;
+  };
+  'csv.undo': {
+    request: CsvEditStateRequest;
+    result: CsvEditState;
+  };
+  'csv.redo': {
+    request: CsvEditStateRequest;
+    result: CsvEditState;
+  };
+  'csv.export': {
+    request: CsvExportRequest;
+    result: CsvExportOutcome;
+  };
+  'csv.close': {
+    request: CloseWorkingCsvRequest;
+    result: CloseWorkingCsvOutcome;
+  };
+  'comparison.get-candidates': {
+    request: { baselineId: WorkingCsvId };
+    result: ComparisonCandidate[];
+  };
+  'comparison.open': {
+    request: OpenComparisonRequest;
+    result: OpenComparisonResult;
+  };
+  'comparison.begin': {
+    request: BeginComparisonRequest;
+    result: BeginComparisonResult;
+  };
+  'comparison.cancel': {
+    request: CancelComparisonRequest;
+    result: CancelComparisonResult;
+  };
+  'comparison.get-window': {
+    request: ComparisonWindowRequest;
+    result: ComparisonWindowOutcome;
+  };
+  'comparison.swap': {
+    request: { comparisonId: ComparisonId };
+    result: ComparisonMutationOutcome;
+  };
+  'comparison.close': {
+    request: { comparisonId: ComparisonId };
+    result: CloseComparisonResult;
+  };
 };
 
-/**
- * The renderer's only view of its host: the workspace surface, explicit capabilities, and intent
- * subscriptions. Desktop supplies an IPC proxy over the main-process workspace, web supplies
- * in-page wiring, and tests supply a plain object.
- *
- * `reopenCsv` is restated because the host owns it: it wraps the workspace operation in a discard
- * confirmation and can therefore report `cancelled`, which the workspace has no notion of.
- */
-export type CsvViewerRuntime = Omit<CsvWorkspaceOperations, 'reopenCsv'> & {
-  capabilities: CsvViewerRuntimeCapabilities;
-  healthCheck: () => Promise<HealthStatus>;
-  reopenCsv: (workingCsvId: WorkingCsvId, options?: CsvDialectOptions) => Promise<ReopenCsvResult>;
-  onIntent: (callback: (intent: CsvViewerIntent) => void) => () => void;
-};
+/** One structured-clone-safe request for every operation available through CSV Viewer. */
+export type CsvViewerRequest = {
+  [Operation in keyof CsvViewerOperationMap]: {
+    operation: Operation;
+  } & CsvViewerOperationMap[Operation]['request'];
+}[keyof CsvViewerOperationMap];
 
+/** Distributes over `Request`, so a caller holding a union of requests gets the union of results. */
+export type CsvViewerResult<Request extends CsvViewerRequest> = Request extends CsvViewerRequest
+  ? CsvViewerOperationMap[Request['operation']]['result']
+  : never;
+
+export type CsvViewerEvent =
+  | { type: 'comparison'; event: ComparisonEvent }
+  | { type: 'intent'; intent: CsvViewerIntent };
+
+export interface CsvViewer {
+  readonly capabilities: CsvViewerCapabilities;
+  call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>>;
+  onEvent(listener: (event: CsvViewerEvent) => void): () => void;
+}
+
+/** Validates the transport envelope. CsvViewer rejects unknown operation names in its dispatcher. */
+export function isCsvViewerRequestEnvelope(value: unknown): value is { operation: string } & Record<string, unknown> {
+  if (!value || typeof value !== 'object') return false;
+  return typeof (value as { operation?: unknown }).operation === 'string';
+}

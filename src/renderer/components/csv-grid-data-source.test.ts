@@ -1,29 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkingCsvView } from '../../shared/csv-viewer-contract';
+import { workingCsvFixture } from '../testing/csv-fixtures';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
-const workingCsv: WorkingCsvView = {
+const workingCsv = workingCsvFixture({
   workingCsvId: 'workingCsv-1',
-  dataRevision: 0,
-  file: {
-    sourceId: 'source-1',
-    location: 'C:\\data\\people.csv',
-    name: 'people.csv',
-    sizeBytes: 32,
-  },
   columns: [
     { name: 'name', type: 'VARCHAR' },
     { name: 'age', type: 'BIGINT' },
   ],
   rowCount: 250,
-  dialect: {},
-  editState: {
-    workingCsvId: 'workingCsv-1',
-    hasUnexportedChanges: false,
-    canUndo: false,
-    canRedo: false,
-  },
-};
+});
 
 describe('createCsvGridDataSource', () => {
   it('requests only the AG Grid row window from the preload API', async () => {
@@ -40,7 +26,7 @@ describe('createCsvGridDataSource', () => {
 
     const datasource = createCsvGridDataSource(
       workingCsv,
-      { getCsvRows },
+      { call: getCsvRows },
       onFilteredRowCount,
       'Ada',
       undefined,
@@ -63,6 +49,7 @@ describe('createCsvGridDataSource', () => {
     });
 
     expect(getCsvRows).toHaveBeenCalledWith({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 100,
       limit: 25,
@@ -87,7 +74,7 @@ describe('createCsvGridDataSource', () => {
 
     const datasource = createCsvGridDataSource(
       workingCsv,
-      { getCsvRows },
+      { call: getCsvRows },
       undefined,
       '',
       undefined,
@@ -132,14 +119,14 @@ describe('createCsvGridDataSource', () => {
 
     const firstDatasource = createCsvGridDataSource(
       workingCsv,
-      { getCsvRows },
+      { call: getCsvRows },
       onFilteredRowCount,
       'Ada',
       requestState,
     );
     const secondDatasource = createCsvGridDataSource(
       workingCsv,
-      { getCsvRows },
+      { call: getCsvRows },
       onFilteredRowCount,
       'Grace',
       requestState,

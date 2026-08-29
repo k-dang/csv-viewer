@@ -5,7 +5,7 @@ import type {
   ComparisonResultToken,
   ComparisonRow,
   ComparisonRowsMode,
-  CsvViewerRuntime,
+  CsvViewer,
 } from '../../shared/csv-viewer-contract';
 
 export const comparisonGridRequestBounds = {
@@ -23,7 +23,7 @@ type ComparisonGridRequest = {
 };
 
 export function createComparisonGridDataSource<Row>(
-  runtime: Pick<CsvViewerRuntime, 'getComparisonWindow'>,
+  viewer: Pick<CsvViewer, 'call'>,
   request: ComparisonGridRequest,
   getActiveResultToken: () => ComparisonResultToken | null,
   projectRow: (row: ComparisonRow) => Row,
@@ -31,12 +31,10 @@ export function createComparisonGridDataSource<Row>(
   return {
     getRows(params) {
       const offset = params.startRow;
-      const limit = Math.min(
-        comparisonGridRequestBounds.maxWindowRows,
-        Math.max(0, params.endRow - params.startRow),
-      );
-      void runtime
-        .getComparisonWindow({
+      const limit = Math.min(comparisonGridRequestBounds.maxWindowRows, Math.max(0, params.endRow - params.startRow));
+      void viewer
+        .call({
+          operation: 'comparison.get-window',
           comparisonId: request.comparisonId,
           resultToken: request.resultToken,
           offset,

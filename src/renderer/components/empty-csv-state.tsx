@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldError, FieldGroup, FieldTitle } from '@/components/ui/field';
 import type { CsvSourceId, RecentCsvSource } from '../../shared/csv-viewer-contract';
 import { RecentCsvSourceList } from './recent-csv-source-list';
-import { useCsvViewerRuntime } from '../csv-viewer-runtime';
+import { useCsvViewer } from '../csv-viewer';
 
 export function EmptyCsvState({
   isOpening,
@@ -19,17 +19,17 @@ export function EmptyCsvState({
   onOpenCsv: () => void;
   onOpenRecent: (sourceId: CsvSourceId) => void;
 }) {
-  const runtime = useCsvViewerRuntime();
+  const viewer = useCsvViewer();
   const [recentSources, setRecentSources] = useState<RecentCsvSource[]>([]);
 
   // A runtime without durable CSV Source identity cannot reopen anything, so the list is neither
   // requested nor offered. Each finished open attempt refreshes it, so a CSV Source that has since
   // become unreachable drops off the list rather than lingering as a broken choice.
   useEffect(() => {
-    if (!runtime.capabilities.recentCsvSources || isOpening) return;
+    if (!viewer.capabilities.recentCsvSources || isOpening) return;
     let cancelled = false;
-    runtime
-      .getRecentCsvSources()
+    viewer
+      .call({ operation: 'csv.get-recent-sources' })
       .then((sources) => {
         if (!cancelled) setRecentSources(sources);
       })
@@ -39,7 +39,7 @@ export function EmptyCsvState({
     return () => {
       cancelled = true;
     };
-  }, [runtime, isOpening]);
+  }, [viewer, isOpening]);
 
   return (
     <section
@@ -58,8 +58,8 @@ export function EmptyCsvState({
             No CSV open
           </FieldTitle>
           <FieldDescription className="max-w-[46ch] text-[15px] leading-relaxed">
-            Open a local CSV file to inspect its columns, row count, and data without loading the
-            full file into the renderer.
+            Open a local CSV file to inspect its columns, row count, and data without loading the full file into the
+            renderer.
           </FieldDescription>
         </Field>
         <Button className="w-fit" type="button" onClick={onOpenCsv} disabled={isOpening}>
