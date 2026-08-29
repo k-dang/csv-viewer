@@ -23,11 +23,7 @@ export function TabStrip({
   onCloseTab: (tab: OpenRendererTab) => void;
 }) {
   return (
-    <Tabs
-      value={activeTabId ?? undefined}
-      onValueChange={onSelectTab}
-      className="gap-0 border-b bg-muted/40"
-    >
+    <Tabs value={activeTabId ?? undefined} onValueChange={onSelectTab} className="gap-0 border-b bg-muted/40">
       <TabsList
         aria-label="Open CSV and Comparison Tabs"
         variant="line"
@@ -42,19 +38,20 @@ export function TabStrip({
           const isActive = tab.id === activeTabId;
           const isCsv = tab.kind === 'csv';
           const label = isCsv
-            ? tab.csv.file.name
-            : `${tab.comparison.baseline.file.name} ⇄ ${tab.comparison.candidate.file.name}`;
-          const hasUnexportedChanges =
-            isCsv && workingCsvIdsWithUnexportedChanges.has(tab.csv.workingCsvId);
+            ? tab.csv.source.name
+            : `${tab.comparison.baseline.source.name} ⇄ ${tab.comparison.candidate.source.name}`;
+          const hasUnexportedChanges = isCsv && workingCsvIdsWithUnexportedChanges.has(tab.csv.workingCsvId);
           const isOutdated = !isCsv && tab.comparison.applied?.freshness.kind === 'outdated';
 
           return (
             <div
               key={tab.id}
-              title={isCsv ? tab.csv.file.location : label}
+              title={isCsv ? tab.csv.source.location : label}
               className={cn(
                 'group flex max-w-56 shrink-0 flex-none items-center rounded-t-md border border-b-0',
-                isActive ? 'bg-background text-foreground' : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
+                isActive
+                  ? 'bg-background text-foreground'
+                  : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
               <TabsTrigger
@@ -84,7 +81,10 @@ export function TabStrip({
                 variant="ghost"
                 size="icon-xs"
                 aria-label={`Close ${label}`}
-                className={cn('mr-1 shrink-0', isActive ? '' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')}
+                className={cn(
+                  'mr-1 shrink-0',
+                  isActive ? '' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
+                )}
                 onClick={() => onCloseTab(tab)}
               >
                 <X className="size-3.5" />

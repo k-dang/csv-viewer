@@ -60,9 +60,7 @@ export function copySummary(summary: ComparisonSummary): ComparisonSummary {
   };
 }
 
-function copyAttemptOutcome(
-  attempt: ComparisonAttemptOutcomeView | null,
-): ComparisonAttemptOutcomeView | null {
+function copyAttemptOutcome(attempt: ComparisonAttemptOutcomeView | null): ComparisonAttemptOutcomeView | null {
   if (!attempt) return null;
   if (attempt.status === 'invalid-key') {
     return { ...attempt, diagnostics: copyKeyDiagnostics(attempt.diagnostics) };
@@ -100,7 +98,7 @@ function copySourceKeyDiagnostics(diagnostics: SourceKeyDiagnostics): SourceKeyD
 function projectWorkingCsvRef(workingCsv: WorkingCsvView): WorkingCsvRef {
   return {
     workingCsvId: workingCsv.workingCsvId,
-    file: { ...workingCsv.file },
+    source: { ...workingCsv.source },
     columns: workingCsv.columns.map((column) => ({ ...column })),
   };
 }

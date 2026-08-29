@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
@@ -9,7 +9,6 @@ import { ComparisonTab } from '@/components/comparison-tab';
 import { CsvMetadataView } from '@/components/csv-metadata-view';
 import { DialectControls } from '@/components/dialect-controls';
 import { EmptyCsvState } from '@/components/empty-csv-state';
-import { HealthBadge, type HealthState } from '@/components/health-badge';
 import { TabStrip, type OpenRendererTab } from '@/components/tab-strip';
 import type {
   ComparisonCandidate,
@@ -25,7 +24,7 @@ import {
   type ComparisonTabPresentation,
   type RendererTab,
 } from './workspace-tabs';
-import { useCsvViewerRuntime } from './csv-viewer-runtime';
+import { useCsvViewer } from './csv-viewer';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -38,15 +37,11 @@ function getInitialTheme(): ThemeMode {
 }
 
 export function App() {
-  const runtime = useCsvViewerRuntime();
-  const [health, setHealth] = useState<HealthState>({ status: 'checking' });
-  const [workspaceState, dispatchWorkspace] = useReducer(
-    rendererWorkspaceReducer,
-    initialRendererWorkspace,
+  const viewer = useCsvViewer();
+  const [workspaceState, dispatchWorkspace] = useReducer(rendererWorkspaceReducer, initialRendererWorkspace);
+  const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<ReadonlySet<string>>(
+    new Set(),
   );
-  const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<
-    ReadonlySet<string>
-  >(new Set());
   const [candidatePicker, setCandidatePicker] = useState<{
     baseline: WorkingCsvView;
     candidates: ComparisonCandidate[];
@@ -62,13 +57,8 @@ export function App() {
     sequence: number;
   } | null>(null);
 
-  const openTabs = useMemo<OpenRendererTab[]>(
-    () => projectOpenTabs(workspaceState),
-    [workspaceState],
-  );
-  const csvTabs = workspaceState.tabs.filter(
-    (tab): tab is Extract<RendererTab, { kind: 'csv' }> => tab.kind === 'csv',
-  );
+  const openTabs = useMemo<OpenRendererTab[]>(() => projectOpenTabs(workspaceState), [workspaceState]);
+  const csvTabs = workspaceState.tabs.filter((tab): tab is Extract<RendererTab, { kind: 'csv' }> => tab.kind === 'csv');
   const comparisonTabs = workspaceState.tabs.filter(
     (tab): tab is Extract<RendererTab, { kind: 'comparison' }> => tab.kind === 'comparison',
   );
@@ -83,61 +73,52 @@ export function App() {
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
 
-  useEffect(() => {
-    let cancelled = false;
-    runtime
-      .healthCheck()
-      .then((value) => {
-        if (!cancelled) setHealth({ status: 'healthy', value });
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setHealth({
-            status: 'failed',
-            message: error instanceof Error ? error.message : 'Health check failed',
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [runtime]);
-
-  useEffect(() => {
-    return runtime.onComparisonEvent((event) => {
-      dispatchWorkspace({ type: 'comparison-event', event });
-    });
-  }, [runtime]);
-
   // One handler per intent, so a new CsvViewerIntent cannot compile until this dispatch covers it.
+  const intentHandlers: Record<CsvViewerIntent, () => void> = {
+    'open-csv': () => void openCsv(),
+    'reopen-csv': () => void reopenActiveTab(),
+    'export-csv': () => {
+      if (!activeCsv) return;
+      setExportRequest((current) => ({
+        workingCsvId: activeCsv.workingCsvId,
+        sequence: (current?.sequence ?? 0) + 1,
+      }));
+    },
+    'close-tab': () => {
+      if (activeTab) void closeTab(activeTab);
+    },
+  };
+
+  // Held in a ref so the seam subscription outlives every render instead of churning with it.
+  // Written from an effect, not during render, so a discarded render cannot leave its handlers
+  // behind for an intent to act on.
+  const intentHandlersRef = useRef(intentHandlers);
   useEffect(() => {
-    const handlers: Record<CsvViewerIntent, () => void> = {
-      'open-csv': () => void openCsv(),
-      'reopen-csv': () => void reopenActiveTab(),
-      'export-csv': () => {
-        if (!activeCsv) return;
-        setExportRequest((current) => ({
-          workingCsvId: activeCsv.workingCsvId,
-          sequence: (current?.sequence ?? 0) + 1,
-        }));
-      },
-      'close-tab': () => {
-        if (activeTab) void closeTab(activeTab);
-      },
-    };
-    return runtime.onIntent((intent) => handlers[intent]());
+    intentHandlersRef.current = intentHandlers;
   });
+
+  useEffect(
+    () =>
+      viewer.onEvent((event) => {
+        if (event.type === 'comparison') {
+          dispatchWorkspace({ type: 'comparison-event', event: event.event });
+        } else {
+          intentHandlersRef.current[event.intent]();
+        }
+      }),
+    [viewer],
+  );
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Tab' && event.ctrlKey) {
         event.preventDefault();
-        cycleActiveTab(event.shiftKey ? -1 : 1);
+        dispatchWorkspace({ type: 'cycle', direction: event.shiftKey ? -1 : 1 });
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+  }, []);
 
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
@@ -165,7 +146,7 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await runtime.openCsv(options);
+      const result = await viewer.call({ operation: 'csv.open', options });
       applyOpenResult(result);
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open CSV.');
@@ -183,7 +164,11 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await runtime.openRecentCsv(sourceId, options);
+      const result = await viewer.call({
+        operation: 'csv.open-recent',
+        sourceId,
+        options,
+      });
       applyOpenResult(result);
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to open recent CSV.');
@@ -202,11 +187,11 @@ export function App() {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await runtime.reopenCsv(activeCsv.workingCsvId, options);
-      if (result.status === 'working-csv-not-found') {
-        forgetWorkingCsv(activeCsv.workingCsvId);
-        return;
-      }
+      const result = await viewer.call({
+        operation: 'csv.reopen',
+        workingCsvId: activeCsv.workingCsvId,
+        options,
+      });
       applyOpenResult(result);
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to reopen CSV.');
@@ -220,38 +205,50 @@ export function App() {
     try {
       setCandidatePicker({
         baseline: activeCsv,
-        candidates: await runtime.getComparisonCandidates(activeCsv.workingCsvId),
+        candidates: await viewer.call({
+          operation: 'comparison.get-candidates',
+          baselineId: activeCsv.workingCsvId,
+        }),
       });
     } catch (error: unknown) {
-      setOpenError(
-        error instanceof Error ? error.message : 'Unable to list comparison candidates.',
-      );
+      setOpenError(error instanceof Error ? error.message : 'Unable to list comparison candidates.');
     }
   }
 
   async function chooseCandidate(candidateId: string) {
     if (!candidatePicker) return;
-    const result = await runtime.openComparison({
-      baselineId: candidatePicker.baseline.workingCsvId,
-      candidateId,
-    });
-    if (result.status === 'rejected') {
-      setOpenError(result.fault.message);
-      return;
+    try {
+      const result = await viewer.call({
+        operation: 'comparison.open',
+        baselineId: candidatePicker.baseline.workingCsvId,
+        candidateId,
+      });
+      if (result.status === 'rejected') {
+        setOpenError(result.fault.message);
+        return;
+      }
+      const comparison = result.comparison;
+      dispatchWorkspace({ type: 'open-comparison', comparison });
+      setCandidatePicker(null);
+    } catch (error: unknown) {
+      setOpenError(error instanceof Error ? error.message : 'Unable to open Comparison.');
     }
-    const comparison = result.comparison;
-    dispatchWorkspace({ type: 'open-comparison', comparison });
-    setCandidatePicker(null);
   }
 
   async function closeTab(tab: OpenRendererTab) {
     try {
       if (tab.kind === 'comparison') {
-        const result = await runtime.closeComparison(tab.comparison.comparisonId);
+        const result = await viewer.call({
+          operation: 'comparison.close',
+          comparisonId: tab.comparison.comparisonId,
+        });
         if (result.status === 'failed') setOpenError(result.failure.message);
         return;
       }
-      let result = await runtime.closeCsv({ workingCsvId: tab.csv.workingCsvId });
+      let result = await viewer.call({
+        operation: 'csv.close',
+        workingCsvId: tab.csv.workingCsvId,
+      });
       while (result.status === 'confirmation-required') {
         const dependentNames = result.impact.dependentComparisons.map(
           (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
@@ -264,8 +261,9 @@ export function App() {
         ]
           .filter(Boolean)
           .join('\n\n');
-        if (!window.confirm(`Close ${tab.csv.file.name}?\n\n${impact}`)) return;
-        result = await runtime.closeCsv({
+        if (!window.confirm(`Close ${tab.csv.source.name}?\n\n${impact}`)) return;
+        result = await viewer.call({
+          operation: 'csv.close',
           workingCsvId: tab.csv.workingCsvId,
           confirmedImpact: result.impact,
         });
@@ -298,14 +296,7 @@ export function App() {
     });
   }
 
-  function cycleActiveTab(direction: 1 | -1) {
-    dispatchWorkspace({ type: 'cycle', direction });
-  }
-
-  function handleUnexportedChangesChange(
-    workingCsvId: string,
-    hasUnexportedChanges: boolean,
-  ) {
+  function handleUnexportedChangesChange(workingCsvId: string, hasUnexportedChanges: boolean) {
     setWorkingCsvIdsWithUnexportedChanges((current) => {
       if (current.has(workingCsvId) === hasUnexportedChanges) return current;
       const next = new Set(current);
@@ -315,10 +306,7 @@ export function App() {
     });
   }
 
-  function updateComparisonPresentation(
-    comparisonId: string,
-    presentation: ComparisonTabPresentation,
-  ) {
+  function updateComparisonPresentation(comparisonId: string, presentation: ComparisonTabPresentation) {
     dispatchWorkspace({
       type: 'update-comparison-presentation',
       comparisonId,
@@ -342,12 +330,8 @@ export function App() {
             <Table2 className="size-5" />
           </div>
           <div className="min-w-0">
-            <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">
-              Desktop CSV Viewer
-            </p>
-            <h1 className="truncate text-[22px] leading-tight font-semibold text-foreground">
-              CSV Viewer
-            </h1>
+            <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Desktop CSV Viewer</p>
+            <h1 className="truncate text-[22px] leading-tight font-semibold text-foreground">CSV Viewer</h1>
           </div>
         </div>
         <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
@@ -388,7 +372,6 @@ export function App() {
           >
             {isDarkMode ? <Sun /> : <Moon />}
           </Button>
-          <HealthBadge health={health} />
         </div>
       </header>
 
@@ -414,25 +397,17 @@ export function App() {
               return (
                 <div
                   key={workingCsv.workingCsvId}
-                  className={cn(
-                    'col-start-1 row-start-1 grid min-h-0 min-w-0',
-                    tab.id !== activeTabId && 'hidden',
-                  )}
+                  className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
                   <CsvMetadataView
                     workingCsv={workingCsv}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
                     exportRequestSequence={
-                      exportRequest?.workingCsvId === workingCsv.workingCsvId
-                        ? exportRequest.sequence
-                        : 0
+                      exportRequest?.workingCsvId === workingCsv.workingCsvId ? exportRequest.sequence : 0
                     }
                     onUnexportedChangesChange={(hasUnexportedChanges) =>
-                      handleUnexportedChangesChange(
-                        workingCsv.workingCsvId,
-                        hasUnexportedChanges,
-                      )
+                      handleUnexportedChangesChange(workingCsv.workingCsvId, hasUnexportedChanges)
                     }
                   />
                 </div>
@@ -444,10 +419,7 @@ export function App() {
               return (
                 <div
                   key={tab.comparisonId}
-                  className={cn(
-                    'col-start-1 row-start-1 grid min-h-0 min-w-0',
-                    tab.id !== activeTabId && 'hidden',
-                  )}
+                  className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
                   <ComparisonTab
                     comparison={comparison}

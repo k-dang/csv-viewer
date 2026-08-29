@@ -6,7 +6,7 @@ export function workingCsvFixture(overrides: Partial<WorkingCsvView> = {}): Work
   return {
     workingCsvId,
     dataRevision: 0,
-    file: {
+    source: {
       sourceId: workingCsvId,
       location: `/data/${workingCsvId}.csv`,
       name: `${workingCsvId}.csv`,

@@ -63,7 +63,7 @@ export function rendererWorkspaceReducer(
         (tab) =>
           tab.kind === 'csv' &&
           (tab.csv.workingCsvId === action.workingCsv.workingCsvId ||
-            tab.csv.file.sourceId === action.workingCsv.file.sourceId),
+            tab.csv.source.sourceId === action.workingCsv.source.sourceId),
       );
       const tabs = [...state.tabs];
       if (existingIndex === -1) tabs.push({ kind: 'csv', id, csv: action.workingCsv });
@@ -121,9 +121,7 @@ export function rendererWorkspaceReducer(
         ),
       };
     case 'select':
-      return state.tabs.some((tab) => tab.id === action.tabId)
-        ? { ...state, activeTabId: action.tabId }
-        : state;
+      return state.tabs.some((tab) => tab.id === action.tabId) ? { ...state, activeTabId: action.tabId } : state;
     case 'cycle': {
       if (state.tabs.length < 2 || !state.activeTabId) return state;
       const index = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
@@ -164,7 +162,6 @@ function removeTab(state: RendererWorkspaceState, id: string): RendererWorkspace
   const index = state.tabs.findIndex((tab) => tab.id === id);
   if (index === -1) return state;
   const tabs = state.tabs.filter((tab) => tab.id !== id);
-  const activeTabId =
-    state.activeTabId === id ? (tabs[index]?.id ?? tabs[index - 1]?.id ?? null) : state.activeTabId;
+  const activeTabId = state.activeTabId === id ? (tabs[index]?.id ?? tabs[index - 1]?.id ?? null) : state.activeTabId;
   return { ...state, tabs, activeTabId };
 }

@@ -7,7 +7,7 @@ function projectionInput(lastAttempt: ComparisonAttemptOutcomeView): ComparisonP
   const workingCsv = {
     workingCsvId: 'working-csv',
     dataRevision: 0,
-    file: { sourceId: 'source', name: 'a.csv', location: 'a.csv', sizeBytes: 1 },
+    source: { sourceId: 'source', name: 'a.csv', location: 'a.csv', sizeBytes: 1 },
     columns: [{ name: 'id', type: 'VARCHAR' }],
     rowCount: 1,
     dialect: {},

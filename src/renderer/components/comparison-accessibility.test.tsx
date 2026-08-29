@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '../../shared/csv-viewer-contract';
 import { comparisonFixture, workingCsvFixture } from '../testing/csv-fixtures';
-import { withRuntime } from '../testing/test-csv-viewer-runtime';
+import { withCsvViewer } from '../testing/test-csv-viewer';
 import { ComparisonCandidateDialog } from './comparison-candidate-dialog';
 import { ComparisonTab } from './comparison-tab';
 
@@ -63,7 +63,7 @@ describe('Comparison accessibility semantics', () => {
 
   it('announces progress politely and exposes a keyboard-operable Cancel action', () => {
     const markup = renderToStaticMarkup(
-      withRuntime(
+      withCsvViewer(
         <ComparisonTab
           comparison={comparison({
             operation: {
@@ -87,7 +87,7 @@ describe('Comparison accessibility semantics', () => {
 
   it('marks invalid-key diagnostics as a programmatically focusable alert with bounded evidence', () => {
     const markup = renderToStaticMarkup(
-      withRuntime(
+      withCsvViewer(
         <ComparisonTab
           comparison={comparison({
             lastAttempt: {
@@ -124,5 +124,4 @@ describe('Comparison accessibility semantics', () => {
     expect(markup).toContain('Null');
     expect(markup).toContain('appears 2 times');
   });
-
 });

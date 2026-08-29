@@ -45,16 +45,12 @@ import type {
   WorkingCsvView,
 } from '../../shared/csv-viewer-contract';
 import { csvInternalRowIdField } from '../../shared/csv-viewer-contract';
-import {
-  createCsvGridDataSource,
-  toCsvFilterDescriptors,
-  type AgFilterModel,
-} from './csv-grid-data-source';
+import { createCsvGridDataSource, toCsvFilterDescriptors, type AgFilterModel } from './csv-grid-data-source';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge, type QueryState } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
 import { resolveStatsColumnOnOpen } from './csv-stats-state';
-import { useCsvViewerRuntime } from '../csv-viewer-runtime';
+import { useCsvViewer } from '../csv-viewer';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -76,8 +72,7 @@ const csvGridLightTheme = themeQuartz.withParams({
   browserColorScheme: 'light',
   cellFontSize: 13,
   chromeBackgroundColor: '#f8fafc',
-  fontFamily:
-    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontSize: 13,
   foregroundColor: '#0f172a',
   headerBackgroundColor: '#f1f5f9',
@@ -100,8 +95,7 @@ const csvGridDarkTheme = themeQuartz.withParams({
   browserColorScheme: 'dark',
   cellFontSize: 13,
   chromeBackgroundColor: '#202020',
-  fontFamily:
-    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontSize: 13,
   foregroundColor: '#f5f5f5',
   headerBackgroundColor: '#262626',
@@ -130,7 +124,7 @@ export function CsvGrid({
   exportRequestSequence?: number;
   onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
 }) {
-  const runtime = useCsvViewerRuntime();
+  const viewer = useCsvViewer();
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(workingCsv.rowCount);
   const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(workingCsv.rowCount);
@@ -208,7 +202,7 @@ export function CsvGrid({
     gridApiRef.current = event.api;
     const datasource = createCsvGridDataSource(
       workingCsv,
-      runtime,
+      viewer,
       handleFilteredRowCount,
       searchRef.current,
       requestStateRef.current,
@@ -229,14 +223,14 @@ export function CsvGrid({
     setStatsRefreshKey((current) => current + 1);
     const datasource = createCsvGridDataSource(
       workingCsv,
-      runtime,
+      viewer,
       handleFilteredRowCount,
       search,
       requestStateRef.current,
       setQueryState,
     );
     api.setGridOption('datasource', datasource);
-  }, [runtime, search, workingCsv]);
+  }, [viewer, search, workingCsv]);
 
   function clearQuery() {
     const api = gridApiRef.current;
@@ -257,7 +251,7 @@ export function CsvGrid({
     updateActiveQueryState(false);
     const datasource = createCsvGridDataSource(
       workingCsv,
-      runtime,
+      viewer,
       handleFilteredRowCount,
       '',
       requestStateRef.current,
@@ -300,7 +294,8 @@ export function CsvGrid({
 
     try {
       setEditError(null);
-      const result = await runtime.editCsvCell({
+      const result = await viewer.call({
+        operation: 'csv.edit-cell',
         workingCsvId: workingCsv.workingCsvId,
         rowId,
         column,
@@ -323,7 +318,7 @@ export function CsvGrid({
   async function refreshEditState() {
     const { workingCsvId } = workingCsv;
     try {
-      const editState = await runtime.getCsvEditState({ workingCsvId });
+      const editState = await viewer.call({ operation: 'csv.get-edit-state', workingCsvId });
       if (workingCsvIdRef.current !== workingCsvId) return;
       setEditState(editState);
     } catch (error) {
@@ -340,8 +335,8 @@ export function CsvGrid({
       setEditError(null);
       const nextEditState =
         action === 'undo'
-          ? await runtime.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId })
-          : await runtime.redoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
+          ? await viewer.call({ operation: 'csv.undo', workingCsvId: workingCsv.workingCsvId })
+          : await viewer.call({ operation: 'csv.redo', workingCsvId: workingCsv.workingCsvId });
       setEditState(nextEditState);
       api?.refreshInfiniteCache();
       setStatsRefreshKey((current) => current + 1);
@@ -362,7 +357,8 @@ export function CsvGrid({
     try {
       setEditError(null);
       setEditState(
-        await runtime.deleteCsvRows({
+        await viewer.call({
+          operation: 'csv.delete-rows',
           workingCsvId: workingCsv.workingCsvId,
           rowIds: selectedRowIds,
         }),
@@ -383,7 +379,8 @@ export function CsvGrid({
     try {
       setEditError(null);
       setEditState(
-        await runtime.insertCsvRow({
+        await viewer.call({
+          operation: 'csv.insert-row',
           workingCsvId: workingCsv.workingCsvId,
           placement,
           rowIds: selectedRowIds,
@@ -403,13 +400,14 @@ export function CsvGrid({
   async function exportCsv() {
     try {
       setEditError(null);
-      const result = await runtime.exportCsv({ workingCsvId: workingCsv.workingCsvId });
+      const result = await viewer.call({
+        operation: 'csv.export',
+        workingCsvId: workingCsv.workingCsvId,
+      });
 
-      if (isCancelledExportResult(result)) {
-        return;
-      }
+      if (result.status === 'cancelled') return;
 
-      setEditState(result);
+      setEditState(result.editState);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to export CSV.';
       setEditError(message);
@@ -471,14 +469,13 @@ export function CsvGrid({
               <h2
                 id="metadata-title"
                 className="truncate text-base font-semibold text-foreground"
-                title={workingCsv.file.name}
+                title={workingCsv.source.name}
               >
-                {workingCsv.file.name}
+                {workingCsv.source.name}
               </h2>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                 <span>
-                  {formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)}{' '}
-                  rows
+                  {formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)} rows
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <Table2 className="size-3.5" aria-hidden="true" />
@@ -486,7 +483,7 @@ export function CsvGrid({
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <HardDrive className="size-3.5" aria-hidden="true" />
-                  {formatFileSize(workingCsv.file.sizeBytes)}
+                  {formatFileSize(workingCsv.source.sizeBytes)}
                 </span>
                 {editState.hasUnexportedChanges ? (
                   <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
@@ -660,12 +657,6 @@ export function CsvGrid({
       </div>
     </div>
   );
-}
-
-function isCancelledExportResult(
-  result: CsvEditState | { status: 'cancelled' },
-): result is { status: 'cancelled' } {
-  return 'status' in result && result.status === 'cancelled';
 }
 
 function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {

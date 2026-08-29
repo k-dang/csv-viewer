@@ -131,20 +131,15 @@ export class CsvComparisonService {
 
     return this.csvs
       .list()
-      .filter(
-        (workingCsv) =>
-          workingCsv.workingCsvId !== baselineId &&
-          !this.csvs.isClosing(workingCsv.workingCsvId),
-      )
+      .filter((workingCsv) => workingCsv.workingCsvId !== baselineId && !this.csvs.isClosing(workingCsv.workingCsvId))
       .map((workingCsv) => ({ workingCsv, compatibility: compareColumns(baseline, workingCsv) }))
       .sort((left, right) => {
         const compatibilityOrder =
-          Number(left.compatibility.kind === 'incompatible') -
-          Number(right.compatibility.kind === 'incompatible');
+          Number(left.compatibility.kind === 'incompatible') - Number(right.compatibility.kind === 'incompatible');
         if (compatibilityOrder !== 0) return compatibilityOrder;
         return (
-          compareText(left.workingCsv.file.name, right.workingCsv.file.name) ||
-          compareText(left.workingCsv.file.location, right.workingCsv.file.location)
+          compareText(left.workingCsv.source.name, right.workingCsv.source.name) ||
+          compareText(left.workingCsv.source.location, right.workingCsv.source.location)
         );
       });
   }
@@ -155,18 +150,14 @@ export class CsvComparisonService {
     }
     const baseline = this.csvs.getState(request.baselineId);
     const candidate = this.csvs.getState(request.candidateId);
-    if (!baseline || !candidate)
-      return rejected('source-not-found', 'Both Working CSVs must still be open.');
+    if (!baseline || !candidate) return rejected('source-not-found', 'Both Working CSVs must still be open.');
     if (this.csvs.isClosing(request.baselineId) || this.csvs.isClosing(request.candidateId)) {
       return rejected('source-not-found', 'A Working CSV is closing.');
     }
     if (request.baselineId === request.candidateId)
       return rejected('same-source', 'Choose two different Working CSVs.');
     if (compareColumns(baseline, candidate).kind === 'incompatible') {
-      return rejected(
-        'incompatible-columns',
-        'The Working CSVs must contain the same column names.',
-      );
+      return rejected('incompatible-columns', 'The Working CSVs must contain the same column names.');
     }
 
     const pair = pairKey(request.baselineId, request.candidateId);
@@ -215,10 +206,7 @@ export class CsvComparisonService {
       return rejected('source-not-found', 'A Working CSV is closing.');
     }
     if (!this.sourcesCompatible(entity))
-      return rejected(
-        'incompatible-columns',
-        'The Working CSVs no longer contain the same columns.',
-      );
+      return rejected('incompatible-columns', 'The Working CSVs no longer contain the same columns.');
 
     const operation: Operation = {
       operationId: crypto.randomUUID(),
@@ -421,11 +409,7 @@ export class CsvComparisonService {
     this.lifecycle = 'disposed';
   }
 
-  private async run(
-    entity: ComparisonRecord,
-    operation: Operation,
-    key: string[],
-  ): Promise<ComparisonAttemptOutcome> {
+  private async run(entity: ComparisonRecord, operation: Operation, key: string[]): Promise<ComparisonAttemptOutcome> {
     let stagingArtifactId: ComparisonOperationId | null = null;
     try {
       await yieldToEventLoop();
@@ -449,16 +433,8 @@ export class CsvComparisonService {
         return this.finishFailed(entity, operation, 'source-unavailable');
       }
       const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
-      const baselineDiagnostics = await this.executor.validateKey(
-        operation.operationId,
-        entity.baselineId,
-        key,
-      );
-      const candidateDiagnostics = await this.executor.validateKey(
-        operation.operationId,
-        entity.candidateId,
-        key,
-      );
+      const baselineDiagnostics = await this.executor.validateKey(operation.operationId, entity.baselineId, key);
+      const candidateDiagnostics = await this.executor.validateKey(operation.operationId, entity.candidateId, key);
       if (!this.operationIsCurrent(entity, operation)) {
         return this.settleAfterRelease(entity, operation, {
           attemptId: operation.operationId,
@@ -489,9 +465,7 @@ export class CsvComparisonService {
           status: 'cancelled',
         });
       }
-      const valueColumns = baseline.columns
-        .map((column) => column.name)
-        .filter((column) => !key.includes(column));
+      const valueColumns = baseline.columns.map((column) => column.name).filter((column) => !key.includes(column));
       stagingArtifactId = operation.operationId;
       const summary = await this.executor.createSnapshot({
         artifactId: stagingArtifactId,
@@ -515,10 +489,8 @@ export class CsvComparisonService {
       const currentBaseline = this.csvs.getState(entity.baselineId);
       const currentCandidate = this.csvs.getState(entity.candidateId);
       const changedSides: ComparisonSide[] = [];
-      if (!currentBaseline || currentBaseline.dataRevision !== captured.baseline)
-        changedSides.push('baseline');
-      if (!currentCandidate || currentCandidate.dataRevision !== captured.candidate)
-        changedSides.push('candidate');
+      if (!currentBaseline || currentBaseline.dataRevision !== captured.baseline) changedSides.push('baseline');
+      if (!currentCandidate || currentCandidate.dataRevision !== captured.candidate) changedSides.push('candidate');
       if (changedSides.length > 0) {
         await this.retireSnapshot(stagingArtifactId);
         return this.settleAfterRelease(entity, operation, {
@@ -592,10 +564,7 @@ export class CsvComparisonService {
     }
   }
 
-  private finishCancelled(
-    entity: ComparisonRecord,
-    operation: Operation,
-  ): ComparisonAttemptOutcome {
+  private finishCancelled(entity: ComparisonRecord, operation: Operation): ComparisonAttemptOutcome {
     return this.settle(entity, operation, {
       attemptId: operation.operationId,
       status: 'cancelled',
@@ -643,11 +612,7 @@ export class CsvComparisonService {
       const entity = this.entities.get(comparisonId);
       if (!entity) throw new Error('Comparison dependency index invariant violated.');
       const side =
-        entity.baselineId === workingCsvId
-          ? 'baseline'
-          : entity.candidateId === workingCsvId
-            ? 'candidate'
-            : null;
+        entity.baselineId === workingCsvId ? 'baseline' : entity.candidateId === workingCsvId ? 'candidate' : null;
       if (!side) continue;
       if (entity.activity.kind === 'running') {
         const { operation } = entity.activity;
@@ -655,8 +620,7 @@ export class CsvComparisonService {
         this.executor.cancel(operation.operationId);
       }
       if (!entity.snapshot) continue;
-      const changedSides =
-        entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
+      const changedSides = entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
       if (!changedSides.includes(side)) changedSides.push(side);
       entity.snapshot.freshness = {
         kind: 'outdated',
@@ -682,9 +646,7 @@ export class CsvComparisonService {
   private sourcesCompatible(entity: ComparisonRecord): boolean {
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);
-    return Boolean(
-      baseline && candidate && compareColumns(baseline, candidate).kind === 'compatible',
-    );
+    return Boolean(baseline && candidate && compareColumns(baseline, candidate).kind === 'compatible');
   }
 
   private availableKeyColumns(entity: ComparisonRecord): string[] {

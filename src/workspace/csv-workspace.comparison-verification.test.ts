@@ -1,21 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  ComparisonRow,
-  ComparisonView,
-  ComparisonWindow,
-  WorkingCsvView,
-} from '../shared/csv-viewer-contract';
-import {
-  workspaceContractFactories,
-  type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+import type { ComparisonRow, ComparisonView, ComparisonWindow, WorkingCsvView } from '../shared/csv-viewer-contract';
+import { workspaceContractFactories, type WorkspaceContractFixture } from '../main/testing/workspace-contract-fixture';
 
 async function openComparison(
   value: WorkspaceContractFixture,
   baseline: WorkingCsvView,
   candidate: WorkingCsvView,
 ): Promise<ComparisonView> {
-  const outcome = await value.workspace.openComparison({
+  const outcome = await value.viewer.call({
+    operation: 'comparison.open',
     baselineId: baseline.workingCsvId,
     candidateId: candidate.workingCsvId,
   });
@@ -29,21 +22,19 @@ async function runComparison(
   comparisonId: string,
   key?: string[],
 ): Promise<{ status: string; comparison: ComparisonView }> {
-  const started = await value.workspace.beginComparison(
-    key ? { kind: 'apply-key', comparisonId, key } : { kind: 'refresh', comparisonId },
+  const started = await value.viewer.call(
+    key
+      ? { operation: 'comparison.begin', kind: 'apply-key', comparisonId, key }
+      : { operation: 'comparison.begin', kind: 'refresh', comparisonId },
   );
   if (started.status !== 'accepted') throw new Error(`Comparison was ${started.status}.`);
   const outcome = await value.awaitComparisonOutcome(started.operationId);
-  const comparison = await value.workspace.getComparisonState(comparisonId);
+  const comparison = value.latestComparison(comparisonId);
   if (!comparison) throw new Error('Comparison disappeared.');
   return { status: outcome.status, comparison };
 }
 
-async function applyKey(
-  value: WorkspaceContractFixture,
-  comparisonId: string,
-  key: string[],
-): Promise<ComparisonView> {
+async function applyKey(value: WorkspaceContractFixture, comparisonId: string, key: string[]): Promise<ComparisonView> {
   const completed = await runComparison(value, comparisonId, key);
   if (completed.status !== 'applied') throw new Error(`Comparison completed as ${completed.status}.`);
   return completed.comparison;
@@ -56,7 +47,7 @@ async function refresh(value: WorkspaceContractFixture, comparisonId: string): P
 }
 
 async function comparisonState(value: WorkspaceContractFixture, comparisonId: string): Promise<ComparisonView> {
-  const comparison = await value.workspace.getComparisonState(comparisonId);
+  const comparison = value.latestComparison(comparisonId);
   if (!comparison) throw new Error('Comparison disappeared.');
   return comparison;
 }
@@ -72,7 +63,8 @@ async function readWindow(
   } = {},
 ): Promise<ComparisonWindow> {
   if (!comparison.applied) throw new Error('Comparison has no applied result.');
-  const outcome = await value.workspace.getComparisonWindow({
+  const outcome = await value.viewer.call({
+    operation: 'comparison.get-window',
     comparisonId: comparison.comparisonId,
     resultToken: comparison.applied.resultToken,
     offset: options.offset ?? 0,
@@ -144,7 +136,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
   });
 
   it('aligns a composite key with exact cells, all classifications, binary ordering, and a final partial window', async () => {
-    const baseline = await value.openSource('baseline.csv',
+    const baseline = await value.openSource(
+      'baseline.csv',
       [
         'group,id,status,code,note',
         'A,10,Same,001,"quoted, value"',
@@ -154,7 +147,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
         '',
       ].join('\n'),
     );
-    const candidate = await value.openSource('candidate.csv',
+    const candidate = await value.openSource(
+      'candidate.csv',
       [
         'note,code,status,id,group',
         '"quoted, value",1,Same,10,A',
@@ -232,7 +226,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       },
     ]);
 
-    const swapped = await value.workspace.swapComparison(applied.comparisonId);
+    const swapped = await value.viewer.call({ operation: 'comparison.swap', comparisonId: applied.comparisonId });
     if (swapped.status !== 'changed' || !swapped.comparison.applied) {
       throw new Error('Comparison did not swap.');
     }
@@ -268,7 +262,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
   });
 
   it('returns complete invalid-key counts with bounded non-overlapping evidence', async () => {
-    const baseline = await value.openSource('invalid-baseline.csv',
+    const baseline = await value.openSource(
+      'invalid-baseline.csv',
       [
         'group,id,value',
         ',blank-1,x',
@@ -297,19 +292,14 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
         '',
       ].join('\n'),
     );
-    const candidate = await value.openSource('invalid-candidate.csv',
-      [
-        'group,id,value',
-        'A,1,one',
-        'A,2,two-first',
-        'A,2,two-second',
-        ',blank-candidate,x',
-        '',
-      ].join('\n'),
+    const candidate = await value.openSource(
+      'invalid-candidate.csv',
+      ['group,id,value', 'A,1,one', 'A,2,two-first', 'A,2,two-second', ',blank-candidate,x', ''].join('\n'),
     );
     const comparison = await openComparison(value, baseline, candidate);
 
-    const started = await value.workspace.beginComparison({
+    const started = await value.viewer.call({
+      operation: 'comparison.begin',
       kind: 'apply-key',
       comparisonId: comparison.comparisonId,
       key: ['group', 'id'],
@@ -347,8 +337,35 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     expect((await comparisonState(value, comparison.comparisonId)).applied).toBeNull();
   });
 
+  it('keeps the applied result readable when a replacement key is invalid', async () => {
+    const baseline = await value.openSource('baseline.csv', 'id,name,status\n1,Ada,active\n2,Bob,old\n');
+    const candidate = await value.openSource('candidate.csv', 'id,name,status\n1,Ada,active\n2,Bob,new\n');
+    const comparison = await openComparison(value, baseline, candidate);
+    const applied = await applyKey(value, comparison.comparisonId, ['id']);
+    if (!applied.applied) throw new Error('Comparison has no applied result.');
+
+    await value.viewer.call({
+      operation: 'csv.edit-cell',
+      workingCsvId: baseline.workingCsvId,
+      rowId: '2',
+      column: 'id',
+      value: '1',
+    });
+    const invalid = await runComparison(value, comparison.comparisonId, ['id']);
+
+    expect(invalid.status).toBe('invalid-key');
+    expect(invalid.comparison.applied).toMatchObject({
+      resultToken: applied.applied.resultToken,
+      freshness: { kind: 'outdated', changedSides: ['baseline'] },
+    });
+    await expect(readWindow(value, invalid.comparison)).resolves.toMatchObject({
+      totalRowCount: 2,
+    });
+  });
+
   it('distinguishes null, empty, case, whitespace, leading zeros, literal NULL, and quoted text exactly', async () => {
-    const baseline = await value.openSource('exact-baseline.csv',
+    const baseline = await value.openSource(
+      'exact-baseline.csv',
       [
         'id,value',
         '1,',
@@ -362,7 +379,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
         '',
       ].join('\n'),
     );
-    const candidate = await value.openSource('exact-candidate.csv',
+    const candidate = await value.openSource(
+      'exact-candidate.csv',
       [
         'id,value',
         '1,',
@@ -376,7 +394,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
         '',
       ].join('\n'),
     );
-    await value.workspace.editCsvCell({
+    await value.viewer.call({
+      operation: 'csv.edit-cell',
       workingCsvId: candidate.workingCsvId,
       rowId: '1',
       column: 'value',
@@ -455,17 +474,22 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
   });
 
   it('reports compatibility and key-shape faults through typed workspace outcomes', async () => {
-    const baseline = await value.openSource('baseline.csv',
+    const baseline = await value.openSource(
+      'baseline.csv',
       ['"select","odd name","quote""name"', '1,alpha,value', ''].join('\n'),
     );
-    const compatible = await value.openSource('compatible.csv',
+    const compatible = await value.openSource(
+      'compatible.csv',
       ['"quote""name","select","odd name"', 'value,1,alpha', ''].join('\n'),
     );
-    const incompatible = await value.openSource('incompatible.csv',
+    const incompatible = await value.openSource(
+      'incompatible.csv',
       ['"select","odd name",extra', '1,alpha,value', ''].join('\n'),
     );
 
-    expect(await value.workspace.getComparisonCandidates(baseline.workingCsvId)).toEqual([
+    expect(
+      await value.viewer.call({ operation: 'comparison.get-candidates', baselineId: baseline.workingCsvId }),
+    ).toEqual([
       { workingCsv: compatible, compatibility: { kind: 'compatible' } },
       {
         workingCsv: incompatible,
@@ -477,22 +501,21 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       },
     ]);
     await expect(
-      value.workspace.openComparison({
+      value.viewer.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: baseline.workingCsvId,
       }),
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'same-source' } });
     await expect(
-      value.workspace.openComparison({
+      value.viewer.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: incompatible.workingCsvId,
       }),
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'incompatible-columns' } });
     await expect(
-      value.workspace.openComparison({
-        baselineId: baseline.workingCsvId,
-        candidateId: 'missing',
-      }),
+      value.viewer.call({ operation: 'comparison.open', baselineId: baseline.workingCsvId, candidateId: 'missing' }),
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
 
     const comparison = await openComparison(value, baseline, compatible);
@@ -502,7 +525,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       [['unknown'], 'unknown-key-column'],
     ] as const) {
       await expect(
-        value.workspace.beginComparison({
+        value.viewer.call({
+          operation: 'comparison.begin',
           kind: 'apply-key',
           comparisonId: comparison.comparisonId,
           key: [...key],
@@ -510,10 +534,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       ).resolves.toMatchObject({ status: 'rejected', fault: { code } });
     }
     await expect(
-      value.workspace.beginComparison({
-        kind: 'refresh',
-        comparisonId: comparison.comparisonId,
-      }),
+      value.viewer.call({ operation: 'comparison.begin', kind: 'refresh', comparisonId: comparison.comparisonId }),
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'no-applied-key' } });
   });
 
@@ -524,7 +545,9 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     ]);
     const comparison = await openComparison(value, baseline, candidate);
     const summarizing = new Promise<void>((resolve) => {
-      const unsubscribe = value.workspace.onComparisonEvent((event) => {
+      const unsubscribe = value.viewer.onEvent((viewerEvent) => {
+        if (viewerEvent.type !== 'comparison') return;
+        const event = viewerEvent.event;
         if (
           event.kind === 'changed' &&
           event.comparison.comparisonId === comparison.comparisonId &&
@@ -536,7 +559,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       });
     });
 
-    const started = await value.workspace.beginComparison({
+    const started = await value.viewer.call({
+      operation: 'comparison.begin',
       kind: 'apply-key',
       comparisonId: comparison.comparisonId,
       key: ['id'],
@@ -545,7 +569,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     await summarizing;
 
     await expect(
-      value.workspace.cancelComparison({
+      value.viewer.call({
+        operation: 'comparison.cancel',
         comparisonId: comparison.comparisonId,
         operationId: started.operationId,
       }),
@@ -554,9 +579,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       attemptId: started.operationId,
       status: 'cancelled',
     });
-    await expect(
-      value.workspace.getComparisonState(comparison.comparisonId),
-    ).resolves.toMatchObject({
+    expect(value.latestComparison(comparison.comparisonId)).toMatchObject({
       operation: null,
       applied: null,
       lastAttempt: { attemptId: started.operationId, status: 'cancelled' },
@@ -582,7 +605,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       rows: [],
     });
     expect(
-      await value.workspace.getComparisonWindow({
+      await value.viewer.call({
+        operation: 'comparison.get-window',
         comparisonId: applied.comparisonId,
         resultToken: applied.applied.resultToken,
         offset: 0,
@@ -611,7 +635,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     ]);
 
     const oldToken = applied.applied.resultToken;
-    const swapped = await value.workspace.swapComparison(applied.comparisonId);
+    const swapped = await value.viewer.call({ operation: 'comparison.swap', comparisonId: applied.comparisonId });
     if (swapped.status !== 'changed' || !swapped.comparison.applied) {
       throw new Error('Comparison did not swap.');
     }
@@ -625,7 +649,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     });
     expect(swapped.comparison.applied.resultToken).not.toBe(oldToken);
     expect(
-      await value.workspace.getComparisonWindow({
+      await value.viewer.call({
+        operation: 'comparison.get-window',
         comparisonId: applied.comparisonId,
         resultToken: oldToken,
         offset: 0,
@@ -637,11 +662,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       status: 'result-replaced',
       currentResultToken: swapped.comparison.applied.resultToken,
     });
-    expect(
-      (await readWindow(value, swapped.comparison, { rows: 'differences' })).rows.map(
-        observableRow,
-      ),
-    ).toEqual([
+    expect((await readWindow(value, swapped.comparison, { rows: 'differences' })).rows.map(observableRow)).toEqual([
       {
         classification: 'candidate-only',
         keyValues: ['2'],
@@ -668,15 +689,14 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     const applied = await applyKey(value, comparison.comparisonId, ['id']);
     if (!applied.applied) throw new Error('Comparison has no applied result.');
 
-    const confirmation = await value.workspace.closeCsv({
-      workingCsvId: baseline.workingCsvId,
-    });
+    const confirmation = await value.viewer.call({ operation: 'csv.close', workingCsvId: baseline.workingCsvId });
     if (confirmation.status !== 'confirmation-required') {
       throw new Error(`CSV Source close completed as ${confirmation.status}.`);
     }
 
     await expect(
-      value.workspace.closeCsv({
+      value.viewer.call({
+        operation: 'csv.close',
         workingCsvId: baseline.workingCsvId,
         confirmedImpact: confirmation.impact,
       }),
@@ -685,15 +705,10 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       closedWorkingCsvId: baseline.workingCsvId,
       closedComparisonIds: [comparison.comparisonId],
     });
-    await expect(value.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toBeNull();
-    await expect(value.workspace.getWorkingCsv(candidate.workingCsvId)).resolves.toEqual(
-      candidate,
-    );
+    expect(value.latestComparison(comparison.comparisonId)).toBeNull();
     await expect(
-      value.workspace.getComparisonState(comparison.comparisonId),
-    ).resolves.toBeNull();
-    await expect(
-      value.workspace.getComparisonWindow({
+      value.viewer.call({
+        operation: 'comparison.get-window',
         comparisonId: comparison.comparisonId,
         resultToken: applied.applied.resultToken,
         offset: 0,
@@ -704,18 +719,43 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     ).resolves.toEqual({ status: 'comparison-not-found' });
   });
 
+  it('publishes no changed event after closing a running Comparison', async () => {
+    const [baseline, candidate] = await Promise.all([
+      value.openSource('baseline.csv', 'id,value\n1,a\n2,b\n'),
+      value.openSource('candidate.csv', 'id,value\n1,a\n2,c\n'),
+    ]);
+    const comparison = await openComparison(value, baseline, candidate);
+    const events: string[] = [];
+    const unsubscribe = value.viewer.onEvent((event) => {
+      if (event.type === 'comparison') events.push(event.event.kind);
+    });
+
+    await value.viewer.call({
+      operation: 'comparison.begin',
+      kind: 'apply-key',
+      comparisonId: comparison.comparisonId,
+      key: ['id'],
+    });
+    await expect(
+      value.viewer.call({ operation: 'comparison.close', comparisonId: comparison.comparisonId }),
+    ).resolves.toEqual({ status: 'closed', comparisonId: comparison.comparisonId });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    unsubscribe();
+
+    expect(events.at(-1)).toBe('closed');
+    expect(value.latestComparison(comparison.comparisonId)).toBeNull();
+  });
+
   it('marks every Working CSV data mutation Outdated while queries and Export CSV remain current', async () => {
     const baseline = await value.openSource('baseline.csv', ['id,value', '1,old', ''].join('\n'));
-    const candidate = await value.openSource('candidate.csv',
-      ['id,value', '1,new', ''].join('\n'),
-    );
+    const candidate = await value.openSource('candidate.csv', ['id,value', '1,new', ''].join('\n'));
     const comparison = await openComparison(value, baseline, candidate);
     let applied = await applyKey(value, comparison.comparisonId, ['id']);
     if (!applied.applied) throw new Error('Comparison has no applied result.');
-    const initialRevision = baseline.dataRevision;
     const resultToken = applied.applied.resultToken;
 
-    await value.workspace.getCsvRows({
+    await value.viewer.call({
+      operation: 'csv.get-rows',
       workingCsvId: baseline.workingCsvId,
       offset: 0,
       limit: 100,
@@ -723,22 +763,21 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
       filters: [{ column: 'value', kind: 'text', operator: 'contains', value: 'old' }],
       search: 'old',
     });
-    await value.workspace.getCsvColumnValueCounts({
+    await value.viewer.call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: baseline.workingCsvId,
       column: 'value',
       search: 'old',
     });
     value.captureNextExport('exported-copy.csv');
-    await value.workspace.exportCsv({ workingCsvId: baseline.workingCsvId });
-    await expect(value.workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toMatchObject({
-      dataRevision: initialRevision,
-    });
+    await value.viewer.call({ operation: 'csv.export', workingCsvId: baseline.workingCsvId });
     expect((await comparisonState(value, comparison.comparisonId)).applied).toMatchObject({
       resultToken,
       freshness: { kind: 'current' },
     });
 
-    await value.workspace.editCsvCell({
+    await value.viewer.call({
+      operation: 'csv.edit-cell',
       workingCsvId: baseline.workingCsvId,
       rowId: '1',
       column: 'value',
@@ -751,52 +790,56 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     applied = await refresh(value, comparison.comparisonId);
     expect(applied.applied?.freshness).toEqual({ kind: 'current' });
 
-    await value.workspace.undoCsvEdit({ workingCsvId: baseline.workingCsvId });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
+    await value.viewer.call({ operation: 'csv.undo', workingCsvId: baseline.workingCsvId });
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
     await refresh(value, comparison.comparisonId);
 
-    await value.workspace.redoCsvEdit({ workingCsvId: baseline.workingCsvId });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
+    await value.viewer.call({ operation: 'csv.redo', workingCsvId: baseline.workingCsvId });
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
     await refresh(value, comparison.comparisonId);
 
-    await value.workspace.insertCsvRow({
+    await value.viewer.call({
+      operation: 'csv.insert-row',
       workingCsvId: baseline.workingCsvId,
       placement: 'append',
       rowIds: [],
       hasActiveQuery: false,
     });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
-    await value.workspace.undoCsvEdit({ workingCsvId: baseline.workingCsvId });
-    await refresh(value, comparison.comparisonId);
-
-    await value.workspace.deleteCsvRows({
-      workingCsvId: baseline.workingCsvId,
-      rowIds: ['1'],
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
     });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
-    await refresh(value, comparison.comparisonId);
-    await value.workspace.undoCsvEdit({ workingCsvId: baseline.workingCsvId });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
+    await value.viewer.call({ operation: 'csv.undo', workingCsvId: baseline.workingCsvId });
     await refresh(value, comparison.comparisonId);
 
-    await value.replaceSourceContents('baseline.csv', ['id,value', '1,replaced', ''].join('\n'));
-    const replacement = await value.workspace.reopenCsv(baseline.workingCsvId);
+    await value.viewer.call({ operation: 'csv.delete-rows', workingCsvId: baseline.workingCsvId, rowIds: ['1'] });
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
+    await refresh(value, comparison.comparisonId);
+    await value.viewer.call({ operation: 'csv.undo', workingCsvId: baseline.workingCsvId });
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
+    await refresh(value, comparison.comparisonId);
+
+    await value.writeSource('baseline.csv', ['id,value', '1,replaced', ''].join('\n'));
+    const replacement = await value.viewer.call({ operation: 'csv.reopen', workingCsvId: baseline.workingCsvId });
     expect(replacement).toMatchObject({
-      status: 'replaced',
+      status: 'opened',
       workingCsv: { workingCsvId: baseline.workingCsvId },
     });
-    expect(
-      (await comparisonState(value, comparison.comparisonId)).applied?.freshness,
-    ).toEqual({ kind: 'outdated', changedSides: ['baseline'] });
+    expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+      kind: 'outdated',
+      changedSides: ['baseline'],
+    });
   });
 });

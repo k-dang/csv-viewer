@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComparisonRow, ComparisonWindowOutcome } from '../../shared/csv-viewer-contract';
-import {
-  comparisonGridRequestBounds,
-  createComparisonGridDataSource,
-} from './comparison-grid-data-source';
+import { comparisonGridRequestBounds, createComparisonGridDataSource } from './comparison-grid-data-source';
 
 const row: ComparisonRow = {
   classification: 'unchanged',
@@ -34,7 +31,7 @@ describe('createComparisonGridDataSource', () => {
     const successCallback = vi.fn();
     const failCallback = vi.fn();
     const dataSource = createComparisonGridDataSource(
-      { getComparisonWindow },
+      { call: getComparisonWindow },
       {
         comparisonId: 'comparison-1',
         resultToken: 'result-1',
@@ -54,6 +51,7 @@ describe('createComparisonGridDataSource', () => {
 
     await vi.waitFor(() => expect(successCallback).toHaveBeenCalledWith([row], 1));
     expect(getComparisonWindow).toHaveBeenCalledWith({
+      operation: 'comparison.get-window',
       comparisonId: 'comparison-1',
       resultToken: 'result-1',
       offset: 25,
@@ -81,7 +79,7 @@ describe('createComparisonGridDataSource', () => {
     const successCallback = vi.fn();
     const failCallback = vi.fn();
     const dataSource = createComparisonGridDataSource(
-      { getComparisonWindow },
+      { call: getComparisonWindow },
       {
         comparisonId: 'comparison-1',
         resultToken: 'result-1',

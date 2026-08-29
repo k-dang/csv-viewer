@@ -1,9 +1,9 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import type { CsvEditState } from '../../shared/csv-viewer-contract';
+import type { CsvEditState, CsvViewerRequest } from '../../shared/csv-viewer-contract';
 import { enableActEnvironment } from '../testing/act-environment';
 import { workingCsvFixture } from '../testing/csv-fixtures';
-import { createTestCsvViewerRuntime, withRuntime } from '../testing/test-csv-viewer-runtime';
+import { createTestCsvViewer, withCsvViewer } from '../testing/test-csv-viewer';
 import { CsvGrid } from './csv-grid';
 
 vi.mock('ag-grid-react', () => ({ AgGridReact: () => null }));
@@ -26,19 +26,21 @@ describe('CsvGrid edit state', () => {
       .fn()
       .mockResolvedValueOnce(editedWorkingCsv.editState)
       .mockResolvedValueOnce(reopenedWorkingCsv.editState);
-    const runtime = createTestCsvViewerRuntime({ getCsvEditState });
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-edit-state': getCsvEditState },
+    });
     const onUnexportedChangesChange = vi.fn();
     let renderer: ReactTestRenderer;
 
     await act(async () => {
       renderer = create(
-        withRuntime(
+        withCsvViewer(
           <CsvGrid
             workingCsv={editedWorkingCsv}
             themeMode="light"
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
-          runtime,
+          viewer,
         ),
       );
     });
@@ -46,13 +48,13 @@ describe('CsvGrid edit state', () => {
 
     await act(async () => {
       renderer.update(
-        withRuntime(
+        withCsvViewer(
           <CsvGrid
             workingCsv={reopenedWorkingCsv}
             themeMode="light"
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
-          runtime,
+          viewer,
         ),
       );
     });
@@ -65,35 +67,37 @@ describe('CsvGrid edit state', () => {
     const firstWorkingCsv = workingCsvFixture({ workingCsvId: 'working-csv-1' });
     const secondWorkingCsv = workingCsvFixture({ workingCsvId: 'working-csv-2' });
     const pending = new Map<string, (editState: CsvEditState) => void>();
-    const getCsvEditState = vi.fn(
-      ({ workingCsvId }: { workingCsvId: string }) =>
-        new Promise<CsvEditState>((resolve) => pending.set(workingCsvId, resolve)),
-    );
-    const runtime = createTestCsvViewerRuntime({ getCsvEditState });
+    const getCsvEditState = vi.fn((request: CsvViewerRequest) => {
+      if (request.operation !== 'csv.get-edit-state') throw new Error('Unexpected request.');
+      return new Promise<CsvEditState>((resolve) => pending.set(request.workingCsvId, resolve));
+    });
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-edit-state': getCsvEditState },
+    });
     const onUnexportedChangesChange = vi.fn();
     let renderer: ReactTestRenderer;
 
     await act(async () => {
       renderer = create(
-        withRuntime(
+        withCsvViewer(
           <CsvGrid
             workingCsv={firstWorkingCsv}
             themeMode="light"
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
-          runtime,
+          viewer,
         ),
       );
     });
     await act(async () => {
       renderer.update(
-        withRuntime(
+        withCsvViewer(
           <CsvGrid
             workingCsv={secondWorkingCsv}
             themeMode="light"
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
-          runtime,
+          viewer,
         ),
       );
     });

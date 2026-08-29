@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField, type WorkingCsvId } from '../shared/csv-viewer-contract';
+import { csvInternalRowIdField } from '../shared/csv-viewer-contract';
 import {
   expectVisibleRows,
   rowIds,
@@ -19,11 +19,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   function workspace() {
-    return fixture.workspace;
-  }
-
-  async function editState(workingCsvId: WorkingCsvId) {
-    return workspace().getCsvEditState({ workingCsvId });
+    return fixture.viewer;
   }
 
   it('opens a CSV Source and returns its description, inferred columns, and row count', async () => {
@@ -32,13 +28,12 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       ['name,age,joined', 'Ada,37,2024-01-10', 'Grace,41,2024-02-12'].join('\n'),
     );
 
-    expect(workingCsv.file.name).toBe('people.csv');
-    expect(workingCsv.file.sourceId).toBeTruthy();
-    expect(workingCsv.file.sizeBytes).toBeGreaterThan(0);
+    expect(workingCsv.source.name).toBe('people.csv');
+    expect(workingCsv.source.sourceId).toBeTruthy();
+    expect(workingCsv.source.sizeBytes).toBeGreaterThan(0);
     expect(workingCsv.rowCount).toBe(2);
     expect(workingCsv.columns.map((column) => column.name)).toEqual(['name', 'age', 'joined']);
     expect(workingCsv.columns.map((column) => column.type)).toEqual(['VARCHAR', 'VARCHAR', 'VARCHAR']);
-    await expect(workspace().getWorkingCsv(workingCsv.workingCsvId)).resolves.toEqual(workingCsv);
   });
 
   it('handles quoted fields, escaped quotes, and embedded delimiters', async () => {
@@ -52,12 +47,11 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   it('opens CSV Sources with a delimiter override', async () => {
-    const workingCsv = await fixture.openSource(
-      'pipe.csv',
-      ['name|age', 'Ada|37', 'Grace|41'].join('\n'),
-      { delimiter: '|' },
-    );
-    const window = await workspace().getCsvRows({
+    const workingCsv = await fixture.openSource('pipe.csv', ['name|age', 'Ada|37', 'Grace|41'].join('\n'), {
+      delimiter: '|',
+    });
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 2,
@@ -73,12 +67,9 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   it('opens CSV Sources with a header override', async () => {
-    const workingCsv = await fixture.openSource(
-      'no-header.csv',
-      ['Ada,37', 'Grace,41'].join('\n'),
-      { header: false },
-    );
-    const window = await workspace().getCsvRows({
+    const workingCsv = await fixture.openSource('no-header.csv', ['Ada,37', 'Grace,41'].join('\n'), { header: false });
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 2,
@@ -95,46 +86,58 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
 
   it('reopens a Working CSV behind its stable identity with a new revision', async () => {
     const auto = await fixture.openSource('reopen.txt', ['name|age', 'Ada|37'].join('\n'));
-    const outcome = await workspace().reopenCsv(auto.workingCsvId, { delimiter: '|' });
-    if (outcome.status !== 'replaced') throw new Error(`Reopen was ${outcome.status}.`);
+    const outcome = await workspace().call({
+      operation: 'csv.reopen',
+      workingCsvId: auto.workingCsvId,
+      options: { delimiter: '|' },
+    });
+    if (outcome.status !== 'opened') throw new Error(`Reopen was ${outcome.status}.`);
     const reopened = outcome.workingCsv;
 
     expect(reopened.workingCsvId).toBe(auto.workingCsvId);
     expect(reopened.dataRevision).toBe(auto.dataRevision + 1);
-    expect(reopened.file.sourceId).toBe(auto.file.sourceId);
+    expect(reopened.source.sourceId).toBe(auto.source.sourceId);
     expect(reopened.dialect).toEqual({ delimiter: '|' });
     expect(reopened.columns.map((column) => column.name)).toEqual(['name', 'age']);
-    await expect(workspace().getWorkingCsv(reopened.workingCsvId)).resolves.toEqual(reopened);
   });
 
   it('increments revisions and notifies dependents for every committed data change', async () => {
     const workingCsv = await fixture.openSource('revisions.csv', ['name', 'Ada', 'Grace'].join('\n'));
     const request = { workingCsvId: workingCsv.workingCsvId };
 
-    await workspace().editCsvCell({ ...request, rowId: '1', column: 'name', value: 'Augusta Ada' });
-    await workspace().insertCsvRow({ ...request, placement: 'append', rowIds: [], hasActiveQuery: false });
-    const rows = await workspace().getCsvRows({ ...request, offset: 0, limit: 10 });
-    await workspace().deleteCsvRows({
+    await workspace().call({
+      operation: 'csv.edit-cell',
+      ...request,
+      rowId: '1',
+      column: 'name',
+      value: 'Augusta Ada',
+    });
+    await workspace().call({
+      operation: 'csv.insert-row',
+      ...request,
+      placement: 'append',
+      rowIds: [],
+      hasActiveQuery: false,
+    });
+    const rows = await workspace().call({ operation: 'csv.get-rows', ...request, offset: 0, limit: 10 });
+    await workspace().call({
+      operation: 'csv.delete-rows',
       ...request,
       rowIds: [rows.rows.at(-1)?.[csvInternalRowIdField] ?? ''],
     });
-    await workspace().undoCsvEdit(request);
-    await workspace().redoCsvEdit(request);
-    await workspace().reopenCsv(workingCsv.workingCsvId);
-
-    const current = await workspace().getWorkingCsv(workingCsv.workingCsvId);
-    expect(current?.dataRevision).toBe(6);
+    await workspace().call({ operation: 'csv.undo', ...request });
+    await workspace().call({ operation: 'csv.redo', ...request });
+    const reopened = await workspace().call({ operation: 'csv.reopen', workingCsvId: workingCsv.workingCsvId });
+    if (reopened.status !== 'opened') throw new Error(`Reopen was ${reopened.status}.`);
+    expect(reopened.workingCsv.dataRevision).toBe(6);
   });
 
   it('reports why a CSV Source could not be opened', async () => {
-    const sourceId = await fixture.registerSource(
-      'invalid-delimiter.csv',
-      ['name,age', 'Ada,37'].join('\n'),
-    );
+    const sourceId = await fixture.registerSource('invalid-delimiter.csv', ['name,age', 'Ada,37'].join('\n'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
-      workspace().openRecentCsv(sourceId, { delimiter: '||' }),
+      workspace().call({ operation: 'csv.open-recent', sourceId: sourceId, options: { delimiter: '||' } }),
     ).resolves.toMatchObject({
       status: 'failed',
       message: expect.stringContaining('Delimiter must be exactly one character'),
@@ -147,12 +150,22 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
-      workspace().reopenCsv(workingCsv.workingCsvId, { delimiter: '||' }),
+      workspace().call({
+        operation: 'csv.reopen',
+        workingCsvId: workingCsv.workingCsvId,
+        options: { delimiter: '||' },
+      }),
     ).resolves.toMatchObject({
       status: 'failed',
-      failure: { message: expect.stringContaining('Delimiter must be exactly one character') },
+      message: expect.stringContaining('Delimiter must be exactly one character'),
     });
-    await expect(workspace().getWorkingCsv(workingCsv.workingCsvId)).resolves.toEqual(workingCsv);
+    const rows = await workspace().call({
+      operation: 'csv.get-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 10,
+    });
+    expectVisibleRows(rows.rows).toEqual([{ name: 'Ada', age: '37' }]);
     error.mockRestore();
   });
 
@@ -161,15 +174,14 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
     const second = await fixture.openSource('second.csv', ['b,c', '2,3', '4,5'].join('\n'));
 
     expect(second.workingCsvId).not.toBe(first.workingCsvId);
-    await expect(workspace().getWorkingCsv(first.workingCsvId)).resolves.toEqual(first);
-    await expect(workspace().getWorkingCsv(second.workingCsvId)).resolves.toEqual(second);
-
-    const firstRows = await workspace().getCsvRows({
+    const firstRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: first.workingCsvId,
       offset: 0,
       limit: 10,
     });
-    const secondRows = await workspace().getCsvRows({
+    const secondRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: second.workingCsvId,
       offset: 0,
       limit: 10,
@@ -184,50 +196,53 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
     const first = await fixture.openSource('journal-first.csv', ['name', 'Ada'].join('\n'));
     const second = await fixture.openSource('journal-second.csv', ['name', 'Grace'].join('\n'));
 
-    await workspace().editCsvCell({
+    await workspace().call({
+      operation: 'csv.edit-cell',
       workingCsvId: first.workingCsvId,
       rowId: '1',
       column: 'name',
       value: 'Edited',
     });
 
-    await expect(editState(first.workingCsvId)).resolves.toMatchObject({
+    await expect(fixture.editState(first.workingCsvId)).resolves.toMatchObject({
       hasUnexportedChanges: true,
     });
-    await expect(editState(second.workingCsvId)).resolves.toMatchObject({
+    await expect(fixture.editState(second.workingCsvId)).resolves.toMatchObject({
       hasUnexportedChanges: false,
       canUndo: false,
     });
-    await expect(workspace().confirmWindowClose()).resolves.toMatchObject({
+    await expect(fixture.confirmClose()).resolves.toMatchObject({
       status: 'confirmation-required',
       impact: { workingCsvsWithUnexportedChanges: [{ workingCsvId: first.workingCsvId }] },
     });
 
-    await expect(
-      workspace().undoCsvEdit({ workingCsvId: second.workingCsvId }),
-    ).rejects.toThrow('No CSV edit is available to undo');
+    await expect(workspace().call({ operation: 'csv.undo', workingCsvId: second.workingCsvId })).rejects.toThrow(
+      'No CSV edit is available to undo',
+    );
 
-    await workspace().undoCsvEdit({ workingCsvId: first.workingCsvId });
-    await expect(workspace().confirmWindowClose()).resolves.toEqual({ status: 'ready' });
+    await workspace().call({ operation: 'csv.undo', workingCsvId: first.workingCsvId });
+    await expect(fixture.confirmClose()).resolves.toEqual({ status: 'ready' });
   });
 
   it('closes a Working CSV and leaves other Working CSVs untouched', async () => {
     const first = await fixture.openSource('close-first.csv', ['a', '1'].join('\n'));
     const second = await fixture.openSource('close-second.csv', ['b', '2'].join('\n'));
 
-    await expect(
-      workspace().closeCsv({ workingCsvId: first.workingCsvId }),
-    ).resolves.toMatchObject({ status: 'closed' });
+    await expect(workspace().call({ operation: 'csv.close', workingCsvId: first.workingCsvId })).resolves.toMatchObject(
+      { status: 'closed' },
+    );
 
-    await expect(workspace().getWorkingCsv(first.workingCsvId)).resolves.toBeNull();
     await expect(
-      workspace().getCsvRows({ workingCsvId: first.workingCsvId, offset: 0, limit: 1 }),
+      workspace().call({ operation: 'csv.get-rows', workingCsvId: first.workingCsvId, offset: 0, limit: 1 }),
     ).rejects.toThrow('Working CSV is no longer active');
-    await expect(workspace().openRecentCsv(first.file.sourceId)).resolves.toMatchObject({
+    await expect(
+      workspace().call({ operation: 'csv.open-recent', sourceId: first.source.sourceId }),
+    ).resolves.toMatchObject({
       status: 'opened',
     });
 
-    const secondRows = await workspace().getCsvRows({
+    const secondRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: second.workingCsvId,
       offset: 0,
       limit: 10,
@@ -236,27 +251,25 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   it('reopens one Working CSV without disturbing another', async () => {
-    const first = await fixture.openSource(
-      'reopen-isolated-first.txt',
-      ['name|score', 'Ada|10'].join('\n'),
-    );
-    const second = await fixture.openSource(
-      'reopen-isolated-second.csv',
-      ['name,score', 'Grace,20'].join('\n'),
-    );
-    const outcome = await workspace().reopenCsv(first.workingCsvId, { delimiter: '|' });
-    if (outcome.status !== 'replaced') throw new Error(`Reopen was ${outcome.status}.`);
+    const first = await fixture.openSource('reopen-isolated-first.txt', ['name|score', 'Ada|10'].join('\n'));
+    const second = await fixture.openSource('reopen-isolated-second.csv', ['name,score', 'Grace,20'].join('\n'));
+    const outcome = await workspace().call({
+      operation: 'csv.reopen',
+      workingCsvId: first.workingCsvId,
+      options: { delimiter: '|' },
+    });
+    if (outcome.status !== 'opened') throw new Error(`Reopen was ${outcome.status}.`);
 
     expect(outcome.workingCsv.workingCsvId).toBe(first.workingCsvId);
     expect(outcome.workingCsv.dataRevision).toBe(first.dataRevision + 1);
-    await expect(workspace().getWorkingCsv(second.workingCsvId)).resolves.toEqual(second);
-
-    const reopenedRows = await workspace().getCsvRows({
+    const reopenedRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: first.workingCsvId,
       offset: 0,
       limit: 10,
     });
-    const secondRows = await workspace().getCsvRows({
+    const secondRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: second.workingCsvId,
       offset: 0,
       limit: 10,
@@ -271,7 +284,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'window.csv',
       ['name,age,note', 'Ada,37,first', 'Grace,41,second', 'Linus,54,third'].join('\n'),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 1,
       limit: 1,
@@ -290,7 +304,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'missing.csv',
       ['name,note,score,identifier', 'Ada,,10,00123', 'Grace,NULL,,00042'].join('\n'),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 2,
@@ -304,17 +319,16 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   it('sorts rows by a structured column descriptor and clears sort by omitting descriptors', async () => {
-    const workingCsv = await fixture.openSource(
-      'sort.csv',
-      ['name,age', 'Ada,37', 'Grace,41', 'Linus,54'].join('\n'),
-    );
-    const sorted = await workspace().getCsvRows({
+    const workingCsv = await fixture.openSource('sort.csv', ['name,age', 'Ada,37', 'Grace,41', 'Linus,54'].join('\n'));
+    const sorted = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 3,
       sort: [{ column: 'age', direction: 'desc' }],
     });
-    const originalOrder = await workspace().getCsvRows({
+    const originalOrder = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 3,
@@ -327,28 +341,24 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   it('keeps hidden row identifiers stable across sorting, filtering, search, and pagination', async () => {
     const workingCsv = await fixture.openSource(
       'stable-row-ids.csv',
-      [
-        'name,age,team',
-        'Ada,37,compiler',
-        'Grace,41,navy',
-        'Linus,54,kernel',
-        'Margaret,87,compiler',
-      ].join('\n'),
+      ['name,age,team', 'Ada,37,compiler', 'Grace,41,navy', 'Linus,54,kernel', 'Margaret,87,compiler'].join('\n'),
     );
     const request = { workingCsvId: workingCsv.workingCsvId, offset: 0 };
 
-    const firstPage = await workspace().getCsvRows({ ...request, limit: 2 });
-    const sorted = await workspace().getCsvRows({
+    const firstPage = await workspace().call({ operation: 'csv.get-rows', ...request, limit: 2 });
+    const sorted = await workspace().call({
+      operation: 'csv.get-rows',
       ...request,
       limit: 4,
       sort: [{ column: 'name', direction: 'desc' }],
     });
-    const filtered = await workspace().getCsvRows({
+    const filtered = await workspace().call({
+      operation: 'csv.get-rows',
       ...request,
       limit: 4,
       filters: [{ column: 'team', kind: 'text', operator: 'contains', value: 'compiler' }],
     });
-    const searched = await workspace().getCsvRows({ ...request, limit: 4, search: 'Grace' });
+    const searched = await workspace().call({ operation: 'csv.get-rows', ...request, limit: 4, search: 'Grace' });
 
     expect(workingCsv.columns.map((column) => column.name)).not.toContain(csvInternalRowIdField);
     expect(rowIds(firstPage.rows)).toEqual(['1', '2']);
@@ -360,15 +370,10 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   it('applies text, numeric, and combined filters with filtered row counts', async () => {
     const workingCsv = await fixture.openSource(
       'filters.csv',
-      [
-        'name,age,team',
-        'Ada,37,compiler',
-        'Grace,41,navy',
-        'Linus,54,kernel',
-        'Margaret,87,compiler',
-      ].join('\n'),
+      ['name,age,team', 'Ada,37,compiler', 'Grace,41,navy', 'Linus,54,kernel', 'Margaret,87,compiler'].join('\n'),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
@@ -387,13 +392,12 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'dates.csv',
       ['name,joined', 'Ada,2024-01-10', 'Grace,2024-02-12', 'Linus,2024-03-20'].join('\n'),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
-      filters: [
-        { column: 'joined', kind: 'date', operator: 'greaterThanOrEqual', value: '2024-02-01' },
-      ],
+      filters: [{ column: 'joined', kind: 'date', operator: 'greaterThanOrEqual', value: '2024-02-01' }],
     });
 
     expect(window.filteredRowCount).toBe(2);
@@ -403,20 +407,17 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   it('handles unusual column names and parameterized filter values', async () => {
     const workingCsv = await fixture.openSource(
       'unusual.csv',
-      [
-        '"full name","select","quote""name"',
-        '"Ada Lovelace","alpha","safe"',
-        '"Grace Hopper","beta","unsafe"',
-      ].join('\n'),
+      ['"full name","select","quote""name"', '"Ada Lovelace","alpha","safe"', '"Grace Hopper","beta","unsafe"'].join(
+        '\n',
+      ),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
       sort: [{ column: 'full name', direction: 'desc' }],
-      filters: [
-        { column: 'quote"name', kind: 'text', operator: 'contains', value: `safe' OR 1=1 --` },
-      ],
+      filters: [{ column: 'quote"name', kind: 'text', operator: 'contains', value: `safe' OR 1=1 --` }],
     });
 
     expect(window.filteredRowCount).toBe(0);
@@ -426,15 +427,10 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   it('searches across columns and returns matching row counts', async () => {
     const workingCsv = await fixture.openSource(
       'search.csv',
-      [
-        'name,age,team',
-        'Ada,37,compiler',
-        'Grace,41,navy',
-        'Linus,54,kernel',
-        'Margaret,87,compiler',
-      ].join('\n'),
+      ['name,age,team', 'Ada,37,compiler', 'Grace,41,navy', 'Linus,54,kernel', 'Margaret,87,compiler'].join('\n'),
     );
-    const window = await workspace().getCsvRows({
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
@@ -448,17 +444,10 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   it('returns top Column Value Counts with percentages and deterministic ordering', async () => {
     const workingCsv = await fixture.openSource(
       'value-counts.csv',
-      [
-        'status,note',
-        'Open,one',
-        'open,two',
-        'Open,three',
-        'Closed,four',
-        'Closed,five',
-        'Pending,six',
-      ].join('\n'),
+      ['status,note', 'Open,one', 'open,two', 'Open,three', 'Closed,four', 'Closed,five', 'Pending,six'].join('\n'),
     );
-    const counts = await workspace().getCsvColumnValueCounts({
+    const counts = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: workingCsv.workingCsvId,
       column: 'status',
     });
@@ -481,13 +470,15 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'value-counts-blanks.csv',
       ['status,note', 'Open,one', ',edited empty', 'NULL,literal null', ',parsed null'].join('\n'),
     );
-    await workspace().editCsvCell({
+    await workspace().call({
+      operation: 'csv.edit-cell',
       workingCsvId: workingCsv.workingCsvId,
       rowId: '2',
       column: 'status',
       value: '',
     });
-    const counts = await workspace().getCsvColumnValueCounts({
+    const counts = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: workingCsv.workingCsvId,
       column: 'status',
     });
@@ -508,7 +499,8 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
     }
 
     const workingCsv = await fixture.openSource('value-counts-top-50.csv', rows.join('\n'));
-    const counts = await workspace().getCsvColumnValueCounts({
+    const counts = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: workingCsv.workingCsvId,
       column: 'code',
     });
@@ -532,18 +524,18 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       ].join('\n'),
     );
     const scope = {
-      filters: [
-        { column: 'team', kind: 'text', operator: 'equals', value: 'compiler' },
-      ] as const,
+      filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }] as const,
       search: 'a',
     };
-    const counts = await workspace().getCsvColumnValueCounts({
+    const counts = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: workingCsv.workingCsvId,
       column: 'status',
       filters: [...scope.filters],
       search: scope.search,
     });
-    const sortedRows = await workspace().getCsvRows({
+    const sortedRows = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
@@ -561,11 +553,9 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
   });
 
   it('returns an empty count list when Count Scope has no rows', async () => {
-    const workingCsv = await fixture.openSource(
-      'value-counts-empty-scope.csv',
-      ['status', 'Open'].join('\n'),
-    );
-    const counts = await workspace().getCsvColumnValueCounts({
+    const workingCsv = await fixture.openSource('value-counts-empty-scope.csv', ['status', 'Open'].join('\n'));
+    const counts = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       workingCsvId: workingCsv.workingCsvId,
       column: 'status',
       search: 'missing',
@@ -591,23 +581,32 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }] as const,
     };
 
-    await workspace().editCsvCell({ ...request, rowId: '2', column: 'status', value: 'Open' });
-    await workspace().insertCsvRow({ ...request, placement: 'append', rowIds: [], hasActiveQuery: false });
-    await workspace().editCsvCell({ ...request, rowId: '4', column: 'status', value: 'Pending' });
-    await workspace().editCsvCell({ ...request, rowId: '4', column: 'team', value: 'compiler' });
-    await workspace().deleteCsvRows({ ...request, rowIds: ['1'] });
+    await workspace().call({ operation: 'csv.edit-cell', ...request, rowId: '2', column: 'status', value: 'Open' });
+    await workspace().call({
+      operation: 'csv.insert-row',
+      ...request,
+      placement: 'append',
+      rowIds: [],
+      hasActiveQuery: false,
+    });
+    await workspace().call({ operation: 'csv.edit-cell', ...request, rowId: '4', column: 'status', value: 'Pending' });
+    await workspace().call({ operation: 'csv.edit-cell', ...request, rowId: '4', column: 'team', value: 'compiler' });
+    await workspace().call({ operation: 'csv.delete-rows', ...request, rowIds: ['1'] });
 
-    const afterChanges = await workspace().getCsvColumnValueCounts({
+    const afterChanges = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       ...countsRequest,
       filters: [...countsRequest.filters],
     });
-    await workspace().undoCsvEdit(request);
-    const afterUndo = await workspace().getCsvColumnValueCounts({
+    await workspace().call({ operation: 'csv.undo', ...request });
+    const afterUndo = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       ...countsRequest,
       filters: [...countsRequest.filters],
     });
-    await workspace().redoCsvEdit(request);
-    const afterRedo = await workspace().getCsvColumnValueCounts({
+    await workspace().call({ operation: 'csv.redo', ...request });
+    const afterRedo = await workspace().call({
+      operation: 'csv.get-column-value-counts',
       ...countsRequest,
       filters: [...countsRequest.filters],
     });
@@ -628,13 +627,15 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'search-clear.csv',
       ['name,team', 'Ada,compiler', 'Grace,navy'].join('\n'),
     );
-    const noResults = await workspace().getCsvRows({
+    const noResults = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
       search: 'missing',
     });
-    const cleared = await workspace().getCsvRows({
+    const cleared = await workspace().call({
+      operation: 'csv.get-rows',
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       limit: 10,
@@ -662,12 +663,14 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       limit: 10,
       filters: [{ column: 'age', kind: 'number', operator: 'greaterThan', value: 40 }] as const,
     };
-    const filteredSearch = await workspace().getCsvRows({
+    const filteredSearch = await workspace().call({
+      operation: 'csv.get-rows',
       ...request,
       filters: [...request.filters],
       search: 'compiler',
     });
-    const parameterizedSearch = await workspace().getCsvRows({
+    const parameterizedSearch = await workspace().call({
+      operation: 'csv.get-rows',
       ...request,
       filters: [...request.filters],
       search: `compiler%' OR 1=1 --`,

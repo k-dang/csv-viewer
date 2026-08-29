@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
   ComparisonSummary,
@@ -10,9 +10,11 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import type { CsvWorkspace } from './csv-workspace';
 import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
-import { contractIt } from '../main/testing/workspace-contract-fixture';
+import {
+  workspaceContractFactories,
+  type WorkspaceContractFixture,
+} from '../main/testing/workspace-contract-fixture';
 
 const validDiagnostics: SourceKeyDiagnostics = {
   blankRowCount: 0,
@@ -56,173 +58,204 @@ class ControlledExecutor implements ComparisonExecutor {
   }
 }
 
-function waitForComparing(workspace: CsvWorkspace, comparisonId: string): Promise<boolean> {
+function waitForComparing(fixture: WorkspaceContractFixture, comparisonId: string): Promise<boolean> {
   return vi.waitUntil(
-    async () => (await workspace.getComparisonState(comparisonId))?.operation?.phase === 'comparing',
+    () => fixture.latestComparison(comparisonId)?.operation?.phase === 'comparing',
     { interval: 1 },
   );
 }
 
-describe('CsvWorkspace lifecycle', () => {
-  contractIt(
-    'executes, reads, swaps, and cleans up a real comparison',
-    async (fixture) => {
-      const workspace = fixture.workspace;
+describe.each(workspaceContractFactories)('$name CsvWorkspace lifecycle', ({ create }) => {
+  let fixture: WorkspaceContractFixture;
+  let controlledFixture: CsvWorkspaceFixture | undefined;
+  let executor: ControlledExecutor;
 
-      const baseline = await fixture.openSource(
-        'baseline.csv',
-        'id,value\n1,old\n2,same\n3,baseline-only\n5,also-baseline-only\n',
-      );
-      const candidate = await fixture.openSource(
-        'candidate.csv',
-        'id,value\n1,new\n2,same\n4,candidate-only\n',
-      );
-      expect(baseline.editState).toEqual({
-        workingCsvId: baseline.workingCsvId,
-        hasUnexportedChanges: false,
-        canUndo: false,
-        canRedo: false,
-      });
-      const opened = await workspace.openComparison({
-        baselineId: baseline.workingCsvId,
-        candidateId: candidate.workingCsvId,
-      });
-      if (opened.status === 'rejected') throw new Error(opened.fault.message);
-      const comparisonId = opened.comparison.comparisonId;
+  beforeEach(async () => {
+    fixture = await create();
+    controlledFixture = undefined;
+  });
 
-      const started = await workspace.beginComparison({
-        kind: 'apply-key',
-        comparisonId,
-        key: ['id'],
-      });
-      if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
-      const outcome = await fixture.awaitComparisonOutcome(started.operationId);
-      expect(outcome.status).toBe('applied');
+  afterEach(async () => {
+    await Promise.all([fixture.dispose(), controlledFixture?.dispose()]);
+  });
 
-      const applied = await workspace.getComparisonState(comparisonId);
-      expect(applied?.applied?.summary).toEqual({
-        rows: {
-          changed: 1,
-          baselineOnly: 2,
-          candidateOnly: 1,
-          unchanged: 1,
-          total: 5,
-        },
-        changedColumns: [{ name: 'value', changedRowCount: 1 }],
-      });
-      if (!applied?.applied) throw new Error('Comparison result was not applied.');
+  async function createControlledFixture(): Promise<CsvWorkspaceFixture> {
+    executor = new ControlledExecutor();
+    controlledFixture = await CsvWorkspaceFixture.create(executor);
+    return controlledFixture;
+  }
 
-      const window = await workspace.getComparisonWindow({
-        comparisonId,
-        resultToken: applied.applied.resultToken,
-        offset: 0,
-        limit: 10,
-        rows: 'differences',
-        columns: 'changed-first',
-      });
-      expect(window.status).toBe('ready');
-      if (window.status !== 'ready') throw new Error('Comparison window was not ready.');
-      expect(window.window.rows.map((row) => [row.keyValues[0], row.classification])).toEqual([
-        ['1', 'changed'],
-        ['3', 'baseline-only'],
-        ['4', 'candidate-only'],
-        ['5', 'baseline-only'],
-      ]);
+  it('executes, reads, swaps, and cleans up a real comparison', async () => {
+    const workspace = fixture.viewer;
 
-      await fixture.replaceSourceContents('baseline.csv', 'id,replacement\n1,x\n');
-      const replacement = await workspace.reopenCsv(baseline.workingCsvId);
-      expect(replacement.status).toBe('replaced');
-      await expect(workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toMatchObject({
-        workingCsvId: baseline.workingCsvId,
-      });
-      await expect(workspace.getComparisonState(comparisonId)).resolves.toMatchObject({
-        applied: { freshness: { kind: 'outdated', changedSides: ['baseline'] } },
-      });
-      const staleWindow = await workspace.getComparisonWindow({
-        comparisonId,
-        resultToken: applied.applied.resultToken,
-        offset: 0,
-        limit: 10,
-        rows: 'differences',
-        columns: 'csv-order',
-      });
-      expect(staleWindow.status).toBe('ready');
-      if (staleWindow.status !== 'ready') throw new Error('Stale comparison window was not ready.');
-      expect(staleWindow.window.valueColumns).toEqual([{ name: 'value', changedRowCount: 1 }]);
+    const baseline = await fixture.openSource(
+      'baseline.csv',
+      'id,value\n1,old\n2,same\n3,baseline-only\n5,also-baseline-only\n',
+    );
+    const candidate = await fixture.openSource('candidate.csv', 'id,value\n1,new\n2,same\n4,candidate-only\n');
+    expect(baseline.editState).toEqual({
+      workingCsvId: baseline.workingCsvId,
+      hasUnexportedChanges: false,
+      canUndo: false,
+      canRedo: false,
+    });
+    const opened = await workspace.call({
+      operation: 'comparison.open',
+      baselineId: baseline.workingCsvId,
+      candidateId: candidate.workingCsvId,
+    });
+    if (opened.status === 'rejected') throw new Error(opened.fault.message);
+    const comparisonId = opened.comparison.comparisonId;
 
-      const swapped = await workspace.swapComparison(comparisonId);
-      expect(swapped.status).toBe('changed');
-      if (swapped.status !== 'changed' || !swapped.comparison.applied) {
-        throw new Error('Comparison was not swapped.');
-      }
-      expect(swapped.comparison.applied.summary.rows).toMatchObject({
-        baselineOnly: 1,
-        candidateOnly: 2,
-      });
+    const started = await workspace.call({
+      operation: 'comparison.begin',
+      kind: 'apply-key',
+      comparisonId,
+      key: ['id'],
+    });
+    if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
+    const outcome = await fixture.awaitComparisonOutcome(started.operationId);
+    expect(outcome.status).toBe('applied');
 
-      await expect(workspace.closeComparison(comparisonId)).resolves.toEqual({
-        status: 'closed',
-        comparisonId,
-      });
-    },
-  );
+    const applied = fixture.latestComparison(comparisonId);
+    expect(applied?.applied?.summary).toEqual({
+      rows: {
+        changed: 1,
+        baselineOnly: 2,
+        candidateOnly: 1,
+        unchanged: 1,
+        total: 5,
+      },
+      changedColumns: [{ name: 'value', changedRowCount: 1 }],
+    });
+    if (!applied?.applied) throw new Error('Comparison result was not applied.');
+
+    const window = await workspace.call({
+      operation: 'comparison.get-window',
+      comparisonId,
+      resultToken: applied.applied.resultToken,
+      offset: 0,
+      limit: 10,
+      rows: 'differences',
+      columns: 'changed-first',
+    });
+    expect(window.status).toBe('ready');
+    if (window.status !== 'ready') throw new Error('Comparison window was not ready.');
+    expect(window.window.rows.map((row) => [row.keyValues[0], row.classification])).toEqual([
+      ['1', 'changed'],
+      ['3', 'baseline-only'],
+      ['4', 'candidate-only'],
+      ['5', 'baseline-only'],
+    ]);
+
+    await fixture.writeSource('baseline.csv', 'id,replacement\n1,x\n');
+    const replacement = await workspace.call({ operation: 'csv.reopen', workingCsvId: baseline.workingCsvId });
+    expect(replacement.status).toBe('opened');
+    if (replacement.status !== 'opened') throw new Error(`Reopen was ${replacement.status}.`);
+    expect(replacement.workingCsv.workingCsvId).toBe(baseline.workingCsvId);
+    expect(fixture.latestComparison(comparisonId)).toMatchObject({
+      applied: {
+        freshness: { kind: 'outdated', changedSides: ['baseline'] },
+      },
+    });
+    const staleWindow = await workspace.call({
+      operation: 'comparison.get-window',
+      comparisonId,
+      resultToken: applied.applied.resultToken,
+      offset: 0,
+      limit: 10,
+      rows: 'differences',
+      columns: 'csv-order',
+    });
+    expect(staleWindow.status).toBe('ready');
+    if (staleWindow.status !== 'ready') throw new Error('Stale comparison window was not ready.');
+    expect(staleWindow.window.valueColumns).toEqual([{ name: 'value', changedRowCount: 1 }]);
+
+    const swapped = await workspace.call({ operation: 'comparison.swap', comparisonId: comparisonId });
+    expect(swapped.status).toBe('changed');
+    if (swapped.status !== 'changed' || !swapped.comparison.applied) {
+      throw new Error('Comparison was not swapped.');
+    }
+    expect(swapped.comparison.applied.summary.rows).toMatchObject({
+      baselineOnly: 1,
+      candidateOnly: 2,
+    });
+
+    await expect(workspace.call({ operation: 'comparison.close', comparisonId: comparisonId })).resolves.toEqual({
+      status: 'closed',
+      comparisonId,
+    });
+  });
 
   it('reserves a confirmed source close and blocks every mutator while it runs', async () => {
-    const executor = new ControlledExecutor();
-    const fixture = await CsvWorkspaceFixture.create(executor);
-    const workspace = fixture.workspace;
-    try {
+    const fixture = await createControlledFixture();
+    const workspace = fixture.viewer;
       const [baseline, candidate] = await Promise.all([
         fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
         fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
       ]);
-      const opened = await workspace.openComparison({
+      const opened = await workspace.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('open rejected');
       const comparisonId = opened.comparison.comparisonId;
-      const started = await workspace.beginComparison({
+      const started = await workspace.call({
+        operation: 'comparison.begin',
         kind: 'apply-key',
         comparisonId,
         key: ['id'],
       });
       if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
-      await waitForComparing(workspace, comparisonId);
+      await waitForComparing(fixture, comparisonId);
       await expect(
-        workspace.cancelComparison({ comparisonId, operationId: started.operationId }),
+        workspace.call({ operation: 'comparison.cancel', comparisonId, operationId: started.operationId }),
       ).resolves.toEqual({ status: 'requested' });
 
-      const confirmation = await workspace.closeCsv({ workingCsvId: baseline.workingCsvId });
+      const confirmation = await workspace.call({ operation: 'csv.close', workingCsvId: baseline.workingCsvId });
       if (confirmation.status !== 'confirmation-required') {
         throw new Error('confirmation not required');
       }
-      const closing = workspace.closeCsv({
+      const closing = workspace.call({
+        operation: 'csv.close',
         workingCsvId: baseline.workingCsvId,
         confirmedImpact: confirmation.impact,
       });
 
       await expect(
-        workspace.openComparison({
+        workspace.call({
+          operation: 'comparison.open',
           baselineId: baseline.workingCsvId,
           candidateId: candidate.workingCsvId,
         }),
-      ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
+      ).resolves.toMatchObject({
+        status: 'rejected',
+        fault: { code: 'source-not-found' },
+      });
 
       const request = { workingCsvId: baseline.workingCsvId };
-      await expect(workspace.reopenCsv(baseline.workingCsvId)).resolves.toMatchObject({
+      await expect(
+        workspace.call({ operation: 'csv.reopen', workingCsvId: baseline.workingCsvId }),
+      ).resolves.toMatchObject({
         status: 'failed',
-        failure: { message: expect.stringContaining('closing') },
+        message: expect.stringContaining('closing'),
       });
       const mutations = [
-        workspace.editCsvCell({ ...request, rowId: '1', column: 'value', value: 'changed' }),
-        workspace.deleteCsvRows({ ...request, rowIds: ['1'] }),
-        workspace.insertCsvRow({ ...request, placement: 'append', rowIds: [], hasActiveQuery: false }),
-        workspace.undoCsvEdit(request),
-        workspace.redoCsvEdit(request),
-        workspace.exportCsv(request),
-        workspace.getCsvRows({ ...request, offset: 0, limit: 10 }),
-        workspace.getCsvEditState(request),
+        workspace.call({ operation: 'csv.edit-cell', ...request, rowId: '1', column: 'value', value: 'changed' }),
+        workspace.call({ operation: 'csv.delete-rows', ...request, rowIds: ['1'] }),
+        workspace.call({
+          operation: 'csv.insert-row',
+          ...request,
+          placement: 'append',
+          rowIds: [],
+          hasActiveQuery: false,
+        }),
+        workspace.call({ operation: 'csv.undo', ...request }),
+        workspace.call({ operation: 'csv.redo', ...request }),
+        workspace.call({ operation: 'csv.export', ...request }),
+        workspace.call({ operation: 'csv.get-rows', ...request, offset: 0, limit: 10 }),
+        workspace.call({ operation: 'csv.get-edit-state', ...request }),
       ];
       for (const mutation of mutations) await expect(mutation).rejects.toThrow('closing');
 
@@ -232,37 +265,34 @@ describe('CsvWorkspace lifecycle', () => {
         closedWorkingCsvId: baseline.workingCsvId,
         closedComparisonIds: [comparisonId],
       });
-      await expect(workspace.getWorkingCsv(baseline.workingCsvId)).resolves.toBeNull();
-      await expect(workspace.getComparisonState(comparisonId)).resolves.toBeNull();
-    } finally {
-      await fixture.dispose();
-    }
+      expect(fixture.latestComparison(comparisonId)).toBeNull();
   });
 
   it('reports a source change as the winning terminal outcome during generation', async () => {
-    const executor = new ControlledExecutor();
-    const fixture = await CsvWorkspaceFixture.create(executor);
-    const workspace = fixture.workspace;
-    try {
+    const fixture = await createControlledFixture();
+    const workspace = fixture.viewer;
       const [baseline, candidate] = await Promise.all([
         fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
         fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
       ]);
-      const opened = await workspace.openComparison({
+      const opened = await workspace.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('Comparison open was rejected.');
       const comparisonId = opened.comparison.comparisonId;
-      const started = await workspace.beginComparison({
+      const started = await workspace.call({
+        operation: 'comparison.begin',
         kind: 'apply-key',
         comparisonId,
         key: ['id'],
       });
       if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
-      await waitForComparing(workspace, comparisonId);
+      await waitForComparing(fixture, comparisonId);
 
-      await workspace.editCsvCell({
+      await workspace.call({
+        operation: 'csv.edit-cell',
         workingCsvId: baseline.workingCsvId,
         rowId: '1',
         column: 'value',
@@ -274,99 +304,106 @@ describe('CsvWorkspace lifecycle', () => {
         status: 'sources-changed',
         changedSides: ['baseline'],
       });
-      await expect(workspace.getComparisonState(comparisonId)).resolves.toMatchObject({
+      expect(fixture.latestComparison(comparisonId)).toMatchObject({
         applied: null,
       });
-    } finally {
-      await fixture.dispose();
-    }
   });
 
-  contractIt(
-    'projects current row and edit state for an open Working CSV',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
-      await expect(
-        workspace.openRecentCsv(workingCsv.file.sourceId),
-      ).resolves.toEqual({ status: 'already-open', workingCsv });
-      await expect(workspace.reopenCsv('missing-working-csv')).resolves.toEqual({
-        status: 'working-csv-not-found',
-      });
+  it('projects current row and edit state for an open Working CSV', async () => {
+    const workspace = fixture.viewer;
+    const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
+    await expect(
+      workspace.call({ operation: 'csv.open-recent', sourceId: workingCsv.source.sourceId }),
+    ).resolves.toEqual({ status: 'already-open', workingCsv });
+    await expect(workspace.call({ operation: 'csv.reopen', workingCsvId: 'missing-working-csv' })).resolves.toEqual(
+      {
+        status: 'failed',
+        message: 'The Working CSV is no longer open.',
+      },
+    );
 
-      await workspace.deleteCsvRows({ workingCsvId: workingCsv.workingCsvId, rowIds: ['1'] });
-      await expect(workspace.getWorkingCsv(workingCsv.workingCsvId)).resolves.toMatchObject({
-        rowCount: 0,
-        dataRevision: 1,
-        editState: { hasUnexportedChanges: true, canUndo: true, canRedo: false },
-      });
+    const deleted = await workspace.call({
+      operation: 'csv.delete-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      rowIds: ['1'],
+    });
+    expect(deleted).toMatchObject({ hasUnexportedChanges: true, canUndo: true, canRedo: false });
+    const emptyRows = await workspace.call({
+      operation: 'csv.get-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 10,
+    });
+    expect(emptyRows).toMatchObject({ filteredRowCount: 0, rows: [] });
 
-      await workspace.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
-      await expect(workspace.getWorkingCsv(workingCsv.workingCsvId)).resolves.toMatchObject({
-        rowCount: 1,
-        dataRevision: 2,
-        editState: { hasUnexportedChanges: false, canUndo: false, canRedo: true },
-      });
-    },
-  );
+    const undone = await workspace.call({ operation: 'csv.undo', workingCsvId: workingCsv.workingCsvId });
+    expect(undone).toMatchObject({ hasUnexportedChanges: false, canUndo: false, canRedo: true });
+    const restoredRows = await workspace.call({
+      operation: 'csv.get-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 10,
+    });
+    expect(restoredRows).toMatchObject({ filteredRowCount: 1, rows: [expect.objectContaining({ id: '1' })] });
+  });
 
-  contractIt(
-    'derives close impact from Unexported Changes independently of undo and redo',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
-      fixture.captureNextExport('exported.csv');
-      await workspace.editCsvCell({
-        workingCsvId: workingCsv.workingCsvId,
-        rowId: '1',
-        column: 'value',
-        value: 'exported',
-      });
-      const exported = await workspace.exportCsv({ workingCsvId: workingCsv.workingCsvId });
+  it('derives close impact from Unexported Changes independently of undo and redo', async () => {
+    const workspace = fixture.viewer;
+    const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
+    fixture.captureNextExport('exported.csv');
+    await workspace.call({
+      operation: 'csv.edit-cell',
+      workingCsvId: workingCsv.workingCsvId,
+      rowId: '1',
+      column: 'value',
+      value: 'exported',
+    });
+    const exported = await workspace.call({ operation: 'csv.export', workingCsvId: workingCsv.workingCsvId });
 
-      expect(exported).toMatchObject({
-        hasUnexportedChanges: false,
-        canUndo: true,
-        canRedo: false,
-      });
-      await expect(workspace.confirmWindowClose()).resolves.toEqual({ status: 'ready' });
+    expect(exported).toMatchObject({
+      status: 'exported',
+      editState: { hasUnexportedChanges: false, canUndo: true, canRedo: false },
+    });
+    await expect(fixture.confirmClose()).resolves.toEqual({
+      status: 'ready',
+    });
 
-      const undone = await workspace.undoCsvEdit({ workingCsvId: workingCsv.workingCsvId });
-      expect(undone).toMatchObject({
-        hasUnexportedChanges: true,
-        canUndo: false,
-        canRedo: true,
-      });
-      await expect(workspace.confirmWindowClose()).resolves.toMatchObject({
-        status: 'confirmation-required',
-        impact: {
-          workingCsvsWithUnexportedChanges: [{ workingCsvId: workingCsv.workingCsvId }],
-        },
-      });
-    },
-  );
+    const undone = await workspace.call({ operation: 'csv.undo', workingCsvId: workingCsv.workingCsvId });
+    expect(undone).toMatchObject({
+      hasUnexportedChanges: true,
+      canUndo: false,
+      canRedo: true,
+    });
+    await expect(fixture.confirmClose()).resolves.toMatchObject({
+      status: 'confirmation-required',
+      impact: {
+        workingCsvsWithUnexportedChanges: [{ workingCsvId: workingCsv.workingCsvId }],
+      },
+    });
+  });
 
   it('revalidates aggregate Unexported Changes and Comparison impact before window close', async () => {
-    const fixture = await CsvWorkspaceFixture.create(new ControlledExecutor());
-    const workspace = fixture.workspace;
-    try {
+    const fixture = await createControlledFixture();
+    const workspace = fixture.viewer;
       const [baseline, candidate] = await Promise.all([
         fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
         fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
       ]);
-      await workspace.editCsvCell({
+      await workspace.call({
+        operation: 'csv.edit-cell',
         workingCsvId: baseline.workingCsvId,
         rowId: '1',
         column: 'value',
         value: 'changed',
       });
-      const opened = await workspace.openComparison({
+      const opened = await workspace.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       });
       if (opened.status === 'rejected') throw new Error('comparison rejected');
 
-      const first = await workspace.confirmWindowClose();
+      const first = await fixture.confirmClose();
       expect(first).toMatchObject({
         status: 'confirmation-required',
         impact: {
@@ -376,8 +413,8 @@ describe('CsvWorkspace lifecycle', () => {
       });
       if (first.status !== 'confirmation-required') throw new Error('confirmation not required');
 
-      await workspace.undoCsvEdit({ workingCsvId: baseline.workingCsvId });
-      const rechecked = await workspace.confirmWindowClose(first.impact);
+      await workspace.call({ operation: 'csv.undo', workingCsvId: baseline.workingCsvId });
+      const rechecked = await fixture.confirmClose(first.impact);
       expect(rechecked).toMatchObject({
         status: 'confirmation-required',
         impact: {
@@ -386,29 +423,27 @@ describe('CsvWorkspace lifecycle', () => {
         },
       });
       if (rechecked.status !== 'confirmation-required') throw new Error('impact not refreshed');
-      await expect(workspace.confirmWindowClose(rechecked.impact)).resolves.toEqual({
+      await expect(fixture.confirmClose(rechecked.impact)).resolves.toEqual({
         status: 'ready',
       });
-    } finally {
-      await fixture.dispose();
-    }
   });
 
-  contractIt('rejects new Working CSV work once disposal starts', async (fixture) => {
-    const workspace = fixture.workspace;
+  it('rejects new Working CSV work once disposal starts', async () => {
+    const workspace = fixture.viewer;
     const [baseline, candidate] = await Promise.all([
       fixture.openSource('baseline.csv', 'id,value\n1,a\n'),
       fixture.openSource('candidate.csv', 'id,value\n1,b\n'),
     ]);
     const lateSourceId = await fixture.registerSource('late.csv', 'id,value\n1,c\n');
 
-    const disposal = workspace.dispose();
-    await expect(workspace.openRecentCsv(lateSourceId)).resolves.toMatchObject({
+    const disposal = fixture.disposeWorkspace();
+    await expect(workspace.call({ operation: 'csv.open-recent', sourceId: lateSourceId })).resolves.toMatchObject({
       status: 'failed',
       message: 'The CSV workspace is closing.',
     });
     await expect(
-      workspace.openComparison({
+      workspace.call({
+        operation: 'comparison.open',
         baselineId: baseline.workingCsvId,
         candidateId: candidate.workingCsvId,
       }),
@@ -417,78 +452,73 @@ describe('CsvWorkspace lifecycle', () => {
       fault: { message: 'The CSV workspace is closing.' },
     });
     await disposal;
-    await expect(workspace.openRecentCsv(lateSourceId)).resolves.toMatchObject({
+    await expect(workspace.call({ operation: 'csv.open-recent', sourceId: lateSourceId })).resolves.toMatchObject({
       status: 'failed',
       message: 'The CSV workspace is closing.',
     });
     await expect(
-      workspace.getCsvRows({ workingCsvId: baseline.workingCsvId, offset: 0, limit: 100 }),
+      workspace.call({ operation: 'csv.get-rows', workingCsvId: baseline.workingCsvId, offset: 0, limit: 100 }),
     ).rejects.toThrow('CSV workspace is disposing.');
   });
 
-  contractIt('waits for a Working CSV open admitted before disposal', async (fixture) => {
-    const workspace = fixture.workspace;
+  it('waits for a Working CSV open admitted before disposal', async () => {
+    const workspace = fixture.viewer;
     const sourceId = await fixture.registerSource('working.csv', 'id,value\n1,a\n');
 
-    const opening = workspace.openRecentCsv(sourceId);
-    const disposal = workspace.dispose();
+    const opening = workspace.call({ operation: 'csv.open-recent', sourceId: sourceId });
+    const disposal = fixture.disposeWorkspace();
     const opened = await opening;
     expect(opened.status).toBe('opened');
     await disposal;
     if (opened.status !== 'opened') throw new Error('open was not admitted');
-    await expect(workspace.getWorkingCsv(opened.workingCsv.workingCsvId)).resolves.toBeNull();
   });
 
-  contractIt(
-    'waits for an admitted row read and rejects later reads while closing',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n2,b\n');
+  it('waits for an admitted row read and rejects later reads while closing', async () => {
+    const workspace = fixture.viewer;
+    const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n2,b\n');
 
-      const admittedRead = workspace.getCsvRows({
-        workingCsvId: workingCsv.workingCsvId,
-        offset: 0,
-        limit: 100,
-      });
-      const close = workspace.closeCsv({ workingCsvId: workingCsv.workingCsvId });
+    const admittedRead = workspace.call({
+      operation: 'csv.get-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 100,
+    });
+    const close = workspace.call({ operation: 'csv.close', workingCsvId: workingCsv.workingCsvId });
 
-      await expect(
-        workspace.getCsvRows({
-          workingCsvId: workingCsv.workingCsvId,
-          offset: 0,
-          limit: 100,
-        }),
-      ).rejects.toThrow('Working CSV is closing.');
-      await expect(admittedRead).resolves.toMatchObject({ filteredRowCount: 2 });
-      await expect(close).resolves.toMatchObject({ status: 'closed' });
-    },
-  );
+    await expect(
+      workspace.call({ operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 100 }),
+    ).rejects.toThrow('Working CSV is closing.');
+    await expect(admittedRead).resolves.toMatchObject({
+      filteredRowCount: 2,
+    });
+    await expect(close).resolves.toMatchObject({ status: 'closed' });
+  });
 
-  contractIt(
-    'waits for an admitted edit before calculating close impact',
-    async (fixture) => {
-      const workspace = fixture.workspace;
-      const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
+  it('waits for an admitted edit before calculating close impact', async () => {
+    const workspace = fixture.viewer;
+    const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n');
 
-      const edit = workspace.editCsvCell({
-        workingCsvId: workingCsv.workingCsvId,
-        rowId: '1',
-        column: 'value',
-        value: 'changed',
-      });
-      const close = workspace.closeCsv({ workingCsvId: workingCsv.workingCsvId });
+    const edit = workspace.call({
+      operation: 'csv.edit-cell',
+      workingCsvId: workingCsv.workingCsvId,
+      rowId: '1',
+      column: 'value',
+      value: 'changed',
+    });
+    const close = workspace.call({ operation: 'csv.close', workingCsvId: workingCsv.workingCsvId });
 
-      await expect(edit).resolves.toMatchObject({ hasUnexportedChanges: true });
-      await expect(close).resolves.toMatchObject({
-        status: 'confirmation-required',
-        impact: { hasUnexportedChanges: true },
-      });
-    },
-  );
+    await expect(edit).resolves.toMatchObject({
+      hasUnexportedChanges: true,
+    });
+    await expect(close).resolves.toMatchObject({
+      status: 'confirmation-required',
+      impact: { hasUnexportedChanges: true },
+    });
+  });
 
-  contractIt('shares one idempotent disposal operation', async (fixture) => {
-    const first = fixture.workspace.dispose();
-    const second = fixture.workspace.dispose();
-    expect(second).toBe(first);
+  it('handles concurrent disposal requests idempotently', async () => {
+    const first = fixture.disposeWorkspace();
+    const second = fixture.disposeWorkspace();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
   });
 });

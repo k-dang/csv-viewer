@@ -18,18 +18,10 @@ import type {
   ComparisonView,
 } from '../../shared/csv-viewer-contract';
 import { orderComparisonValueColumns } from '../../shared/comparison-presentation';
-import {
-  comparisonGridRequestBounds,
-  createComparisonGridDataSource,
-} from './comparison-grid-data-source';
-import { useCsvViewerRuntime } from '../csv-viewer-runtime';
+import { comparisonGridRequestBounds, createComparisonGridDataSource } from './comparison-grid-data-source';
+import { useCsvViewer } from '../csv-viewer';
 
-ModuleRegistry.registerModules([
-  CellStyleModule,
-  ColumnApiModule,
-  InfiniteRowModelModule,
-  RenderApiModule,
-]);
+ModuleRegistry.registerModules([CellStyleModule, ColumnApiModule, InfiniteRowModelModule, RenderApiModule]);
 
 type DisplayValue = {
   kind: 'value' | 'null' | 'empty' | 'missing';
@@ -76,16 +68,13 @@ export function ComparisonGrid({
   columnsMode: ComparisonColumnsMode;
   themeMode: 'light' | 'dark';
 }) {
-  const runtime = useCsvViewerRuntime();
+  const viewer = useCsvViewer();
   const activeResultToken = useRef(applied.resultToken);
   useEffect(() => {
     activeResultToken.current = applied.resultToken;
   }, [applied.resultToken]);
   const changedCounts = useMemo(
-    () =>
-      new Map(
-        applied.summary.changedColumns.map((column) => [column.name, column.changedRowCount]),
-      ),
+    () => new Map(applied.summary.changedColumns.map((column) => [column.name, column.changedRowCount])),
     [applied.summary.changedColumns],
   );
   const valueColumns = useMemo(
@@ -107,16 +96,11 @@ export function ComparisonGrid({
         pinned: 'left',
         lockPinned: true,
         width: 132,
-        cellClass: (params) =>
-          params.value === 'changed' ? 'comparison-result-cell--changed' : undefined,
+        cellClass: (params) => (params.value === 'changed' ? 'comparison-result-cell--changed' : undefined),
         cellRenderer: (params: ICellRendererParams<GridComparisonRow, string>) => {
           const value = String(params.value ?? '');
           const label = value.replace('-', ' ');
-          return (
-            <span className={`comparison-classification comparison-classification--${value}`}>
-              {label}
-            </span>
-          );
+          return <span className={`comparison-classification comparison-classification--${value}`}>{label}</span>;
         },
       },
       ...applied.key.map(
@@ -145,7 +129,7 @@ export function ComparisonGrid({
   const dataSource = useMemo(
     () =>
       createComparisonGridDataSource(
-        runtime,
+        viewer,
         {
           comparisonId: comparison.comparisonId,
           resultToken: applied.resultToken,
@@ -155,7 +139,7 @@ export function ComparisonGrid({
         () => activeResultToken.current,
         toGridRow,
       ),
-    [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode, runtime],
+    [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode, viewer],
   );
 
   return (
@@ -197,9 +181,7 @@ function valueColumn(field: string, headerName: string): ColDef<GridComparisonRo
     minWidth: 160,
     cellClass: (params) => {
       const value = params.value;
-      return value?.changed
-        ? `comparison-cell comparison-cell--changed-${value.side}`
-        : 'comparison-cell';
+      return value?.changed ? `comparison-cell comparison-cell--changed-${value.side}` : 'comparison-cell';
     },
     cellRenderer: (params: ICellRendererParams<GridComparisonRow, DisplayValue>) => {
       const value = params.value;
@@ -208,9 +190,7 @@ function valueColumn(field: string, headerName: string): ColDef<GridComparisonRo
         <span className="group/cell flex w-full items-center gap-2">
           <span className="min-w-0 flex-1 truncate">
             <span className="sr-only">{value.changed ? `${value.side} changed value: ` : ''}</span>
-            <span className={value.kind === 'value' ? '' : 'italic text-muted-foreground'}>
-              {value.text}
-            </span>
+            <span className={value.kind === 'value' ? '' : 'italic text-muted-foreground'}>{value.text}</span>
             <span className="sr-only">. Press Enter to copy this value.</span>
           </span>
           <button

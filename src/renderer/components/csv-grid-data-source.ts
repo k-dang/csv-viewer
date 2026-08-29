@@ -6,12 +6,12 @@ import type {
   WorkingCsvView,
   CsvSortDescriptor,
   CsvTextFilterOperator,
-  CsvViewerRuntime,
+  CsvViewer,
 } from '../../shared/csv-viewer-contract';
 
 export function createCsvGridDataSource(
   workingCsv: WorkingCsvView,
-  runtime: Pick<CsvViewerRuntime, 'getCsvRows'>,
+  viewer: Pick<CsvViewer, 'call'>,
   onFilteredRowCount?: (rowCount: number) => void,
   search = '',
   requestState: { latestRequestId: number } = { latestRequestId: 0 },
@@ -32,8 +32,14 @@ export function createCsvGridDataSource(
 
       onQueryState?.('querying');
 
-      runtime
-        .getCsvRows({ workingCsvId: workingCsv.workingCsvId, offset, limit, ...query })
+      viewer
+        .call({
+          operation: 'csv.get-rows',
+          workingCsvId: workingCsv.workingCsvId,
+          offset,
+          limit,
+          ...query,
+        })
         .then((window) => {
           if (requestId !== requestState.latestRequestId) {
             return;
@@ -116,8 +122,7 @@ function toCsvFilterDescriptor(column: string, model: AgFilterCondition): CsvFil
         kind: 'number',
         operator: toNumberOperator(type),
         value: typeof model.filter === 'number' ? model.filter : Number(model.filter),
-        valueTo:
-          model.filterTo === null || model.filterTo === undefined ? undefined : Number(model.filterTo),
+        valueTo: model.filterTo === null || model.filterTo === undefined ? undefined : Number(model.filterTo),
       },
     ];
   }

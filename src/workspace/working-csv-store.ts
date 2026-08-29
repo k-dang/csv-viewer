@@ -8,26 +8,19 @@ import type {
   CsvDeleteRowsRequest,
   CsvDialectOptions,
   CsvEditState,
+  CsvExportOutcome,
   CsvEditStateRequest,
   CsvInsertRowRequest,
   CsvRowWindow,
   CsvRowWindowRequest,
   CsvSourceId,
-  OpenWorkingCsvOutcome,
-  ReplaceWorkingCsvOutcome,
-  WorkingCsvFailure,
   WorkingCsvId,
   WorkingCsvView,
 } from '../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from './comparison-executor';
 import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
-import {
-  assertKnownColumn,
-  buildColumnValueCountsQuery,
-  buildRowsQuery,
-  maxRowWindowLimit,
-} from './csv-query';
+import { assertKnownColumn, buildColumnValueCountsQuery, buildRowsQuery, maxRowWindowLimit } from './csv-query';
 import { normalizeCellValue, normalizeCount, normalizeRow } from './csv-result-normalization';
 import {
   applyCellValue,
@@ -47,6 +40,23 @@ import { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 import { DuckDbComparisonExecutor } from './duckdb/duckdb-comparison-executor';
 import { CsvSourceUnavailableError, type CsvWorkspaceHost } from './workspace-host';
 import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
+
+type WorkingCsvFailure = {
+  code: 'open-failed' | 'replace-failed';
+  message: string;
+  retryable: boolean;
+};
+
+type OpenWorkingCsvOutcome =
+  | { status: 'opened'; workingCsv: WorkingCsvView }
+  | { status: 'existing'; workingCsv: WorkingCsvView }
+  | { status: 'failed'; failure: WorkingCsvFailure };
+
+type ReplaceWorkingCsvOutcome =
+  | { status: 'replaced'; workingCsv: WorkingCsvView }
+  | { status: 'revision-changed'; workingCsv: WorkingCsvView }
+  | { status: 'working-csv-not-found' }
+  | { status: 'failed'; failure: WorkingCsvFailure };
 
 const workingCsvTablePrefix = 'csv_working_';
 
@@ -95,10 +105,7 @@ export class WorkingCsvStore {
     }
   }
 
-  private async openWorkingCsv(
-    sourceId: CsvSourceId,
-    options: CsvDialectOptions = {},
-  ): Promise<WorkingCsvView> {
+  private async openWorkingCsv(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Promise<WorkingCsvView> {
     const releaseWork = this.acquireWorkspaceWork();
     try {
       if (this.findBySource(sourceId)) throw new Error('CSV file is already open.');
@@ -184,6 +191,7 @@ export class WorkingCsvStore {
 
   async replace(
     workingCsvId: WorkingCsvId,
+    expectedDataRevision: number,
     options: CsvDialectOptions = {},
   ): Promise<ReplaceWorkingCsvOutcome> {
     if (this.lifecycle !== 'active') {
@@ -191,10 +199,7 @@ export class WorkingCsvStore {
     }
     if (!this.workingCsvs.has(workingCsvId)) return { status: 'working-csv-not-found' };
     try {
-      return {
-        status: 'replaced',
-        workingCsv: await this.replaceWorkingCsv(workingCsvId, options),
-      };
+      return await this.replaceWorkingCsv(workingCsvId, expectedDataRevision, options);
     } catch (error) {
       return { status: 'failed', failure: workingCsvFailure('replace-failed', error) };
     }
@@ -202,9 +207,16 @@ export class WorkingCsvStore {
 
   private async replaceWorkingCsv(
     workingCsvId: WorkingCsvId,
+    expectedDataRevision: number,
     options: CsvDialectOptions = {},
-  ): Promise<WorkingCsvView> {
+  ): Promise<
+    { status: 'replaced'; workingCsv: WorkingCsvView } | { status: 'revision-changed'; workingCsv: WorkingCsvView }
+  > {
     return this.withWorkingCsvMutation(workingCsvId, async (existing) => {
+      if (existing.metadata.dataRevision !== expectedDataRevision) {
+        return { status: 'revision-changed', workingCsv: buildWorkingCsvView(existing) };
+      }
+
       const state = await this.createWorkingCsv(
         existing.sourceId,
         options,
@@ -217,7 +229,7 @@ export class WorkingCsvStore {
       this.artifactRegistry.transition(state.tableName, 'current');
       this.workingCsvs.set(workingCsvId, state);
       this.commitDataChange(state);
-      return buildWorkingCsvView(state);
+      return { status: 'replaced', workingCsv: buildWorkingCsvView(state) };
     });
   }
 
@@ -436,17 +448,11 @@ export class WorkingCsvStore {
     return this.stepHistory(workingCsvId, 'redo');
   }
 
-  private async stepHistory(
-    workingCsvId: WorkingCsvId,
-    direction: 'undo' | 'redo',
-  ): Promise<CsvEditState> {
+  private async stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Promise<CsvEditState> {
     return this.withWorkingCsvMutation(workingCsvId, async (state) => {
       const table = this.tableFor(state);
       const replay = (entry: CsvEditCommand) => runEditCommand(table, entry, direction);
-      const command =
-        direction === 'undo'
-          ? await state.history.undo(replay)
-          : await state.history.redo(replay);
+      const command = direction === 'undo' ? await state.history.undo(replay) : await state.history.redo(replay);
       this.commitDataChange(state, rowCountDelta(command, direction));
       return buildEditState(state);
     });
@@ -460,13 +466,13 @@ export class WorkingCsvStore {
    * export never fails afterwards: the exported revision is only recorded against the history it
    * was serialized from.
    */
-  async exportCsv(workingCsvId: WorkingCsvId): Promise<CsvEditState | { status: 'cancelled' }> {
+  async exportCsv(workingCsvId: WorkingCsvId): Promise<CsvExportOutcome> {
     const prepared = await this.withWorkingCsvLease(workingCsvId, async (state) => {
       const { metadata } = state;
       return {
         state,
         sourceId: state.sourceId,
-        suggestedName: metadata.file.name,
+        suggestedName: metadata.source.name,
         revisionId: state.history.currentRevision,
         contents: serializeCsvExport({
           columns: metadata.columns,
@@ -486,7 +492,7 @@ export class WorkingCsvStore {
 
     const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
     if (state.history === prepared.state.history) state.history.markExported(prepared.revisionId);
-    return buildEditState(state);
+    return { status: 'exported', editState: buildEditState(state) };
   }
 
   private async createWorkingCsv(
@@ -497,11 +503,9 @@ export class WorkingCsvStore {
     initialRevisionId = 0,
   ): Promise<WorkingCsvState> {
     const dialect = validateDialectOptions(options);
-    const description = await this.host
-      .describeSource(sourceId)
-      .catch((error: unknown) => {
-        throw normalizeOpenError(error);
-      });
+    const description = await this.host.describeSource(sourceId).catch((error: unknown) => {
+      throw normalizeOpenError(error);
+    });
 
     if (!isSupportedCsvSourceName(description.name)) {
       throw new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.');
@@ -524,7 +528,7 @@ export class WorkingCsvStore {
       const metadata: Omit<WorkingCsvView, 'editState'> = {
         workingCsvId: logicalWorkingCsvId,
         dataRevision,
-        file: {
+        source: {
           sourceId,
           name: description.name,
           location: description.location,
@@ -575,6 +579,13 @@ export class WorkingCsvStore {
     this.assertAcceptingWork();
     this.assertNotClosing(workingCsvId);
     const state = this.requireWorkingCsv(workingCsvId);
+    return this.acquireStateLease(state);
+  }
+
+  private acquireStateLease(state: WorkingCsvState): {
+    state: WorkingCsvState;
+    release: () => Promise<void>;
+  } {
     const { tableName } = state;
     this.sourceLeaseCounts.set(tableName, (this.sourceLeaseCounts.get(tableName) ?? 0) + 1);
     let released = false;
@@ -606,16 +617,25 @@ export class WorkingCsvStore {
    * two inserts would read the same next row identifier, and two undos would replay and pop the
    * same command twice. Reads stay off this queue and keep running concurrently.
    *
-   * The lease is taken as the mutation is admitted rather than when its turn comes, so a close
-   * that arrives afterwards still waits for everything already queued behind it.
+   * An admission lease makes a close wait for queued work. When a preceding Reopen CSV replaces
+   * the backing table, the mutation takes a second lease and resolves the current state as its
+   * turn begins.
    */
   private async withWorkingCsvMutation<T>(
     workingCsvId: WorkingCsvId,
     operation: (state: WorkingCsvState) => Promise<T>,
   ): Promise<T> {
-    const lease = this.acquireWorkingCsvLease(workingCsvId);
+    const admissionLease = this.acquireWorkingCsvLease(workingCsvId);
     const queued = this.mutationQueues.get(workingCsvId) ?? Promise.resolve();
-    const mutation = queued.then(() => operation(lease.state));
+    const mutation = queued.then(async () => {
+      const currentState = this.requireWorkingCsv(workingCsvId);
+      const currentLease = currentState === admissionLease.state ? null : this.acquireStateLease(currentState);
+      try {
+        return await operation(currentState);
+      } finally {
+        await currentLease?.release();
+      }
+    });
     const settled = mutation.then(
       () => undefined,
       () => undefined,
@@ -627,7 +647,7 @@ export class WorkingCsvStore {
       if (this.mutationQueues.get(workingCsvId) === settled) {
         this.mutationQueues.delete(workingCsvId);
       }
-      await lease.release();
+      await admissionLease.release();
     }
   }
 
@@ -762,7 +782,7 @@ function buildWorkingCsvView(state: WorkingCsvState): WorkingCsvView {
   return {
     ...state.metadata,
     columns: state.metadata.columns.map((column) => ({ ...column })),
-    file: { ...state.metadata.file },
+    source: { ...state.metadata.source },
     dialect: { ...state.metadata.dialect },
     editState: buildEditState(state),
   };
@@ -857,7 +877,5 @@ function normalizeEngineError(error: unknown): Error {
     return normalizeOpenError(error);
   }
   console.error('The data engine could not read the CSV Source.', error);
-  return new CsvOpenError(
-    'Unable to read CSV: check the delimiter, quote, and header options for this file.',
-  );
+  return new CsvOpenError('Unable to read CSV: check the delimiter, quote, and header options for this file.');
 }
