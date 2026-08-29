@@ -2,6 +2,7 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": ["dist-electron", "dist-renderer", "release", "src/renderer/components/ui"],
   "rules": {
+    "complexity": "warn",
     // Every hit in this codebase is a deliberate snapshot taken before the loop body deletes from
     // the collection it is iterating (worker disposal, comparison close, artifact retirement).
     // Dropping the spread would skip entries, so the rule is wrong here rather than the code.
