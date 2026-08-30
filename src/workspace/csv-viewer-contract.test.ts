@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   workspaceContractFactories,
   type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+} from '../test-helpers/workspace-contract';
 
 describe.each(workspaceContractFactories)('$name CsvViewer request seam', ({ create }) => {
   let fixture: WorkspaceContractFixture;

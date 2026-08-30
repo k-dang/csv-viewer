@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
 import type { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 import { WorkingCsvStore } from './working-csv-store';
 import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';

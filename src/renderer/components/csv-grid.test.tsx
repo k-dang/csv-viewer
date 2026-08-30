@@ -1,14 +1,11 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvEditState, CsvViewerRequest } from '../../shared/csv-viewer-contract';
-import { enableActEnvironment } from '../testing/act-environment';
-import { workingCsvFixture } from '../testing/csv-fixtures';
-import { createTestCsvViewer, withCsvViewer } from '../testing/test-csv-viewer';
+import { workingCsvFixture } from '../../test-helpers/csv-views';
+import { createTestCsvViewer, withCsvViewer } from '../../test-helpers/csv-viewer';
 import { CsvGrid } from './csv-grid';
 
 const DataGrid = () => null;
-
-enableActEnvironment();
 
 describe('CsvGrid edit state', () => {
   it('reports clean export state after an edited Working CSV is reopened', async () => {

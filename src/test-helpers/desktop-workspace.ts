@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DesktopWorkspaceHost } from '../desktop-workspace-host';
+import { DesktopWorkspaceHost } from '../main/desktop-workspace-host';
 import type {
   ComparisonAttemptOutcomeView,
   ComparisonId,
@@ -15,11 +15,10 @@ import type {
   WorkingCsvId,
   WorkingCsvView,
   WorkspaceCloseImpact,
-} from '../../shared/csv-viewer-contract';
-import type { ComparisonExecutor } from '../../workspace/comparison-executor';
-import type { CsvWorkspaceImplementation } from '../../workspace/csv-workspace-implementation';
-import { createTestCsvWorkspace } from '../../workspace/testing/create-test-csv-workspace';
-import type { WorkspaceContractFixture } from './workspace-contract-fixture';
+} from '../shared/csv-viewer-contract';
+import type { ComparisonExecutor } from '../workspace/comparison-executor';
+import { CsvWorkspaceImplementation } from '../workspace/csv-workspace-implementation';
+import type { WorkspaceContractFixture } from './workspace-contract';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -98,7 +97,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      workspace = createTestCsvWorkspace(host, executor);
+      workspace = new CsvWorkspaceImplementation(host, executor);
       return new CsvWorkspaceFixture(directory, workspace, host, prompts);
     } catch (error) {
       await workspace?.dispose().catch(() => undefined);

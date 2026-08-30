@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvRowWindow } from '../../shared/csv-viewer-contract';
-import { workingCsvFixture } from '../testing/csv-fixtures';
+import { workingCsvFixture } from '../../test-helpers/csv-views';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
 const workingCsv = workingCsvFixture({

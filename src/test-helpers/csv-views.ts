@@ -1,6 +1,6 @@
-import type { ComparisonView, WorkingCsvView } from '../../shared/csv-viewer-contract';
+import type { ComparisonView, WorkingCsvView } from '../shared/csv-viewer-contract';
 
-/** A minimal opened Working CSV. Tests override only the field under test. */
+/** Builds a minimal opened Working CSV. Tests override only the field under test. */
 export function workingCsvFixture(overrides: Partial<WorkingCsvView> = {}): WorkingCsvView {
   const workingCsvId = overrides.workingCsvId ?? 'working-csv-1';
   return {
@@ -26,7 +26,7 @@ export function workingCsvFixture(overrides: Partial<WorkingCsvView> = {}): Work
   };
 }
 
-/** A Comparison of two minimal Working CSVs, before any operation has run. */
+/** Builds a Comparison of two minimal Working CSVs, before any operation has run. */
 export function comparisonFixture(overrides: Partial<ComparisonView> = {}): ComparisonView {
   return {
     comparisonId: 'comparison-1',

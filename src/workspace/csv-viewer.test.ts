@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { csvInternalRowIdField } from '../shared/csv-viewer-contract';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
 
 describe('Desktop CsvViewer Reopen CSV seam', () => {
   let fixture: CsvWorkspaceFixture;

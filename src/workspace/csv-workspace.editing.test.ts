@@ -5,7 +5,7 @@ import {
   rowIds,
   workspaceContractFactories,
   type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+} from '../test-helpers/workspace-contract';
 
 describe.each(workspaceContractFactories)('$name CsvWorkspace editing, history, and Export CSV contract', ({ create }) => {
   let fixture: WorkspaceContractFixture;

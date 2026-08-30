@@ -1,11 +1,8 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { RecentCsvSource } from '../../shared/csv-viewer-contract';
-import { enableActEnvironment } from '../testing/act-environment';
-import { createTestCsvViewer, withCsvViewer } from '../testing/test-csv-viewer';
+import { createTestCsvViewer, withCsvViewer } from '../../test-helpers/csv-viewer';
 import { EmptyCsvState } from './empty-csv-state';
-
-enableActEnvironment();
 
 const recentSources: RecentCsvSource[] = [
   {

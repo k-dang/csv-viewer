@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     exclude: ['dist-electron/**', 'dist-renderer/**', 'node_modules/**', 'release/**'],
+    setupFiles: ['./vitest.setup.ts'],
     // Native DuckDB tests exceed their timeout when too many transform workers compete for CPU.
     maxWorkers: 4,
   },

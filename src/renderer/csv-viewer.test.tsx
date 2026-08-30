@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CsvViewerProvider, useCsvViewer } from './csv-viewer';
-import { createTestCsvViewer } from './testing/test-csv-viewer';
+import { createTestCsvViewer } from '../test-helpers/csv-viewer';
 
 function Capabilities() {
   return <p>{String(useCsvViewer().capabilities.recentCsvSources)}</p>;

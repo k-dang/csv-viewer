@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '../shared/csv-viewer-contract';
-import { comparisonFixture, workingCsvFixture } from './testing/csv-fixtures';
+import { comparisonFixture, workingCsvFixture } from '../test-helpers/csv-views';
 import {
   initialRendererWorkspace,
   projectOpenTabs,

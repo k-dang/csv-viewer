@@ -20,5 +20,5 @@
       "@/*": ["src/renderer/*"]
     }
   },
-  "include": ["src/renderer", "src/shared", "vite.config.ts"]
+  "include": ["src/renderer", "src/shared", "vite.config.ts", "vitest.setup.ts"]
 }

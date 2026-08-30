@@ -1,12 +1,12 @@
 import type { ReactElement } from 'react';
-import { electronCsvViewerCapabilities } from '../../shared/electron-csv-viewer-capabilities';
+import { electronCsvViewerCapabilities } from '../shared/electron-csv-viewer-capabilities';
 import type {
   CsvViewer,
   CsvViewerCapabilities,
   CsvViewerOperationMap,
   CsvViewerRequest,
-} from '../../shared/csv-viewer-contract';
-import { CsvViewerProvider } from '../csv-viewer';
+} from '../shared/csv-viewer-contract';
+import { CsvViewerProvider } from '../renderer/csv-viewer';
 
 type RequestFor<Operation extends keyof CsvViewerOperationMap> = Extract<CsvViewerRequest, { operation: Operation }>;
 
