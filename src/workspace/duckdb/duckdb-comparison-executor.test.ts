@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DuckDBConnection } from '@duckdb/node-api';
-import { DuckDbComparisonExecutor } from './duckdb-comparison-executor';
+import { DuckDbComparisonExecutor, type ComparisonConnection } from './duckdb-comparison-executor';
 
 describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('interrupts an active operation before releasing its dedicated connection', async () => {
@@ -8,7 +7,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
     let closed = false;
     const queryStarted = Promise.withResolvers<void>();
     const query = Promise.withResolvers<never>();
-    const connection = {
+    const connection: ComparisonConnection = {
+      run: () => Promise.resolve(),
       runAndReadAll: () => {
         queryStarted.resolve();
         return query.promise;
@@ -20,7 +20,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       closeSync: () => {
         closed = true;
       },
-    } as unknown as DuckDBConnection;
+    };
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async () => ({
         tableName: 'source',
@@ -45,13 +45,15 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
   it('releases a worker when cancellation wins the connection race', async () => {
     let closed = false;
     const connectionRequested = Promise.withResolvers<void>();
-    const workerConnection = Promise.withResolvers<DuckDBConnection>();
-    const connection = {
+    const workerConnection = Promise.withResolvers<ComparisonConnection>();
+    const connection: ComparisonConnection = {
+      run: () => Promise.resolve(),
+      runAndReadAll: () => Promise.reject(new Error('cancelled before query')),
       interrupt: () => undefined,
       closeSync: () => {
         closed = true;
       },
-    } as unknown as DuckDBConnection;
+    };
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async () => ({
         tableName: 'source',
@@ -77,7 +79,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
 
   it('does not reuse a cancelled worker for the next validation phase', async () => {
     let queryCount = 0;
-    const connection = {
+    const connection: ComparisonConnection = {
+      run: () => Promise.resolve(),
       runAndReadAll: (sql: string) => {
         queryCount += 1;
         return Promise.resolve({
@@ -87,7 +90,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
       },
       interrupt: () => undefined,
       closeSync: () => undefined,
-    } as unknown as DuckDBConnection;
+    };
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async () => ({
         tableName: 'source',
@@ -113,7 +116,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
 
   it('unregisters a worker even when closing its connection fails', async () => {
     let closeAttempts = 0;
-    const connection = {
+    const connection: ComparisonConnection = {
+      run: () => Promise.resolve(),
       runAndReadAll: (sql: string) =>
         Promise.resolve({
           getRowObjectsJS: () => (sql.includes('AS count') ? [{ count: 0n }] : []),
@@ -122,7 +126,8 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         closeAttempts += 1;
         throw new Error('close failed');
       },
-    } as unknown as DuckDBConnection;
+      interrupt: () => undefined,
+    };
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async () => ({
         tableName: 'source',
@@ -155,7 +160,7 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
         },
       ],
     };
-    const workers = [
+    const workers: ComparisonConnection[] = [
       {
         run: () => Promise.resolve(),
         runAndReadAll: () => Promise.resolve(summaryResult),
@@ -172,13 +177,16 @@ describe('DuckDbComparisonExecutor worker lifecycle', () => {
           secondWorkerClosed = true;
         },
       },
-    ] as unknown as DuckDBConnection[];
-    const owner = {
+    ];
+    const owner: ComparisonConnection = {
       run: (sql: string) => {
         droppedTables.push(sql);
         return Promise.resolve();
       },
-    } as unknown as DuckDBConnection;
+      runAndReadAll: () => Promise.resolve(summaryResult),
+      interrupt: () => undefined,
+      closeSync: () => undefined,
+    };
     const executor = new DuckDbComparisonExecutor({
       acquireSource: async (workingCsvId) => ({
         tableName: workingCsvId,

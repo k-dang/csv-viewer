@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AgGridReact } from 'ag-grid-react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
   type CellFocusedEvent,
@@ -38,7 +38,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type {
-  CsvCellValue,
   CsvEditState,
   CsvFilterDescriptor,
   CsvRow,
@@ -113,17 +112,21 @@ const csvGridDarkTheme = themeQuartz.withParams({
 
 const filterDebounceMs = 1500;
 
+export type CsvGridProps = {
+  workingCsv: WorkingCsvView;
+  themeMode: 'light' | 'dark';
+  exportRequestSequence?: number;
+  onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
+  DataGrid?: ComponentType<AgGridReactProps<CsvRow>>;
+};
+
 export function CsvGrid({
   workingCsv,
   themeMode,
   exportRequestSequence = 0,
   onUnexportedChangesChange,
-}: {
-  workingCsv: WorkingCsvView;
-  themeMode: 'light' | 'dark';
-  exportRequestSequence?: number;
-  onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
-}) {
+  DataGrid = AgGridReact,
+}: CsvGridProps) {
   const viewer = useCsvViewer();
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const [filteredRowCount, setFilteredRowCount] = useState(workingCsv.rowCount);
@@ -162,7 +165,7 @@ export function CsvGrid({
           'csv-cell-empty': (params) => params.value === '',
           'csv-cell-null': (params) => params.value === null || params.value === undefined,
         },
-        valueFormatter: ({ value }) => formatCellValue(value as CsvCellValue | undefined),
+        valueFormatter: ({ value }) => formatCellValue(value),
       })),
     [workingCsv.columns],
   );
@@ -309,7 +312,7 @@ export function CsvGrid({
       const message = error instanceof Error ? error.message : 'Unable to edit cell.';
       setEditError(message);
       revertingCellRef.current = true;
-      event.node.setDataValue(column, event.oldValue as CsvCellValue);
+      event.node.setDataValue(column, event.oldValue);
       revertingCellRef.current = false;
     }
   }
@@ -424,7 +427,7 @@ export function CsvGrid({
   }
 
   function onCellFocused(event: CellFocusedEvent<CsvRow>) {
-    const column = typeof event.column === 'string' ? event.column : event.column?.getColId();
+    const column = event.column instanceof Object ? event.column.getColId() : event.column ?? undefined;
 
     if (column) {
       setFocusedColumn(column);
@@ -610,7 +613,7 @@ export function CsvGrid({
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
-          <AgGridReact<CsvRow>
+          <DataGrid
             key={workingCsv.workingCsvId}
             theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
             columnDefs={columnDefs}
@@ -666,6 +669,7 @@ function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {
 }
 
 function getCsvFilters(api: GridApi<CsvRow>): CsvFilterDescriptor[] {
+  // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
   return toCsvFilterDescriptors(api.getFilterModel() as AgFilterModel);
 }
 

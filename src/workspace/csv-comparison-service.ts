@@ -31,7 +31,7 @@ import {
   rejected,
   sharedColumnNames,
   sideOrder,
-  validateKeyShape,
+  validateKeySelection,
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
 
@@ -200,7 +200,7 @@ export class CsvComparisonService {
 
     const key = request.kind === 'apply-key' ? request.key : entity.snapshot?.key;
     if (!key) return rejected('no-applied-key', 'Apply a Comparison Key before refreshing.');
-    const keyFault = validateKeyShape(key, this.availableKeyColumns(entity));
+    const keyFault = validateKeySelection(key, this.availableKeyColumns(entity));
     if (keyFault) return { status: 'rejected', fault: keyFault };
     if (this.csvs.isClosing(entity.baselineId) || this.csvs.isClosing(entity.candidateId)) {
       return rejected('source-not-found', 'A Working CSV is closing.');
@@ -486,11 +486,11 @@ export class CsvComparisonService {
           status: 'cancelled',
         });
       }
-      const currentBaseline = this.csvs.getState(entity.baselineId);
-      const currentCandidate = this.csvs.getState(entity.candidateId);
-      const changedSides: ComparisonSide[] = [];
-      if (!currentBaseline || currentBaseline.dataRevision !== captured.baseline) changedSides.push('baseline');
-      if (!currentCandidate || currentCandidate.dataRevision !== captured.candidate) changedSides.push('candidate');
+      const changedSides = changedComparisonSides(
+        this.csvs.getState(entity.baselineId),
+        this.csvs.getState(entity.candidateId),
+        captured,
+      );
       if (changedSides.length > 0) {
         await this.retireSnapshot(stagingArtifactId);
         return this.settleAfterRelease(entity, operation, {
@@ -727,6 +727,17 @@ export class CsvComparisonService {
   private emit(event: ComparisonEvent): void {
     for (const listener of this.listeners) listener(event);
   }
+}
+
+function changedComparisonSides(
+  baseline: WorkingCsvView | null,
+  candidate: WorkingCsvView | null,
+  captured: Snapshot['revisions'],
+): ComparisonSide[] {
+  const changedSides: ComparisonSide[] = [];
+  if (!baseline || baseline.dataRevision !== captured.baseline) changedSides.push('baseline');
+  if (!candidate || candidate.dataRevision !== captured.candidate) changedSides.push('candidate');
+  return changedSides;
 }
 
 function pairKey(left: string, right: string): string {

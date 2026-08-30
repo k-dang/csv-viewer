@@ -33,12 +33,11 @@ describe('WorkingCsvStore invariants', () => {
   it('closes database handles when disposal validation fails', async () => {
     await openWorkingCsv('dispose-failure.csv', ['id', '1'].join('\n'));
 
-    const internals = store as unknown as {
-      artifactRegistry: WorkspaceArtifactRegistry;
-      database: DuckDbWorkspaceDatabase;
-    };
-    const databaseClose = vi.spyOn(internals.database, 'close');
-    internals.artifactRegistry.register({
+    const descriptors = Object.getOwnPropertyDescriptors(store);
+    const database: DuckDbWorkspaceDatabase = descriptors.database.value;
+    const artifactRegistry: WorkspaceArtifactRegistry = descriptors.artifactRegistry.value;
+    const databaseClose = vi.spyOn(database, 'close');
+    artifactRegistry.register({
       tableName: 'unexpected_artifact',
       owner: { kind: 'working-csv', workingCsvId: 'missing' },
       role: 'current',
@@ -46,7 +45,7 @@ describe('WorkingCsvStore invariants', () => {
 
     await expect(store.disposeStore()).rejects.toThrow('Workspace artifact invariant violated');
     expect(databaseClose).toHaveBeenCalledOnce();
-    expect(internals.database.isOpen()).toBe(false);
+    expect(database.isOpen()).toBe(false);
     await expect(
       store.getRows({ workingCsvId: 'missing', offset: 0, limit: 1 }),
     ).rejects.toThrow('CSV workspace is disposing.');

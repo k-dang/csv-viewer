@@ -3,7 +3,7 @@ import { ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } fro
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
 import { cn } from '@/lib/utils';
-import { buildDialectOptions, type CsvHeaderMode } from '@/components/csv-dialect';
+import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '@/components/csv-dialect';
 import { ComparisonCandidateDialog } from '@/components/comparison-candidate-dialog';
 import { ComparisonTab } from '@/components/comparison-tab';
 import { CsvMetadataView } from '@/components/csv-metadata-view';
@@ -30,13 +30,41 @@ type ThemeMode = 'light' | 'dark';
 
 const themeStorageKey = 'csv-viewer-theme';
 
+export type AppComponents = {
+  ComparisonCandidateDialog: typeof ComparisonCandidateDialog;
+  ComparisonTab: typeof ComparisonTab;
+  CsvMetadataView: typeof CsvMetadataView;
+  DialectControls: typeof DialectControls;
+  EmptyCsvState: typeof EmptyCsvState;
+  TabStrip: typeof TabStrip;
+};
+
+const defaultAppComponents: AppComponents = {
+  ComparisonCandidateDialog,
+  ComparisonTab,
+  CsvMetadataView,
+  DialectControls,
+  EmptyCsvState,
+  TabStrip,
+};
+
+type AppProps = { components?: AppComponents };
+
 function getInitialTheme(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
   if (storedTheme === 'light' || storedTheme === 'dark') return storedTheme;
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function App() {
+export function App({ components = defaultAppComponents }: AppProps = {}) {
+  const {
+    ComparisonCandidateDialog: ComparisonCandidateDialogComponent,
+    ComparisonTab: ComparisonTabComponent,
+    CsvMetadataView: CsvMetadataViewComponent,
+    DialectControls: DialectControlsComponent,
+    EmptyCsvState: EmptyCsvStateComponent,
+    TabStrip: TabStripComponent,
+  } = components;
   const viewer = useCsvViewer();
   const [workspaceState, dispatchWorkspace] = useReducer(rendererWorkspaceReducer, initialRendererWorkspace);
   const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<ReadonlySet<string>>(
@@ -74,7 +102,7 @@ export function App() {
   }, [themeMode]);
 
   // One handler per intent, so a new CsvViewerIntent cannot compile until this dispatch covers it.
-  const intentHandlers: Record<CsvViewerIntent, () => void> = {
+  const intentHandlers = {
     'open-csv': () => void openCsv(),
     'reopen-csv': () => void reopenActiveTab(),
     'export-csv': () => {
@@ -87,7 +115,7 @@ export function App() {
     'close-tab': () => {
       if (activeTab) void closeTab(activeTab);
     },
-  };
+  } satisfies Record<CsvViewerIntent, () => void>;
 
   // Held in a ref so the seam subscription outlives every render instead of churning with it.
   // Written from an effect, not during render, so a discarded render cannot leave its handlers
@@ -139,7 +167,7 @@ export function App() {
 
   async function openCsv() {
     const options = buildDialectOptions(delimiter, headerMode);
-    if (typeof options === 'string') {
+    if (isDialectError(options)) {
       setDialectError(options);
       return;
     }
@@ -157,7 +185,7 @@ export function App() {
 
   async function openRecentCsv(sourceId: CsvSourceId) {
     const options = buildDialectOptions(delimiter, headerMode);
-    if (typeof options === 'string') {
+    if (isDialectError(options)) {
       setDialectError(options);
       return;
     }
@@ -180,7 +208,7 @@ export function App() {
   async function reopenActiveTab() {
     if (!activeCsv) return;
     const options = buildDialectOptions(delimiter, headerMode);
-    if (typeof options === 'string') {
+    if (isDialectError(options)) {
       setDialectError(options);
       return;
     }
@@ -335,7 +363,7 @@ export function App() {
           </div>
         </div>
         <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
-          <DialectControls
+          <DialectControlsComponent
             delimiter={delimiter}
             headerMode={headerMode}
             onDelimiterChange={setDelimiter}
@@ -378,7 +406,7 @@ export function App() {
       {hasTabs ? (
         <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
           <div className="min-w-0">
-            <TabStrip
+            <TabStripComponent
               tabs={openTabs}
               activeTabId={activeTabId}
               workingCsvIdsWithUnexportedChanges={workingCsvIdsWithUnexportedChanges}
@@ -399,7 +427,7 @@ export function App() {
                   key={workingCsv.workingCsvId}
                   className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
-                  <CsvMetadataView
+                  <CsvMetadataViewComponent
                     workingCsv={workingCsv}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
@@ -421,7 +449,7 @@ export function App() {
                   key={tab.comparisonId}
                   className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
-                  <ComparisonTab
+                  <ComparisonTabComponent
                     comparison={comparison}
                     presentation={tab.presentation}
                     themeMode={themeMode}
@@ -435,7 +463,7 @@ export function App() {
           </div>
         </div>
       ) : (
-        <EmptyCsvState
+        <EmptyCsvStateComponent
           isOpening={isOpening}
           errorMessage={openError}
           dialectError={dialectError}
@@ -444,7 +472,7 @@ export function App() {
         />
       )}
       {candidatePicker ? (
-        <ComparisonCandidateDialog
+        <ComparisonCandidateDialogComponent
           baseline={candidatePicker.baseline}
           candidates={candidatePicker.candidates}
           onChoose={(candidateId) => void chooseCandidate(candidateId)}

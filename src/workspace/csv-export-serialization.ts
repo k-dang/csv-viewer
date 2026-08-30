@@ -1,5 +1,5 @@
 import type { CsvColumn } from '../shared/csv-viewer-contract';
-import { normalizeCellValue } from './csv-result-normalization';
+import { normalizeCellValue, type EngineRow } from './csv-result-normalization';
 
 /**
  * Serializes Working CSV rows to exported CSV text. Export serialization stays in shared
@@ -13,7 +13,7 @@ export function serializeCsvExport({
   header,
 }: {
   columns: CsvColumn[];
-  rows: Array<Record<string, unknown>>;
+  rows: EngineRow[];
   delimiter: string;
   header: boolean;
 }): string {

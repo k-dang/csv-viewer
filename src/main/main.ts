@@ -144,7 +144,9 @@ function createWindow() {
   });
 
   if (isDevelopment) {
-    void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL as string);
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+    if (!devServerUrl) throw new Error('VITE_DEV_SERVER_URL is required in development.');
+    void mainWindow.loadURL(devServerUrl);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
     return;
   }

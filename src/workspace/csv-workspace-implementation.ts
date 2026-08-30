@@ -22,6 +22,8 @@ import type {
   ConfirmWorkspaceCloseOutcome,
 } from '../shared/csv-viewer-contract';
 
+type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
+
 /**
  * The one shared, runtime-neutral domain seam. Every operation is asynchronous and every request,
  * result, and event is structured-clone-safe, so desktop can reach it over IPC while web wires it
@@ -79,22 +81,29 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return this.exportCsv(request.workingCsvId);
       case 'csv.close':
         return this.closeCsv(request);
+      default:
+        return this.callComparison(request);
+    }
+  }
+
+  private callComparison(request: ComparisonRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
+    switch (request.operation) {
       case 'comparison.get-candidates':
-        return this.comparisonStore.candidatesFor(request.baselineId);
+        return Promise.resolve(this.comparisonStore.candidatesFor(request.baselineId));
       case 'comparison.open':
-        return this.comparisonStore.open(request);
+        return Promise.resolve(this.comparisonStore.open(request));
       case 'comparison.begin':
         return this.beginComparison(request);
       case 'comparison.cancel':
-        return this.comparisonStore.cancel(request);
+        return Promise.resolve(this.comparisonStore.cancel(request));
       case 'comparison.get-window':
         return this.comparisonStore.getWindow(request);
       case 'comparison.swap':
-        return this.comparisonStore.swap(request.comparisonId);
+        return Promise.resolve(this.comparisonStore.swap(request.comparisonId));
       case 'comparison.close':
         return this.comparisonStore.close(request.comparisonId);
       default:
-        throw new Error(`Unsupported CSV Viewer operation: ${(request as { operation: string }).operation}`);
+        return unsupportedOperation(request);
     }
   }
 
@@ -316,4 +325,9 @@ function requiresWorkspaceConfirmation(impact: WorkspaceCloseImpact): boolean {
  */
 function sameImpact<T extends CloseImpact | WorkspaceCloseImpact>(current: T, confirmed: T | undefined): boolean {
   return confirmed !== undefined && JSON.stringify(current) === JSON.stringify(confirmed);
+}
+
+function unsupportedOperation(_request: never): never {
+  const operation = Object.getOwnPropertyDescriptor(Object(_request), 'operation')?.value;
+  throw new Error(`Unsupported CSV Viewer operation: ${String(operation)}`);
 }

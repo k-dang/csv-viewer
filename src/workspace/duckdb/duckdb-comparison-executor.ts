@@ -1,4 +1,3 @@
-import type { DuckDBConnection } from '@duckdb/node-api';
 import type {
   ComparisonRow,
   ComparisonOperationId,
@@ -21,9 +20,20 @@ import {
   isValidRowWindow,
   quoteIdentifier,
 } from '../csv-query';
-import { normalizeCellValue, normalizeCount } from '../csv-result-normalization';
+import { normalizeCellValue, normalizeCount, type EngineCellValue } from '../csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from '../csv-storage-schema';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
+
+type ComparisonQueryResult = {
+  getRowObjectsJS(): import('../csv-result-normalization').EngineRow[];
+};
+
+export type ComparisonConnection = {
+  run(sql: string): Promise<object | void>;
+  runAndReadAll(sql: string, values?: string[]): Promise<ComparisonQueryResult>;
+  interrupt(): void;
+  closeSync(): void;
+};
 
 export type ComparisonSource = {
   tableName: string;
@@ -33,12 +43,12 @@ export type ComparisonSource = {
 
 export type DuckDbComparisonAccess = {
   acquireSource(workingCsvId: WorkingCsvId): Promise<ComparisonSource>;
-  getOwnerConnection(): Promise<DuckDBConnection>;
-  connectWorker(): Promise<DuckDBConnection>;
+  getOwnerConnection(): Promise<ComparisonConnection>;
+  connectWorker(): Promise<ComparisonConnection>;
 };
 
 type ComparisonWorker = {
-  connection: Promise<DuckDBConnection>;
+  connection: Promise<ComparisonConnection>;
   cancelled: boolean;
 };
 
@@ -331,7 +341,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     }
   }
 
-  private async getWriter(operationId: ComparisonOperationId): Promise<DuckDBConnection> {
+  private async getWriter(operationId: ComparisonOperationId): Promise<ComparisonConnection> {
     const existing = this.workers.get(operationId);
     if (existing) {
       const connection = await existing.connection;
@@ -345,7 +355,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       cancelled: false,
     };
     this.workers.set(operationId, worker);
-    let writer: DuckDBConnection;
+    let writer: ComparisonConnection;
     try {
       writer = await worker.connection;
     } catch (error) {
@@ -423,7 +433,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 }
 
-function parseClassification(value: unknown): ComparisonRow['classification'] {
+function parseClassification(value: EngineCellValue | undefined): ComparisonRow['classification'] {
   if (
     value === 'changed' ||
     value === 'baseline-only' ||

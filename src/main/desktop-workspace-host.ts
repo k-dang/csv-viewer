@@ -75,8 +75,8 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
 
   async describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
     const filePath = this.requireSource(sourceId).filePath;
-    const fileStats = await stat(filePath).catch((error: unknown) => {
-      throw toSourceUnavailableError(error);
+    const fileStats = await stat(filePath).catch((cause: unknown) => {
+      throw toSourceUnavailableError(cause);
     });
     if (!fileStats.isFile()) {
       throw new CsvSourceUnavailableError('unreadable', 'Selected path is not a file.');
@@ -143,8 +143,8 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     try {
       await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
       await writeFile(this.recentSourcesPath, JSON.stringify(nextEntries, null, 2), 'utf8');
-    } catch (error: unknown) {
-      console.warn('Unable to write Recent CSV Sources.', error);
+    } catch (cause: unknown) {
+      console.warn('Unable to write Recent CSV Sources.', cause);
     }
   }
 
@@ -169,12 +169,12 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
 
   private async readRecentEntries(): Promise<RecentSourceEntry[]> {
     try {
-      const parsed = JSON.parse(await readFile(this.recentSourcesPath, 'utf8')) as unknown;
+      const parsed = JSON.parse(await readFile(this.recentSourcesPath, 'utf8'));
       if (!Array.isArray(parsed)) return [];
       return parsed.filter(isRecentSourceEntry).slice(0, maxRecentSources);
-    } catch (error: unknown) {
-      if (isFileSystemError(error) && error.code === 'ENOENT') return [];
-      console.warn('Unable to read Recent CSV Sources.', error);
+    } catch (cause: unknown) {
+      if (isFileSystemError(cause) && cause.code === 'ENOENT') return [];
+      console.warn('Unable to read Recent CSV Sources.', cause);
       return [];
     }
   }
@@ -187,6 +187,8 @@ type RecentSourceEntry = {
   lastOpenedAt: string;
 };
 
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
 function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: string): string {
   if (identity && identity.inode !== 0n) return `inode:${identity.device}:${identity.inode}`;
   return `path:${normalizeCanonicalPath(identity?.canonicalPath ?? path.resolve(filePath))}`;
@@ -197,25 +199,28 @@ function buildDefaultExportName(sourceName: string): string {
   return `${parsed.name}-edited${parsed.ext || '.csv'}`;
 }
 
-function toSourceUnavailableError(error: unknown): Error {
-  if (!isFileSystemError(error)) return toError(error);
-  if (error.code === 'ENOENT') {
+function toSourceUnavailableError(cause: unknown): Error {
+  if (!isFileSystemError(cause)) return toError(cause);
+  if (cause.code === 'ENOENT') {
     return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
   }
-  if (error.code === 'EACCES' || error.code === 'EPERM') {
+  if (cause.code === 'EACCES' || cause.code === 'EPERM') {
     return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
   }
-  console.error('Unable to read the CSV Source.', error);
+  console.error('Unable to read the CSV Source.', cause);
   return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
 }
 
-function isRecentSourceEntry(value: unknown): value is RecentSourceEntry {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<RecentSourceEntry>;
+function isRecentSourceEntry(value: JsonValue): value is RecentSourceEntry {
+  if (!(value instanceof Object) || Array.isArray(value)) return false;
+  const pathValue = Object.getOwnPropertyDescriptor(value, 'path')?.value;
+  const name = Object.getOwnPropertyDescriptor(value, 'name')?.value;
+  const sizeBytes = Object.getOwnPropertyDescriptor(value, 'sizeBytes')?.value;
+  const lastOpenedAt = Object.getOwnPropertyDescriptor(value, 'lastOpenedAt')?.value;
   return (
-    typeof candidate.path === 'string' &&
-    typeof candidate.name === 'string' &&
-    typeof candidate.sizeBytes === 'number' &&
-    typeof candidate.lastOpenedAt === 'string'
+    Object.prototype.toString.call(pathValue) === '[object String]' &&
+    Object.prototype.toString.call(name) === '[object String]' &&
+    Object.prototype.toString.call(sizeBytes) === '[object Number]' &&
+    Object.prototype.toString.call(lastOpenedAt) === '[object String]'
   );
 }

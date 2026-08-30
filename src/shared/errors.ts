@@ -1,4 +1,4 @@
 /** Narrows an unknown thrown value to an Error, so failures can be collected and re-thrown. */
-export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+export function toError(cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(String(cause));
 }

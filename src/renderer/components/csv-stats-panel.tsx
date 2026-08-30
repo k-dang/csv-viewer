@@ -53,11 +53,11 @@ export function CsvStatsPanel({
           setStatsState({ status: 'ready', counts });
         }
       })
-      .catch((error: unknown) => {
+      .catch((cause: unknown) => {
         if (!cancelled) {
           setStatsState({
             status: 'failed',
-            message: error instanceof Error ? error.message : 'Unable to calculate column value counts.',
+            message: cause instanceof Error ? cause.message : 'Unable to calculate column value counts.',
           });
         }
       });

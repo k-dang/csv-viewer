@@ -421,8 +421,8 @@ export const csvViewerIntents = ['open-csv', 'reopen-csv', 'export-csv', 'close-
 
 export type CsvViewerIntent = (typeof csvViewerIntents)[number];
 
-export function isCsvViewerIntent(value: unknown): value is CsvViewerIntent {
-  return csvViewerIntents.includes(value as CsvViewerIntent);
+export function isCsvViewerIntent(value: string): value is CsvViewerIntent {
+  return csvViewerIntents.some((intent) => intent === value);
 }
 
 /**
@@ -543,8 +543,20 @@ export interface CsvViewer {
   onEvent(listener: (event: CsvViewerEvent) => void): () => void;
 }
 
+export type CsvViewerTransportValue =
+  | null
+  | boolean
+  | number
+  | bigint
+  | string
+  | CsvViewerTransportValue[]
+  | { [key: string]: CsvViewerTransportValue };
+
+export type CsvViewerRequestPayload = CsvViewerTransportValue;
+
 /** Validates the transport envelope. CsvViewer rejects unknown operation names in its dispatcher. */
-export function isCsvViewerRequestEnvelope(value: unknown): value is { operation: string } & Record<string, unknown> {
-  if (!value || typeof value !== 'object') return false;
-  return typeof (value as { operation?: unknown }).operation === 'string';
+export function isCsvViewerRequestEnvelope(value: CsvViewerRequestPayload): value is { operation: string } {
+  if (!(value instanceof Object) || Array.isArray(value)) return false;
+  const operation = Object.getOwnPropertyDescriptor(value, 'operation')?.value;
+  return Object.prototype.toString.call(operation) === '[object String]';
 }

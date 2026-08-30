@@ -42,6 +42,7 @@ describe('createComparisonGridDataSource', () => {
       (value) => value,
     );
 
+    // SAFETY: The datasource reads only the row bounds and callbacks supplied by this fixture.
     dataSource.getRows({
       startRow: 25,
       endRow: 2_025,
@@ -90,6 +91,7 @@ describe('createComparisonGridDataSource', () => {
       (value) => value,
     );
 
+    // SAFETY: The datasource reads only the row bounds and callbacks supplied by this fixture.
     dataSource.getRows({
       startRow: 0,
       endRow: 100,

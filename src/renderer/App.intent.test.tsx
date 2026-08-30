@@ -1,33 +1,36 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent } from '../shared/csv-viewer-contract';
-import { App } from './App';
+import { App, type AppComponents } from './App';
 import { CsvViewerProvider } from './csv-viewer';
 import { enableActEnvironment } from './testing/act-environment';
 import { workingCsvFixture } from './testing/csv-fixtures';
 import { createTestCsvViewer } from './testing/test-csv-viewer';
 
-const renderedApp = vi.hoisted(() => ({
-  exportRequestSequence: 0,
-  onChooseCandidate: undefined as ((candidateId: string) => void) | undefined,
-}));
+type RenderedAppState = {
+  exportRequestSequence: number;
+  onChooseCandidate: ((candidateId: string) => void) | undefined;
+};
 
-vi.mock('@/components/comparison-candidate-dialog', () => ({
-  ComparisonCandidateDialog: ({ onChoose }: { onChoose: (candidateId: string) => void }) => {
+const renderedApp: RenderedAppState = {
+  exportRequestSequence: 0,
+  onChooseCandidate: undefined,
+};
+
+const testComponents: AppComponents = {
+  ComparisonCandidateDialog: ({ onChoose }) => {
     renderedApp.onChooseCandidate = onChoose;
-    return null;
+    return <></>;
   },
-}));
-vi.mock('@/components/comparison-tab', () => ({ ComparisonTab: () => null }));
-vi.mock('@/components/csv-metadata-view', () => ({
-  CsvMetadataView: (props: { exportRequestSequence: number }) => {
-    renderedApp.exportRequestSequence = props.exportRequestSequence;
-    return null;
+  ComparisonTab: () => <></>,
+  CsvMetadataView: ({ exportRequestSequence = 0 }) => {
+    renderedApp.exportRequestSequence = exportRequestSequence;
+    return <></>;
   },
-}));
-vi.mock('@/components/dialect-controls', () => ({ DialectControls: () => null }));
-vi.mock('@/components/empty-csv-state', () => ({ EmptyCsvState: () => null }));
-vi.mock('@/components/tab-strip', () => ({ TabStrip: () => null }));
+  DialectControls: () => <></>,
+  EmptyCsvState: () => <></>,
+  TabStrip: () => <></>,
+};
 
 enableActEnvironment();
 
@@ -74,7 +77,7 @@ describe('App CsvViewer intents', () => {
     await act(async () => {
       renderer = create(
         <CsvViewerProvider viewer={viewer}>
-          <App />
+          <App components={testComponents} />
         </CsvViewerProvider>,
       );
     });
@@ -136,7 +139,7 @@ describe('App CsvViewer intents', () => {
     await act(async () => {
       renderer = create(
         <CsvViewerProvider viewer={viewer}>
-          <App />
+          <App components={testComponents} />
         </CsvViewerProvider>,
       );
     });

@@ -17,7 +17,8 @@ function clickFileMenuItem(label: string): CsvViewerIntent[] {
     : undefined;
 
   expect(menuItem).toBeDefined();
-  if (typeof menuItem?.click === 'function') {
+  if (menuItem?.click instanceof Function) {
+    // SAFETY: The menu callback ignores Electron's BrowserWindow and input-event arguments.
     menuItem.click({} as never, undefined, {} as never);
   }
   return intents;

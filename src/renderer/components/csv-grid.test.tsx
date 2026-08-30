@@ -6,7 +6,7 @@ import { workingCsvFixture } from '../testing/csv-fixtures';
 import { createTestCsvViewer, withCsvViewer } from '../testing/test-csv-viewer';
 import { CsvGrid } from './csv-grid';
 
-vi.mock('ag-grid-react', () => ({ AgGridReact: () => null }));
+const DataGrid = () => null;
 
 enableActEnvironment();
 
@@ -38,6 +38,7 @@ describe('CsvGrid edit state', () => {
           <CsvGrid
             workingCsv={editedWorkingCsv}
             themeMode="light"
+            DataGrid={DataGrid}
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
           viewer,
@@ -52,6 +53,7 @@ describe('CsvGrid edit state', () => {
           <CsvGrid
             workingCsv={reopenedWorkingCsv}
             themeMode="light"
+            DataGrid={DataGrid}
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
           viewer,
@@ -83,6 +85,7 @@ describe('CsvGrid edit state', () => {
           <CsvGrid
             workingCsv={firstWorkingCsv}
             themeMode="light"
+            DataGrid={DataGrid}
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
           viewer,
@@ -95,6 +98,7 @@ describe('CsvGrid edit state', () => {
           <CsvGrid
             workingCsv={secondWorkingCsv}
             themeMode="light"
+            DataGrid={DataGrid}
             onUnexportedChangesChange={onUnexportedChangesChange}
           />,
           viewer,

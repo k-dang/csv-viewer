@@ -22,7 +22,7 @@ import {
   buildRowSourceOrderQuery,
   buildSourceOrderShiftStatement,
 } from './csv-query';
-import { normalizeCellValue } from './csv-result-normalization';
+import { normalizeCellValue, type EngineRow } from './csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 import type { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 
@@ -126,7 +126,7 @@ export async function insertEmptyRow(
 export async function readExportRows(
   table: CsvTable,
   columns: CsvColumn[],
-): Promise<Array<Record<string, unknown>>> {
+): Promise<EngineRow[]> {
   return table.database.readObjects(buildExportRowsSql(table.tableName, columns));
 }
 

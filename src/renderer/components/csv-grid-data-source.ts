@@ -104,7 +104,7 @@ export function toCsvFilterDescriptors(filterModel: AgFilterModel): CsvFilterDes
 }
 
 function isCombinedFilter(model: AgFilterCondition | AgCombinedFilter): model is AgCombinedFilter {
-  return Array.isArray((model as AgCombinedFilter).conditions);
+  return 'conditions' in model && Array.isArray(model.conditions);
 }
 
 function toCsvFilterDescriptor(column: string, model: AgFilterCondition): CsvFilterDescriptor[] {
@@ -112,7 +112,8 @@ function toCsvFilterDescriptor(column: string, model: AgFilterCondition): CsvFil
 
   if (type === 'blank' || type === 'notBlank') {
     const kind = model.filterType === 'number' || model.filterType === 'date' ? model.filterType : 'text';
-    return [{ column, kind, operator: type }] as CsvFilterDescriptor[];
+    const descriptor: CsvFilterDescriptor = { column, kind, operator: type };
+    return [descriptor];
   }
 
   if (model.filterType === 'number') {
@@ -121,7 +122,7 @@ function toCsvFilterDescriptor(column: string, model: AgFilterCondition): CsvFil
         column,
         kind: 'number',
         operator: toNumberOperator(type),
-        value: typeof model.filter === 'number' ? model.filter : Number(model.filter),
+        value: Number(model.filter),
         valueTo: model.filterTo === null || model.filterTo === undefined ? undefined : Number(model.filterTo),
       },
     ];

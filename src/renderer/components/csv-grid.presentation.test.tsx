@@ -1,16 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { workingCsvFixture } from '../testing/csv-fixtures';
 import { withCsvViewer } from '../testing/test-csv-viewer';
 import { CsvGrid } from './csv-grid';
 
-vi.mock('ag-grid-react', () => ({ AgGridReact: () => null }));
+const DataGrid = () => null;
 
 // Kept apart from the edit-state tests: react-dom/server and react-test-renderer rendering the
 // same context in one module makes React warn about concurrent renderers.
 describe('CsvGrid presentation', () => {
   it('offers Export CSV for an open Working CSV without Unexported Changes', () => {
-    const markup = renderToStaticMarkup(withCsvViewer(<CsvGrid workingCsv={workingCsvFixture()} themeMode="light" />));
+    const markup = renderToStaticMarkup(
+      withCsvViewer(<CsvGrid workingCsv={workingCsvFixture()} themeMode="light" DataGrid={DataGrid} />),
+    );
 
     expect(markup).toContain('aria-label="Export CSV"');
     expect(markup).not.toMatch(/<button[^>]*aria-label="Export CSV"[^>]*disabled/);
@@ -27,7 +29,9 @@ describe('CsvGrid presentation', () => {
       },
     });
 
-    const markup = renderToStaticMarkup(withCsvViewer(<CsvGrid workingCsv={workingCsv} themeMode="light" />));
+    const markup = renderToStaticMarkup(
+      withCsvViewer(<CsvGrid workingCsv={workingCsv} themeMode="light" DataGrid={DataGrid} />),
+    );
 
     expect(markup).toContain('Unexported Changes');
   });
