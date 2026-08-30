@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent } from '../shared/csv-viewer-contract';
 import { App, type AppComponents } from './App';
 import { CsvViewerProvider } from './csv-viewer';
-import { enableActEnvironment } from './testing/act-environment';
-import { workingCsvFixture } from './testing/csv-fixtures';
-import { createTestCsvViewer } from './testing/test-csv-viewer';
+import { workingCsvFixture } from '../test-helpers/csv-views';
+import { createTestCsvViewer } from '../test-helpers/csv-viewer';
 
 type RenderedAppState = {
   exportRequestSequence: number;
@@ -31,8 +30,6 @@ const testComponents: AppComponents = {
   EmptyCsvState: () => <></>,
   TabStrip: () => <></>,
 };
-
-enableActEnvironment();
 
 afterEach(() => {
   vi.unstubAllGlobals();

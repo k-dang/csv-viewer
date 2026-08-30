@@ -14,8 +14,8 @@ import {
   type WorkingCsvView,
   type WorkspaceCloseImpact,
   type ConfirmWorkspaceCloseOutcome,
-} from '../../shared/csv-viewer-contract';
-import { CsvWorkspaceFixture } from './csv-workspace-fixture';
+} from '../shared/csv-viewer-contract';
+import { CsvWorkspaceFixture } from './desktop-workspace';
 
 /**
  * User-observable setup around CsvViewer. Engine-specific source and export mechanics stay in the

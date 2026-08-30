@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { workingCsvFixture } from '../testing/csv-fixtures';
-import { withCsvViewer } from '../testing/test-csv-viewer';
+import { workingCsvFixture } from '../../test-helpers/csv-views';
+import { withCsvViewer } from '../../test-helpers/csv-viewer';
 import { CsvGrid } from './csv-grid';
 
 const DataGrid = () => null;

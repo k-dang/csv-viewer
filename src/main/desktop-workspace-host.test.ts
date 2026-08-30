@@ -1,6 +1,6 @@
 import { link, readFile, rename } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CsvWorkspaceFixture } from './testing/csv-workspace-fixture';
+import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
 
 describe('DesktopWorkspaceHost behavior', () => {
   let fixture: CsvWorkspaceFixture;

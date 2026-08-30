@@ -10,11 +10,11 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import { CsvWorkspaceFixture } from '../main/testing/csv-workspace-fixture';
+import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
 import {
   workspaceContractFactories,
   type WorkspaceContractFixture,
-} from '../main/testing/workspace-contract-fixture';
+} from '../test-helpers/workspace-contract';
 
 const validDiagnostics: SourceKeyDiagnostics = {
   blankRowCount: 0,

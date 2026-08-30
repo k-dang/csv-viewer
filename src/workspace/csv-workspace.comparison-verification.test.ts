@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ComparisonRow, ComparisonView, ComparisonWindow, WorkingCsvView } from '../shared/csv-viewer-contract';
-import { workspaceContractFactories, type WorkspaceContractFixture } from '../main/testing/workspace-contract-fixture';
+import { workspaceContractFactories, type WorkspaceContractFixture } from '../test-helpers/workspace-contract';
 
 async function openComparison(
   value: WorkspaceContractFixture,
