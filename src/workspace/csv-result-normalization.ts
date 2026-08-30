@@ -25,7 +25,7 @@ export function normalizeCellValue(value: EngineCellValue | undefined): CsvCellV
 }
 
 export function normalizeRow(row: EngineRow): CsvRow {
-  const normalizedRow: Record<string, CsvCellValue> = {};
+  const normalizedRow: Record<string, CsvCellValue> = Object.create(null);
   for (const [key, value] of Object.entries(row)) {
     normalizedRow[key] = normalizeCellValue(value);
   }
