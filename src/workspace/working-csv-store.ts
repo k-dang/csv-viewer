@@ -68,6 +68,11 @@ type WorkingCsvState = {
   history: CsvEditHistory;
 };
 
+type WorkingCsvLease = {
+  state: WorkingCsvState;
+  release: () => Promise<void>;
+};
+
 export class WorkingCsvStore {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
   private readonly database = new DuckDbWorkspaceDatabase();
@@ -503,8 +508,8 @@ export class WorkingCsvStore {
     initialRevisionId = 0,
   ): Promise<WorkingCsvState> {
     const dialect = validateDialectOptions(options);
-    const description = await this.host.describeSource(sourceId).catch((error: unknown) => {
-      throw normalizeOpenError(error);
+    const description = await this.host.describeSource(sourceId).catch((cause: unknown) => {
+      throw normalizeOpenError(cause);
     });
 
     if (!isSupportedCsvSourceName(description.name)) {
@@ -547,8 +552,8 @@ export class WorkingCsvStore {
         history: new CsvEditHistory(initialRevisionId),
       };
     } catch (error) {
-      await dropWorkingCsvTable(table).catch((cleanupError: unknown) => {
-        console.error('Unable to drop a partially created Working CSV table.', cleanupError);
+      await dropWorkingCsvTable(table).catch((cause: unknown) => {
+        console.error('Unable to drop a partially created Working CSV table.', cause);
       });
       this.artifactRegistry.remove(tableName);
       throw normalizeEngineError(error);
@@ -572,20 +577,14 @@ export class WorkingCsvStore {
     };
   }
 
-  private acquireWorkingCsvLease(workingCsvId: WorkingCsvId): {
-    state: WorkingCsvState;
-    release: () => Promise<void>;
-  } {
+  private acquireWorkingCsvLease(workingCsvId: WorkingCsvId): WorkingCsvLease {
     this.assertAcceptingWork();
     this.assertNotClosing(workingCsvId);
     const state = this.requireWorkingCsv(workingCsvId);
     return this.acquireStateLease(state);
   }
 
-  private acquireStateLease(state: WorkingCsvState): {
-    state: WorkingCsvState;
-    release: () => Promise<void>;
-  } {
+  private acquireStateLease(state: WorkingCsvState): WorkingCsvLease {
     const { tableName } = state;
     this.sourceLeaseCounts.set(tableName, (this.sourceLeaseCounts.get(tableName) ?? 0) + 1);
     let released = false;
@@ -836,9 +835,9 @@ function normalizeRowIds(rowIds: string[]): string[] {
   return [...new Set(normalizedRowIds)];
 }
 
-function workingCsvFailure(code: WorkingCsvFailure['code'], error: unknown): WorkingCsvFailure {
-  console.error(`Working CSV ${code} operation failed.`, error);
-  return { code, message: normalizeOpenError(error).message, retryable: true };
+function workingCsvFailure(code: WorkingCsvFailure['code'], cause: unknown): WorkingCsvFailure {
+  console.error(`Working CSV ${code} operation failed.`, cause);
+  return { code, message: normalizeOpenError(cause).message, retryable: true };
 }
 
 function unavailableWorkingCsvFailure(code: WorkingCsvFailure['code']): WorkingCsvFailure {
@@ -849,20 +848,20 @@ function unavailableWorkingCsvFailure(code: WorkingCsvFailure['code']): WorkingC
   };
 }
 
-function normalizeOpenError(error: unknown): Error {
-  if (error instanceof CsvOpenError) return error;
+function normalizeOpenError(cause: unknown): Error {
+  if (cause instanceof CsvOpenError) return cause;
 
-  if (error instanceof CsvSourceUnavailableError) {
-    if (error.code === 'missing-source') {
+  if (cause instanceof CsvSourceUnavailableError) {
+    if (cause.code === 'missing-source') {
       return new CsvOpenError('Unable to open CSV: the file no longer exists.');
     }
-    if (error.code === 'permission-denied') {
+    if (cause.code === 'permission-denied') {
       return new CsvOpenError('Unable to open CSV: permission was denied for this file.');
     }
     return new CsvOpenError('Unable to open CSV: the file could not be read.');
   }
 
-  if (error instanceof Error) return new CsvOpenError(`Unable to open CSV: ${error.message}`);
+  if (cause instanceof Error) return new CsvOpenError(`Unable to open CSV: ${cause.message}`);
 
   return new CsvOpenError('Unable to open CSV.');
 }
@@ -872,10 +871,10 @@ function normalizeOpenError(error: unknown): Error {
  * runtime locations out of the workspace's callers. The detail is logged instead, and the caller
  * gets the message that actually helps: what to change about the dialect and try again.
  */
-function normalizeEngineError(error: unknown): Error {
-  if (error instanceof CsvOpenError || error instanceof CsvSourceUnavailableError) {
-    return normalizeOpenError(error);
+function normalizeEngineError(cause: unknown): Error {
+  if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
+    return normalizeOpenError(cause);
   }
-  console.error('The data engine could not read the CSV Source.', error);
+  console.error('The data engine could not read the CSV Source.', cause);
   return new CsvOpenError('Unable to read CSV: check the delimiter, quote, and header options for this file.');
 }

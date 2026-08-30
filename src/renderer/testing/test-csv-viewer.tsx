@@ -24,9 +24,10 @@ type TestCsvViewerOverrides = {
 
 /** A minimal CsvViewer for renderer tests. Tests stub only the protocol calls they exercise. */
 export function createTestCsvViewer(overrides: TestCsvViewerOverrides = {}): CsvViewer {
-  const dispatch = (request: CsvViewerRequest): Promise<unknown> => {
+  const dispatch = (request: CsvViewerRequest): Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]['result']> => {
+    // SAFETY: The mapped handlers bind each operation to its exact request and result pair.
     const handler = overrides.handlers?.[request.operation] as
-      | ((request: CsvViewerRequest) => Promise<unknown>)
+      | ((request: CsvViewerRequest) => Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]['result']>)
       | undefined;
     if (!handler) {
       throw new Error(`${request.operation} was called but is not stubbed in this test.`);
@@ -36,6 +37,7 @@ export function createTestCsvViewer(overrides: TestCsvViewerOverrides = {}): Csv
 
   return {
     capabilities: { ...electronCsvViewerCapabilities, ...overrides.capabilities },
+    // SAFETY: dispatch preserves the operation-to-result pairing through TestCsvViewerHandlers.
     call: dispatch as CsvViewer['call'],
     onEvent: overrides.onEvent ?? (() => () => {}),
   };

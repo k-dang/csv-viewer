@@ -5,7 +5,10 @@ import { CsvViewerProvider } from './csv-viewer';
 import { electronCsvViewer } from './electron-csv-viewer';
 import './styles.css';
 
-createRoot(document.getElementById('root') as HTMLElement).render(
+const root = document.getElementById('root');
+if (!root) throw new Error('CSV Viewer root element was not found.');
+
+createRoot(root).render(
   <StrictMode>
     <CsvViewerProvider viewer={electronCsvViewer()}>
       <App />

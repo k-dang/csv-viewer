@@ -33,7 +33,7 @@ export function sharedColumnNames(baseline: WorkingCsvView, candidate: WorkingCs
     .filter((column) => candidateColumns.has(column));
 }
 
-export function validateKeyShape(key: string[], available: string[]): ComparisonFault | null {
+export function validateKeySelection(key: string[], available: string[]): ComparisonFault | null {
   if (key.length === 0 || new Set(key).size !== key.length) {
     return fault('invalid-key-shape', 'Choose one or more distinct Comparison Key columns.');
   }
@@ -63,9 +63,11 @@ export function fault(code: ComparisonFault['code'], message: string): Compariso
 export function rejected(
   code: ComparisonFault['code'],
   message: string,
-): { status: 'rejected'; fault: ComparisonFault } {
+): RejectedComparisonFault {
   return { status: 'rejected', fault: fault(code, message) };
 }
+
+type RejectedComparisonFault = { status: 'rejected'; fault: ComparisonFault };
 
 export function sideOrder(left: ComparisonSide, right: ComparisonSide): number {
   return left === right ? 0 : left === 'baseline' ? -1 : 1;

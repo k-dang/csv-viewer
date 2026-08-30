@@ -33,9 +33,9 @@ export async function captureFileIdentity(filePath: string): Promise<CanonicalFi
       stat(filePath, { bigint: true }),
     ]);
     return { canonicalPath, device: fileStats.dev, inode: fileStats.ino };
-  } catch (error: unknown) {
-    if (isFileSystemError(error) && error.code === 'ENOENT') return null;
-    throw error;
+  } catch (cause: unknown) {
+    if (isFileSystemError(cause) && cause.code === 'ENOENT') return null;
+    throw cause;
   }
 }
 
@@ -55,6 +55,6 @@ export function normalizeCanonicalPath(filePath: string): string {
   return process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
 }
 
-export function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
+export function isFileSystemError(cause: unknown): cause is NodeJS.ErrnoException {
+  return cause instanceof Error && 'code' in cause;
 }

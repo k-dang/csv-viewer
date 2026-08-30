@@ -156,7 +156,8 @@ export function ComparisonGrid({
         infiniteInitialRowCount={1}
         getRowId={(params) => params.data.rowKey}
         onCellKeyDown={(params) => {
-          const event = params.event as KeyboardEvent | null;
+          const event = params.event;
+          if (!(event instanceof KeyboardEvent)) return;
           if (event?.key !== 'Enter' || !('value' in params) || !isDisplayValue(params.value)) {
             return;
           }
@@ -175,7 +176,7 @@ function valueColumn(field: string, headerName: string): ColDef<GridComparisonRo
     colId: field,
     valueGetter: (params) => {
       const value = params.data?.[field];
-      return typeof value === 'object' && value !== null ? value : undefined;
+      return isDisplayValue(value) ? value : undefined;
     },
     headerName,
     minWidth: 160,
@@ -212,15 +213,15 @@ function copyComparisonValue(value: string): void {
   void navigator.clipboard.writeText(value).catch(() => undefined);
 }
 
-function isDisplayValue(value: unknown): value is DisplayValue {
-  return typeof value === 'object' && value !== null && 'copyText' in value;
+function isDisplayValue(value: GridComparisonRow[string] | undefined): value is DisplayValue {
+  if (value === null || value === undefined) return false;
+  return Object.getOwnPropertyDescriptor(Object(value), 'copyText') !== undefined;
 }
 
-function toGridRow(row: ComparisonRow): GridComparisonRow {
-  const result: GridComparisonRow = {
-    rowKey: JSON.stringify(row.keyValues),
-    classification: row.classification,
-  };
+function toGridRow(row: ComparisonRow) {
+  const result: GridComparisonRow = Object.create(null);
+  result.rowKey = JSON.stringify(row.keyValues);
+  result.classification = row.classification;
   row.keyValues.forEach((value, index) => {
     result[keyField(index)] = value;
   });

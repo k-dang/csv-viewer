@@ -1,8 +1,9 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { toError } from '../../shared/errors';
 import type { QueryValues } from '../csv-query';
+import type { EngineRow } from '../csv-result-normalization';
 
-export type DuckDbRow = Record<string, unknown>;
+export type DuckDbRow = EngineRow;
 
 /**
  * Owns the native DuckDB instance and the workspace's owner connection. This is the only module

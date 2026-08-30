@@ -45,11 +45,14 @@ export function buildApplicationMenuTemplate({
     ],
   };
 
+  const developmentItems: MenuItemConstructorOptions[] = [];
+  if (isDevelopment) developmentItems.push({ role: 'toggleDevTools' }, { type: 'separator' });
+
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
       { role: 'reload' },
-      ...(isDevelopment ? ([{ role: 'toggleDevTools' }, { type: 'separator' }] as MenuItemConstructorOptions[]) : []),
+      ...developmentItems,
       { role: 'resetZoom' },
       { role: 'zoomIn' },
       { role: 'zoomOut' },

@@ -6,7 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { CsvHeaderMode } from './csv-dialect';
+import { isCsvHeaderMode, type CsvHeaderMode } from './csv-dialect';
 
 export function DialectControls({
   delimiter,
@@ -36,7 +36,12 @@ export function DialectControls({
       <label className="sr-only" htmlFor="csv-header-mode">
         Header mode
       </label>
-      <Select value={headerMode} onValueChange={(value) => onHeaderModeChange(value as CsvHeaderMode)}>
+      <Select
+        value={headerMode}
+        onValueChange={(value) => {
+          if (isCsvHeaderMode(value)) onHeaderModeChange(value);
+        }}
+      >
         <SelectTrigger id="csv-header-mode" className="w-[158px] bg-card" title="Header handling">
           <SelectValue />
         </SelectTrigger>

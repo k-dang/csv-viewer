@@ -173,7 +173,7 @@ export function buildRowsQuery({
   sort: CsvSortDescriptor[];
   limit: number;
   offset: number;
-}): { rowsSql: string; countSql: string; values: QueryValues } {
+}) {
   const knownColumns = new Set(columns.map((column) => column.name));
   const scope = buildCountScopeWhere({ columns, filters, search });
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
@@ -206,7 +206,7 @@ export function buildColumnValueCountsQuery({
   column: string;
   filters: CsvFilterDescriptor[];
   search: string;
-}): { sql: string; values: QueryValues } {
+}) {
   assertKnownColumn(column, new Set(columns.map((knownColumn) => knownColumn.name)));
   const scope = buildCountScopeWhere({ columns, filters, search });
   const countedValueSql = quoteIdentifier(column);
@@ -248,7 +248,7 @@ function buildCountScopeWhere({
   columns: CsvColumn[];
   filters: CsvFilterDescriptor[];
   search: string;
-}): { whereSql: string; values: QueryValues } {
+}) {
   const knownColumns = new Set(columns.map((column) => column.name));
   const values: QueryValues = [];
   const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { CsvRowWindow } from '../../shared/csv-viewer-contract';
 import { workingCsvFixture } from '../testing/csv-fixtures';
 import { createCsvGridDataSource } from './csv-grid-data-source';
 
@@ -17,7 +18,7 @@ describe('createCsvGridDataSource', () => {
       workingCsvId: workingCsv.workingCsvId,
       offset: 100,
       filteredRowCount: 250,
-      rows: [{ name: 'Ada', age: 37 }],
+      rows: [{ __csvViewerRowId: 'row-1', name: 'Ada', age: '37' }],
     });
     const successCallback = vi.fn();
     const failCallback = vi.fn();
@@ -32,6 +33,7 @@ describe('createCsvGridDataSource', () => {
       undefined,
       onQueryState,
     );
+    // SAFETY: The datasource reads only the row bounds, models, and callbacks supplied here.
     datasource.getRows({
       startRow: 100,
       endRow: 125,
@@ -45,7 +47,10 @@ describe('createCsvGridDataSource', () => {
     } as never);
 
     await vi.waitFor(() => {
-      expect(successCallback).toHaveBeenCalledWith([{ name: 'Ada', age: 37 }], 250);
+      expect(successCallback).toHaveBeenCalledWith(
+        [{ __csvViewerRowId: 'row-1', name: 'Ada', age: '37' }],
+        250,
+      );
     });
 
     expect(getCsvRows).toHaveBeenCalledWith({
@@ -80,6 +85,7 @@ describe('createCsvGridDataSource', () => {
       undefined,
       onQueryState,
     );
+    // SAFETY: The datasource reads only the row bounds, models, and callbacks supplied here.
     datasource.getRows({
       startRow: 0,
       endRow: 100,
@@ -99,8 +105,8 @@ describe('createCsvGridDataSource', () => {
   });
 
   it('ignores stale row-window responses when a newer request supersedes them', async () => {
-    let resolveFirst: (value: unknown) => void = () => undefined;
-    const firstRequest = new Promise((resolve) => {
+    let resolveFirst: (value: CsvRowWindow) => void = () => undefined;
+    const firstRequest = new Promise<CsvRowWindow>((resolve) => {
       resolveFirst = resolve;
     });
     const getCsvRows = vi
@@ -110,7 +116,7 @@ describe('createCsvGridDataSource', () => {
         workingCsvId: workingCsv.workingCsvId,
         offset: 0,
         filteredRowCount: 1,
-        rows: [{ name: 'Grace', age: 41 }],
+        rows: [{ __csvViewerRowId: 'row-2', name: 'Grace', age: '41' }],
       });
     const firstSuccessCallback = vi.fn();
     const secondSuccessCallback = vi.fn();
@@ -132,6 +138,7 @@ describe('createCsvGridDataSource', () => {
       requestState,
     );
 
+    // SAFETY: Both datasource calls read only the row bounds, models, and callbacks supplied here.
     firstDatasource.getRows({
       startRow: 0,
       endRow: 100,
@@ -140,6 +147,7 @@ describe('createCsvGridDataSource', () => {
       successCallback: firstSuccessCallback,
       failCallback: vi.fn(),
     } as never);
+    // SAFETY: Both datasource calls read only the row bounds, models, and callbacks supplied here.
     secondDatasource.getRows({
       startRow: 0,
       endRow: 100,
@@ -150,14 +158,17 @@ describe('createCsvGridDataSource', () => {
     } as never);
 
     await vi.waitFor(() => {
-      expect(secondSuccessCallback).toHaveBeenCalledWith([{ name: 'Grace', age: 41 }], 1);
+      expect(secondSuccessCallback).toHaveBeenCalledWith(
+        [{ __csvViewerRowId: 'row-2', name: 'Grace', age: '41' }],
+        1,
+      );
     });
 
     resolveFirst({
       workingCsvId: workingCsv.workingCsvId,
       offset: 0,
       filteredRowCount: 1,
-      rows: [{ name: 'Ada', age: 37 }],
+      rows: [{ __csvViewerRowId: 'row-1', name: 'Ada', age: '37' }],
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -210,126 +210,194 @@ export function ComparisonTab({
         </fieldset>
       </div>
 
-      <div>
-        {operation ? (
-          <StatusBanner tone="progress" aria-live="polite">
-            <Loader2 className="size-4 animate-spin" />
-            <span className="font-semibold">{operationLabel}</span>
-            <span className="text-sm">
-              {comparison.applied
-                ? 'The current result remains readable until its replacement is ready.'
-                : 'The result will appear only after the complete operation succeeds.'}
-            </span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="ml-auto"
-              onClick={() => void cancel(operation.operationId)}
-            >
-              Cancel
-            </Button>
-          </StatusBanner>
-        ) : comparison.applied?.freshness.kind === 'outdated' ? (
-          <StatusBanner tone="warning" aria-live="polite">
-            <AlertTriangle className="size-4" />
-            <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh explicitly when you
-            are ready.
-          </StatusBanner>
-        ) : null}
-        {attempt?.status === 'cancelled' && comparison.applied && dismissedAttemptId !== attempt.attemptId ? (
-          <StatusBanner tone="neutral" aria-live="polite">
-            Comparison cancelled. The previous applied result was preserved.
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => setDismissedAttemptId(attempt.attemptId)}
-            >
-              Dismiss
-            </Button>
-          </StatusBanner>
-        ) : null}
-        {attempt?.status === 'sources-changed' ? (
-          <StatusBanner tone="warning" aria-live="polite">
-            {comparison.applied
-              ? 'Sources changed while comparing. The previous result was preserved.'
-              : 'Sources changed while comparing. No result was applied.'}
-          </StatusBanner>
-        ) : null}
-        {attempt?.status === 'failed' ? (
-          <StatusBanner tone="error" role="alert">
-            <strong>Comparison failed.</strong> {attempt.failure.message}
-          </StatusBanner>
-        ) : null}
-        {actionError ? (
-          <StatusBanner tone="error" role="alert">
-            {actionError}
-          </StatusBanner>
-        ) : null}
-      </div>
+      <ComparisonStatus
+        comparison={comparison}
+        actionError={actionError}
+        dismissedAttemptId={dismissedAttemptId}
+        operationLabel={operationLabel}
+        onCancel={(operationId) => void cancel(operationId)}
+        onDismiss={setDismissedAttemptId}
+      />
 
-      {comparison.applied ? (
-        <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
-          <ComparisonSummaryBar
-            summary={comparison.applied.summary}
-            presentation={presentation}
-            onChange={onPresentationChange}
-          />
-          <ComparisonGrid
-            comparison={comparison}
-            applied={comparison.applied}
-            rowsMode={presentation.rows}
-            columnsMode={presentation.columns}
-            themeMode={themeMode}
-          />
-        </div>
-      ) : operation ? (
-        <div className="grid place-items-center p-8 text-center">
-          <div>
-            <Loader2 className="mx-auto mb-3 size-9 animate-spin text-primary" />
-            <h2 className="text-lg font-semibold">{operationLabel}</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              No result will publish until the complete replacement is ready.
-            </p>
-          </div>
-        </div>
-      ) : attempt?.status === 'failed' ? (
-        <div className="grid place-items-center p-8 text-center">
-          <div className="max-w-lg">
-            <AlertTriangle className="mx-auto mb-3 size-10 text-destructive" />
-            <h2 className="text-xl font-semibold">Comparison failed</h2>
-            <p className="mt-2 text-sm text-muted-foreground">{attempt.failure.message}</p>
-            <p className="mt-3 text-sm font-semibold">Adjust the draft if needed, then choose Apply key to retry.</p>
-          </div>
-        </div>
-      ) : attempt?.status === 'sources-changed' ? (
-        <div className="grid place-items-center p-8 text-center">
-          <div className="max-w-lg">
-            <RefreshCw className="mx-auto mb-3 size-10 text-amber-600" />
-            <h2 className="text-xl font-semibold">Sources changed during comparison</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Review the current Working CSVs, then choose Apply key to retry.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid place-items-center p-8 text-center">
-          <div className="max-w-lg">
-            <Rows3 className="mx-auto mb-3 size-10 text-muted-foreground" />
-            <h2 className="text-xl font-semibold">Choose a Comparison Key</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Select one or more shared columns above. Apply key validates presence and uniqueness in both complete
-              Working CSVs before computing results.
-            </p>
-            <p className="mt-3 text-sm font-semibold">
-              Source filters, sorts, searches, and Stats state do not limit this comparison.
-            </p>
-          </div>
-        </div>
-      )}
+      <ComparisonBody
+        comparison={comparison}
+        presentation={presentation}
+        operationLabel={operationLabel}
+        themeMode={themeMode}
+        onPresentationChange={onPresentationChange}
+      />
     </section>
+  );
+}
+
+type ComparisonStatusProps = {
+  comparison: ComparisonView;
+  actionError: string | null;
+  dismissedAttemptId: string | null;
+  operationLabel: string | null;
+  onCancel: (operationId: string) => void;
+  onDismiss: (attemptId: string) => void;
+};
+
+function ComparisonStatus({
+  comparison,
+  actionError,
+  dismissedAttemptId,
+  operationLabel,
+  onCancel,
+  onDismiss,
+}: ComparisonStatusProps) {
+  const operation = comparison.operation;
+  const attempt = comparison.lastAttempt;
+  return (
+    <div>
+      {operation ? (
+        <StatusBanner tone="progress" aria-live="polite">
+          <Loader2 className="size-4 animate-spin" />
+          <span className="font-semibold">{operationLabel}</span>
+          <span className="text-sm">
+            {comparison.applied
+              ? 'The current result remains readable until its replacement is ready.'
+              : 'The result will appear only after the complete operation succeeds.'}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => onCancel(operation.operationId)}
+          >
+            Cancel
+          </Button>
+        </StatusBanner>
+      ) : comparison.applied?.freshness.kind === 'outdated' ? (
+        <StatusBanner tone="warning" aria-live="polite">
+          <AlertTriangle className="size-4" />
+          <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh explicitly when you
+          are ready.
+        </StatusBanner>
+      ) : null}
+      {attempt?.status === 'cancelled' && comparison.applied && dismissedAttemptId !== attempt.attemptId ? (
+        <StatusBanner tone="neutral" aria-live="polite">
+          Comparison cancelled. The previous applied result was preserved.
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            onClick={() => onDismiss(attempt.attemptId)}
+          >
+            Dismiss
+          </Button>
+        </StatusBanner>
+      ) : null}
+      {attempt?.status === 'sources-changed' ? (
+        <StatusBanner tone="warning" aria-live="polite">
+          {comparison.applied
+            ? 'Sources changed while comparing. The previous result was preserved.'
+            : 'Sources changed while comparing. No result was applied.'}
+        </StatusBanner>
+      ) : null}
+      {attempt?.status === 'failed' ? (
+        <StatusBanner tone="error" role="alert">
+          <strong>Comparison failed.</strong> {attempt.failure.message}
+        </StatusBanner>
+      ) : null}
+      {actionError ? (
+        <StatusBanner tone="error" role="alert">
+          {actionError}
+        </StatusBanner>
+      ) : null}
+    </div>
+  );
+}
+
+type ComparisonBodyProps = {
+  comparison: ComparisonView;
+  presentation: ComparisonTabPresentation;
+  operationLabel: string | null;
+  themeMode: 'light' | 'dark';
+  onPresentationChange: (next: ComparisonTabPresentation) => void;
+};
+
+function ComparisonBody({
+  comparison,
+  presentation,
+  operationLabel,
+  themeMode,
+  onPresentationChange,
+}: ComparisonBodyProps) {
+  const attempt = comparison.lastAttempt;
+  if (comparison.applied) {
+    return (
+      <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
+        <ComparisonSummaryBar
+          summary={comparison.applied.summary}
+          presentation={presentation}
+          onChange={onPresentationChange}
+        />
+        <ComparisonGrid
+          comparison={comparison}
+          applied={comparison.applied}
+          rowsMode={presentation.rows}
+          columnsMode={presentation.columns}
+          themeMode={themeMode}
+        />
+      </div>
+    );
+  }
+  if (comparison.operation) {
+    return (
+      <div className="grid place-items-center p-8 text-center">
+        <div>
+          <Loader2 className="mx-auto mb-3 size-9 animate-spin text-primary" />
+          <h2 className="text-lg font-semibold">{operationLabel}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            No result will publish until the complete replacement is ready.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (attempt?.status === 'failed') {
+    return (
+      <div className="grid place-items-center p-8 text-center">
+        <div className="max-w-lg">
+          <AlertTriangle className="mx-auto mb-3 size-10 text-destructive" />
+          <h2 className="text-xl font-semibold">Comparison failed</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{attempt.failure.message}</p>
+          <p className="mt-3 text-sm font-semibold">Adjust the draft if needed, then choose Apply key to retry.</p>
+        </div>
+      </div>
+    );
+  }
+  if (attempt?.status === 'sources-changed') {
+    return (
+      <div className="grid place-items-center p-8 text-center">
+        <div className="max-w-lg">
+          <RefreshCw className="mx-auto mb-3 size-10 text-amber-600" />
+          <h2 className="text-xl font-semibold">Sources changed during comparison</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Review the current Working CSVs, then choose Apply key to retry.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid place-items-center p-8 text-center">
+      <div className="max-w-lg">
+        <Rows3 className="mx-auto mb-3 size-10 text-muted-foreground" />
+        <h2 className="text-xl font-semibold">Choose a Comparison Key</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Select one or more shared columns above. Apply key validates presence and uniqueness in both complete Working
+          CSVs before computing results.
+        </p>
+        <p className="mt-3 text-sm font-semibold">
+          Source filters, sorts, searches, and Stats state do not limit this comparison.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -366,8 +434,8 @@ function StatusBanner({
   );
 }
 
-function actionFailureMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+function actionFailureMessage(cause: unknown, fallback: string): string {
+  return cause instanceof Error && cause.message ? cause.message : fallback;
 }
 
 function KeyDiagnostics({
