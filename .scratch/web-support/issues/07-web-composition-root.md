@@ -2,7 +2,7 @@
 
 **What to build:** CSV Viewer opens in a browser as a static site. A startup capability check gates file selection, the user picks one local CSV Source through a portable file input, and the full shared workspace works: grid, sorting, filtering, search, Stats Panel, editing, undo/redo, and Aligned Comparison - all in-memory, nothing uploaded.
 
-**Blocked by:** 04 - CsvViewerRuntime seam, 06 - DuckDB-Wasm adapter.
+**Blocked by:** 04 - CsvViewer seam, 06 - DuckDB-Wasm adapter.
 
 **Status:** ready-for-agent
 
