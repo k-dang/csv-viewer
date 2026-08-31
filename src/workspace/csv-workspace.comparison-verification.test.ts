@@ -538,7 +538,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Comparison contrac
     ).resolves.toMatchObject({ status: 'rejected', fault: { code: 'no-applied-key' } });
   });
 
-  it('cancels at a cooperative statement boundary without publishing a result', async () => {
+  it('cancels before publication without publishing a result', async () => {
     const [baseline, candidate] = await Promise.all([
       value.openSource('baseline.csv', 'id,value\n1,old\n'),
       value.openSource('candidate.csv', 'id,value\n1,new\n'),

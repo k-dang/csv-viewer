@@ -27,7 +27,7 @@ Electron, React, TypeScript, AG Grid Community, DuckDB, Vite, Vitest, and pnpm.
 
 CSV Sources are opened from disk by the Electron main process, queried through DuckDB, and displayed in the renderer through paged row-window requests so the full dataset is not held in React state. The Active Tab's Working CSV can be edited in memory and delivered with Export CSV; its CSV Source is never overwritten.
 
-The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime only through the `CsvWorkspaceHost` seam - file selection, source description, export delivery, and Recent CSV Sources - which `src/main/` implements with Electron dialogs and the Node filesystem. `scripts/check-workspace-isolation.mjs` enforces the boundary on every build, so the workspace cannot import Electron, Node primitives, or anything from a runtime-specific tree.
+The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime only through the `CsvWorkspaceHost` seam - file selection, source description, export delivery, and Recent CSV Sources - which `src/main/` implements with Electron dialogs and the Node filesystem. The restricted-import rules in `.oxlintrc.json` enforce this isolation during lint and every build, so the workspace cannot import Electron, Node primitives, or anything from a runtime-specific tree.
 
 ## Requirements
 
@@ -47,8 +47,8 @@ pnpm run package
 
 - `dev` starts Vite and launches Electron against the local dev server.
 - `typecheck` checks renderer, shared, workspace, main, and preload TypeScript.
-- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, workspace isolation, and grid request behavior.
-- `build` runs the typecheck and the workspace isolation check, then creates `dist-renderer/` and `dist-electron/`.
+- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, and grid request behavior.
+- `build` runs the typecheck and lint, including the workspace isolation rules, then creates `dist-renderer/` and `dist-electron/`.
 - `package` builds the app and creates platform installers under `release/`.
 
 ## CSV Editing

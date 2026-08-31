@@ -24,8 +24,8 @@ The interface is extracted **here**, not earlier, and in this order: get DuckDB-
 
 ### Engine constraints made explicit
 
-- [ ] Connection separation is preserved as transaction/artifact ownership and cleanup isolation on both engines. Where ticket 00 confirmed that the single-threaded Worker serializes execution, comparison work is issued as bounded statements so the owner connection stays responsive to row-window queries during a comparison, and the measured owner-connection latency is recorded.
-- [ ] Cancellation is an explicit capability with two shapes - preemptive (native `interrupt()`) and cooperative (statement boundary). The comparison executor is correct under the weaker shape. Observable outcome is identical on both: a cancelled operation reports cancelled, publishes nothing, and releases its artifacts.
+- [ ] Connection separation is preserved as transaction/artifact ownership and cleanup isolation on both engines. Long Wasm comparison work uses the pending-query `send()` path so the single Worker can schedule owner-connection row windows while one comparison statement is running. The measured owner-connection latency is recorded. Bounded SQL statements are added only if representative measurements show that the pending-query path is insufficient.
+- [ ] The database interface exposes cancellable long-running execution without exposing driver-specific cancellation modes. The native adapter pairs that operation with `interrupt()` and the Wasm adapter pairs `send()` with `cancelSent()`. Both normalize cancellation errors to the same observable outcome: a cancelled operation reports cancelled, publishes nothing, and releases its artifacts.
 - [ ] The native adapter preserves dedicated owner/worker connection behavior, operation cancellation, publication ordering, artifact ownership and cleanup, read survival, and deterministic disposal, with observable assertions unchanged.
 
 ### Isolation and cost
