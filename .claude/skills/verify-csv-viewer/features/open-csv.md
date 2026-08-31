@@ -26,21 +26,21 @@ Open a CSV loads a local file into a Working CSV tab, shows bounded rows in the 
 Preconditions:
 
 - `launch` has finished and `doctor` is `ok`.
-- Empty window text includes `No CSV open`, `Main process connected`, `Recent files`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`.
+- Empty window text includes `No CSV open`, `Recent files`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`.
 - Fixtures exist at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 
-- **Record empty state.** Run `node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs snapshot --path evidence/open-csv/empty.aria.txt` and `screenshot --path evidence/open-csv/empty.png`. Both show `CSV Viewer`, `No CSV open`, and `Main process connected`.
+- **Record empty state.** Run `node .claude/skills/verify-csv-viewer/bin/control-csv-viewer.mjs snapshot --path evidence/open-csv/empty.aria.txt` and `screenshot --path evidence/open-csv/empty.png`. Both show `CSV Viewer`, `No CSV open`, and the seeded Recent files.
 - **Open first fixture.** Choose the Recent files button for `phase-2-sample.csv`. Run `click --role button --name "phase-2-sample.csv"`. Wait with `wait --text "phase-2-sample.csv" --timeout 15000` then `wait --text "5 visible of 5 rows"`. The tablist `Open CSV and Comparison Tabs` contains tab `phase-2-sample.csv`. Heading `#metadata-title` is `phase-2-sample.csv`. Badge `Ready` is visible. Grid text includes `Ada Lovelace`. `Compare…` is visible and disabled. Recent files are gone.
 - **Confirm source untouched.** The bytes of `fixtures/phase-2-sample.csv` still match the pre-open file. Isolated `userDataDir/recent-files.json` still lists that absolute path.
 - **Reopen.** With `phase-2-sample.csv` active, run `click --role button --name "Reopen"`. Wait for `Ready` and `5 visible of 5 rows`. The same file remains open. `Unexported Changes` is absent.
-- **Proof.** Snapshot and screenshot `evidence/open-csv/opened.aria.txt` and `opened.png` after the first successful open, before closing. They show `CSV Viewer`, `phase-2-sample.csv`, `5 visible of 5 rows`, `Ada Lovelace`, and `Main process connected`.
+- **Proof.** Snapshot and screenshot `evidence/open-csv/opened.aria.txt` and `opened.png` after the first successful open, before closing. They show `CSV Viewer`, `phase-2-sample.csv`, `5 visible of 5 rows`, and `Ada Lovelace`.
 - **Close tabs.** Run `click --role button --name "Close phase-2-sample.csv"`. The window returns to `No CSV open` and Recent files.
 - **Skip, do not fake.** Do not click `Open CSV`. Report `open-dialog`, `open-second`, and `open-already-open` as unreachable without a human OS dialog. After one tab is open, the Recent files list is gone, so a second CSV (or re-picking the already-open file) requires that dialog.
 
 ## Gotchas
 
 - `click --name "phase-2-sample.csv"` can match the Recent files button or, after open, the tab. The Recent files control's `title` is the full path, so the name also contains the fixture path. After a file is open the Recent list is gone. Use `--role tab` to switch and `--role button` with `Close phase-2-sample.csv` to close.
-- The window follows OS color scheme on a fresh userData dir (`csv-viewer-theme` in localStorage). Dark or light is fine as long as `CSV Viewer` and `Main process connected` are visible.
+- The window follows OS color scheme on a fresh userData dir (`csv-viewer-theme` in localStorage). Dark or light is fine when the heading and expected feature state are legible.
 - Opening is async. Wait for `Ready` and the visible-row line, not a fixed sleep.
 - `pnpm run dev` also shows this UI but uses default userData and a DevTools window. Doctor must see the recorded pid and a userData path under `runs/`.
 - Locale formatting may insert separators in row counts on some machines. If `5 visible of 5 rows` misses, read `text` and match the actual formatted line.

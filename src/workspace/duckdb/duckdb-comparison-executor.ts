@@ -14,6 +14,7 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from '../comparison-executor';
+import type { WorkspaceDatabaseConnection } from '../database';
 import {
   assertKnownColumn,
   buildDropTableSql,
@@ -24,17 +25,6 @@ import { normalizeCellValue, normalizeCount, type EngineCellValue } from '../csv
 import { csvDeletedField, csvSourceOrderField } from '../csv-storage-schema';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
-type ComparisonQueryResult = {
-  getRowObjectsJS(): import('../csv-result-normalization').EngineRow[];
-};
-
-export type ComparisonConnection = {
-  run(sql: string): Promise<object | void>;
-  runAndReadAll(sql: string, values?: string[]): Promise<ComparisonQueryResult>;
-  interrupt(): void;
-  closeSync(): void;
-};
-
 export type ComparisonSource = {
   tableName: string;
   columns: CsvColumn[];
@@ -43,12 +33,12 @@ export type ComparisonSource = {
 
 export type DuckDbComparisonAccess = {
   acquireSource(workingCsvId: WorkingCsvId): Promise<ComparisonSource>;
-  getOwnerConnection(): Promise<ComparisonConnection>;
-  connectWorker(): Promise<ComparisonConnection>;
+  getOwnerConnection(): Promise<WorkspaceDatabaseConnection>;
+  connectWorker(): Promise<WorkspaceDatabaseConnection>;
 };
 
 type ComparisonWorker = {
-  connection: Promise<ComparisonConnection>;
+  connection: Promise<WorkspaceDatabaseConnection>;
   cancelled: boolean;
 };
 
@@ -93,27 +83,27 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       const keyOrder = key
         .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
         .join(', ');
-      const blankCountResult = await writer.runAndReadAll(
+      const blankCountRows = await writer.readObjectsCancellable(
         `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
       );
-      const blankExamplesResult = await writer.runAndReadAll(
+      const blankExampleRows = await writer.readObjectsCancellable(
         `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id, ${keyProjection} FROM ${table}
          WHERE ${active} AND (${blank}) ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
       );
-      const duplicateCountResult = await writer.runAndReadAll(
+      const duplicateCountRows = await writer.readObjectsCancellable(
         `SELECT count(*)::BIGINT AS count FROM (
           SELECT 1 FROM ${table} WHERE ${active} AND (${present}) GROUP BY ${keyGroup} HAVING count(*) > 1
         ) duplicate_groups`,
       );
-      const duplicateGroupsResult = await writer.runAndReadAll(
+      const duplicateGroupRows = await writer.readObjectsCancellable(
         `SELECT ${keyProjection}, count(*)::BIGINT AS row_count FROM ${table} WHERE ${active} AND (${present})
          GROUP BY ${keyGroup} HAVING count(*) > 1 ORDER BY ${keyOrder} LIMIT 5`,
       );
       const duplicateExamples: SourceKeyDiagnostics['duplicateExamples'] = [];
-      for (const group of duplicateGroupsResult.getRowObjectsJS()) {
+      for (const group of duplicateGroupRows) {
         const keyValues = key.map((_column, index) => String(group[`key_${index}`]));
         const conditions = key.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
-        const rowIdsResult = await writer.runAndReadAll(
+        const rowIdRows = await writer.readObjectsCancellable(
           `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${table}
            WHERE ${active} AND ${conditions} ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
           keyValues,
@@ -121,14 +111,14 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         duplicateExamples.push({
           keyValues,
           rowCount: normalizeCount(group.row_count),
-          rowIds: rowIdsResult.getRowObjectsJS().map((row) => String(row.row_id)),
+          rowIds: rowIdRows.map((row) => String(row.row_id)),
         });
       }
 
       return {
-        blankRowCount: normalizeCount(blankCountResult.getRowObjectsJS()[0].count),
-        duplicateGroupCount: normalizeCount(duplicateCountResult.getRowObjectsJS()[0].count),
-        blankExamples: blankExamplesResult.getRowObjectsJS().map((row) => ({
+        blankRowCount: normalizeCount(blankCountRows[0].count),
+        duplicateGroupCount: normalizeCount(duplicateCountRows[0].count),
+        blankExamples: blankExampleRows.map((row) => ({
           rowId: String(row.row_id),
           keyValues: key.map((_column, index) => normalizeCellValue(row[`key_${index}`])),
         })),
@@ -178,7 +168,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
           operationId: request.artifactId,
         });
         this.artifacts.add(request.artifactId);
-        await writer.run(
+        await writer.runCancellable(
           `CREATE TABLE ${table} AS SELECT ${projection}
            FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
            FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
@@ -189,14 +179,14 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
               `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
           )
           .join(', ');
-        const summaryResult = await writer.runAndReadAll(
+        const summaryRows = await writer.readObjectsCancellable(
           `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
             coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
             coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
             coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
             count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
         );
-        const row = summaryResult.getRowObjectsJS()[0];
+        const row = summaryRows[0];
         return {
           rows: {
             changed: normalizeCount(row.changed),
@@ -233,7 +223,10 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     if (!worker) return;
     worker.cancelled = true;
     void worker.connection.then(
-      (connection) => connection.interrupt(),
+      (connection) =>
+        connection.cancelRunning().catch((error) => {
+          console.error('Unable to cancel Comparison database work.', error);
+        }),
       () => undefined,
     );
   }
@@ -243,7 +236,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     if (!worker) return;
     try {
       const connection = await worker.connection;
-      connection.closeSync();
+      await connection.close();
     } finally {
       if (this.workers.get(operationId) === worker) this.workers.delete(operationId);
     }
@@ -263,13 +256,13 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       const order = Array.from({ length: request.keyCount }, (_value, index) =>
         `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
       ).join(', ');
-      const countResult = await connection.runAndReadAll(
+      const countRows = await connection.readObjects(
         `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
       );
-      const rowsResult = await connection.runAndReadAll(
+      const resultRows = await connection.readObjects(
         `SELECT * FROM ${table}${where}${order ? ` ORDER BY ${order} ASC` : ''} LIMIT ${request.limit} OFFSET ${request.offset}`,
       );
-      const rows = rowsResult.getRowObjectsJS().map((row): ComparisonRow => {
+      const rows = resultRows.map((row): ComparisonRow => {
         const classification = parseClassification(row.classification);
         const baselineSide =
           row.baseline_row_id == null
@@ -299,7 +292,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
           changed: request.columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
         };
       });
-      return { totalRowCount: normalizeCount(countResult.getRowObjectsJS()[0].count), rows };
+      return { totalRowCount: normalizeCount(countRows[0].count), rows };
     } finally {
       this.releaseRead(request.artifactId);
     }
@@ -341,7 +334,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     }
   }
 
-  private async getWriter(operationId: ComparisonOperationId): Promise<ComparisonConnection> {
+  private async getWriter(operationId: ComparisonOperationId): Promise<WorkspaceDatabaseConnection> {
     const existing = this.workers.get(operationId);
     if (existing) {
       const connection = await existing.connection;
@@ -355,7 +348,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       cancelled: false,
     };
     this.workers.set(operationId, worker);
-    let writer: ComparisonConnection;
+    let writer: WorkspaceDatabaseConnection;
     try {
       writer = await worker.connection;
     } catch (error) {

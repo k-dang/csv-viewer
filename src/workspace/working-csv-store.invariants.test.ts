@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
-import type { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
+import { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 import { WorkingCsvStore } from './working-csv-store';
 import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
 
@@ -15,7 +15,7 @@ let store: WorkingCsvStore;
 
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
-  store = new WorkingCsvStore(fixture.host);
+  store = new WorkingCsvStore(fixture.host, new DuckDbWorkspaceDatabase());
 });
 
 afterEach(async () => {

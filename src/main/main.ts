@@ -12,6 +12,7 @@ import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { registerCsvViewerRequestHandler } from './csv-viewer-ipc';
 import { createCsvViewer } from '../workspace/csv-workspace';
+import { DuckDbWorkspaceDatabase } from '../workspace/duckdb/duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
 import { ipcChannels } from '../shared/ipc-channels';
 import {
@@ -66,7 +67,7 @@ const workspaceHost = new DesktopWorkspaceHost(
   // File name predates the Recent CSV Source vocabulary; kept so existing installs keep their list.
   path.join(app.getPath('userData'), 'recent-files.json'),
 );
-const workspace = createCsvViewer(workspaceHost);
+const workspace = createCsvViewer(workspaceHost, new DuckDbWorkspaceDatabase());
 let workspaceCloseAuthorizedImpact: WorkspaceCloseImpact | undefined;
 let workspaceCloseConfirmation: Promise<WorkspaceCloseImpact | null> | null = null;
 

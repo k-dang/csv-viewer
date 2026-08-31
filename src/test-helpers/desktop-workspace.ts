@@ -18,7 +18,9 @@ import type {
 } from '../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from '../workspace/comparison-executor';
 import { CsvWorkspaceImplementation } from '../workspace/csv-workspace-implementation';
+import { DuckDbWorkspaceDatabase } from '../workspace/duckdb/duckdb-database';
 import type { WorkspaceContractFixture } from './workspace-contract';
+import { WorkspaceContractObserver } from './workspace-contract-observer';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -36,13 +38,7 @@ export type ScriptedPrompts = {
  * the desktop host supplies CSV Source identity, description, and export delivery.
  */
 export class CsvWorkspaceFixture implements WorkspaceContractFixture {
-  private readonly outcomes = new Map<ComparisonOperationId, ComparisonAttemptOutcomeView>();
-  private readonly comparisons = new Map<ComparisonId, ComparisonView>();
-  private readonly outcomeWaiters = new Map<
-    ComparisonOperationId,
-    Array<(outcome: ComparisonAttemptOutcomeView) => void>
-  >();
-  private readonly unsubscribe: () => void;
+  private readonly observer: WorkspaceContractObserver;
 
   private constructor(
     readonly directory: string,
@@ -50,21 +46,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     readonly host: DesktopWorkspaceHost,
     readonly prompts: ScriptedPrompts,
   ) {
-    this.unsubscribe = workspace.onEvent((viewerEvent) => {
-      if (viewerEvent.type !== 'comparison') return;
-      const event = viewerEvent.event;
-      if (event.kind === 'closed') {
-        this.comparisons.delete(event.comparisonId);
-        return;
-      }
-      this.comparisons.set(event.comparison.comparisonId, event.comparison);
-      const attempt = event.comparison.lastAttempt;
-      if (!attempt) return;
-      this.outcomes.set(attempt.attemptId, attempt);
-      const waiters = this.outcomeWaiters.get(attempt.attemptId) ?? [];
-      this.outcomeWaiters.delete(attempt.attemptId);
-      waiters.forEach((resolve) => resolve(attempt));
-    });
+    this.observer = new WorkspaceContractObserver(workspace);
   }
 
   get viewer(): CsvViewer {
@@ -97,7 +79,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      workspace = new CsvWorkspaceImplementation(host, executor);
+      workspace = new CsvWorkspaceImplementation(host, new DuckDbWorkspaceDatabase(), executor);
       return new CsvWorkspaceFixture(directory, workspace, host, prompts);
     } catch (error) {
       await workspace?.dispose().catch(() => undefined);
@@ -157,7 +139,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   latestComparison(comparisonId: ComparisonId): ComparisonView | null {
-    return this.comparisons.get(comparisonId) ?? null;
+    return this.observer.latestComparison(comparisonId);
   }
 
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
@@ -169,17 +151,11 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
-    const settled = this.outcomes.get(operationId);
-    if (settled) return Promise.resolve(settled);
-    return new Promise((resolve) => {
-      const waiters = this.outcomeWaiters.get(operationId) ?? [];
-      waiters.push(resolve);
-      this.outcomeWaiters.set(operationId, waiters);
-    });
+    return this.observer.awaitComparisonOutcome(operationId);
   }
 
   async dispose(): Promise<void> {
-    this.unsubscribe();
+    this.observer.dispose();
     try {
       await this.workspace.dispose();
     } finally {

@@ -38,7 +38,7 @@ Preconditions:
 - **Blocked insert.** Run `fill --role searchbox --name "Global search" --value "Ada"`. `Insert row above`, `Insert row below`, and `Append row` are disabled. Clear query with `click --role button --name "Clear query"` before further inserts.
 - **Source.** `fixtures/phase-2-sample.csv` bytes still match the pre-edit copy while `Unexported Changes` is showing.
 - **Export skip.** Do not click `Export CSV`. Report `edit-export` as unreachable without a human OS dialog.
-- **Proof.** Snapshot and screenshot `evidence/edit-csv/dirty.aria.txt` and `dirty.png` while `Unexported Changes` and `Ada Lovelace Edited` are visible, including `CSV Viewer` and `Main process connected`. Undo to a clean state before `Close phase-2-sample.csv`.
+- **Proof.** Snapshot and screenshot `evidence/edit-csv/dirty.aria.txt` and `dirty.png` while `Unexported Changes`, `Ada Lovelace Edited`, and `CSV Viewer` are visible. Undo to a clean state before `Close phase-2-sample.csv`.
 
 ## Gotchas
 
@@ -46,3 +46,4 @@ Preconditions:
 - Insert needs exactly one selected row and no active sort, filter, or search. Append needs zero selected rows and no query. Delete needs a selection. `#metadata-title` does not clear the grid selection. A cell edit leaves Append enabled; click a row after that if you need Insert.
 - Closing a dirty tab opens `window.confirm` (`Unexported Changes will be lost.`). Undo to a clean state before `Close phase-2-sample.csv`.
 - Dirty UI is not persistence. The proof that Export CSV did not run is the unchanged fixture on disk.
+

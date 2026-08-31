@@ -16,6 +16,7 @@ import {
   type ConfirmWorkspaceCloseOutcome,
 } from '../shared/csv-viewer-contract';
 import { CsvWorkspaceFixture } from './desktop-workspace';
+import { WasmWorkspaceFixture } from './wasm-workspace';
 
 /**
  * User-observable setup around CsvViewer. Engine-specific source and export mechanics stay in the
@@ -47,6 +48,10 @@ export const workspaceContractFactories: WorkspaceContractFactory[] = [
   {
     name: 'native DuckDB',
     create: () => CsvWorkspaceFixture.create(),
+  },
+  {
+    name: 'DuckDB-Wasm',
+    create: () => WasmWorkspaceFixture.create(),
   },
 ];
 

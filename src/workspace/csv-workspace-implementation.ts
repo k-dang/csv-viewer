@@ -1,4 +1,5 @@
 import type { ComparisonExecutor } from './comparison-executor';
+import type { WorkspaceDatabase } from './database';
 import { CsvComparisonService } from './csv-comparison-service';
 import { WorkingCsvStore } from './working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
@@ -37,9 +38,10 @@ export class CsvWorkspaceImplementation implements CsvViewer {
 
   constructor(
     private readonly host: CsvWorkspaceHost,
+    database: WorkspaceDatabase,
     executor?: ComparisonExecutor,
   ) {
-    this.csvStore = new WorkingCsvStore(host);
+    this.csvStore = new WorkingCsvStore(host, database);
     this.comparisonStore = new CsvComparisonService(
       this.csvStore,
       executor ?? this.csvStore.createComparisonExecutor(),

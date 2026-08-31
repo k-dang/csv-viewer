@@ -4,8 +4,8 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Launch with `node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch` so Electron uses a disposable `--user-data-dir` under `.cursor/skills/verify-csv-viewer/runs/`.
-- Require `doctor` status `ok`, heading `CSV Viewer`, and text `Main process connected`.
+- Launch with `node .claude/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch` so Electron uses a disposable `--user-data-dir` under `.claude/skills/verify-csv-viewer/runs/`.
+- Require `doctor` status `ok`, heading `CSV Viewer`, and `inspect.hasHealth` true.
 - Seeded Recent files are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 - Never drive a `pnpm run dev` window or the user's default Electron userData.
 - Native Open/Export dialogs are out of band. Open CSVs from Recent files on the empty window. Do not click `Open CSV` or `Export CSV` in unattended runs.
@@ -44,3 +44,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, undo/redo, and the undriveable Export CSV dialog.
 - [Compare two CSVs](./compare-csvs.md) covers Compare…, the candidate picker, Apply key, and result badges.
 - [Column value counts](./column-counts.md) covers the Stats Panel scoped to the current search and filters.
+
