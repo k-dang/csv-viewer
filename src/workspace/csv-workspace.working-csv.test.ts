@@ -41,9 +41,19 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace Working CSV contra
       'quoted.csv',
       ['name,note', 'Ada,"uses commas, quotes ""well"", and new lines"', 'Grace,"plain"'].join('\n'),
     );
+    const window = await workspace().call({
+      operation: 'csv.get-rows',
+      workingCsvId: workingCsv.workingCsvId,
+      offset: 0,
+      limit: 2,
+    });
 
     expect(workingCsv.rowCount).toBe(2);
     expect(workingCsv.columns.map((column) => column.name)).toEqual(['name', 'note']);
+    expectVisibleRows(window.rows).toEqual([
+      { name: 'Ada', note: 'uses commas, quotes "well", and new lines' },
+      { name: 'Grace', note: 'plain' },
+    ]);
   });
 
   it('opens CSV Sources with a delimiter override', async () => {
