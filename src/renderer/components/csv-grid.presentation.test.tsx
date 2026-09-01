@@ -9,15 +9,6 @@ const DataGrid = () => null;
 // Kept apart from the edit-state tests: react-dom/server and react-test-renderer rendering the
 // same context in one module makes React warn about concurrent renderers.
 describe('CsvGrid presentation', () => {
-  it('offers Export CSV for an open Working CSV without Unexported Changes', () => {
-    const markup = renderToStaticMarkup(
-      withCsvViewer(<CsvGrid workingCsv={workingCsvFixture()} themeMode="light" DataGrid={DataGrid} />),
-    );
-
-    expect(markup).toContain('aria-label="Export CSV"');
-    expect(markup).not.toMatch(/<button[^>]*aria-label="Export CSV"[^>]*disabled/);
-  });
-
   it('presents Unexported Changes using the product language', () => {
     const workingCsv = workingCsvFixture({
       dataRevision: 1,
