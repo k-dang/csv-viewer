@@ -37,6 +37,10 @@ type MemorySource = {
   contents: string | null;
 };
 
+type NodeWebWorker = InstanceType<typeof WebWorker> & {
+  addEventListener(type: 'close', listener: () => void): void;
+};
+
 class WasmContractHost implements CsvWorkspaceHost {
   readonly capabilities = { recentCsvSources: false } as const;
   private readonly sourcesByName = new Map<string, MemorySource>();
@@ -136,6 +140,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   private constructor(
     private readonly workspace: CsvWorkspaceImplementation,
     private readonly host: WasmContractHost,
+    private readonly workerClosures: Promise<void>[],
   ) {
     this.observer = new WorkspaceContractObserver(workspace);
   }
@@ -145,17 +150,27 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   static async create(): Promise<WasmWorkspaceFixture> {
+    const workerClosures: Promise<void>[] = [];
     const mainWorker = pathToFileURL(
       require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
     ).toString();
     const database = new DuckDbWasmWorkspaceDatabase({
       mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
       mainWorker,
-      createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
+      createWorker: (reference) => {
+        // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
+        const worker = new WebWorker(new URL(reference)) as NodeWebWorker;
+        workerClosures.push(
+          new Promise((resolve) => {
+            worker.addEventListener('close', resolve);
+          }),
+        );
+        return Promise.resolve(worker);
+      },
     });
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database);
-    return new WasmWorkspaceFixture(workspace, host);
+    return new WasmWorkspaceFixture(workspace, host, workerClosures);
   }
 
   registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
@@ -203,8 +218,9 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace.confirmClose(confirmedImpact);
   }
 
-  disposeWorkspace(): Promise<void> {
-    return this.workspace.dispose();
+  async disposeWorkspace(): Promise<void> {
+    await this.workspace.dispose();
+    await Promise.all(this.workerClosures);
   }
 
   awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
@@ -213,6 +229,6 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
 
   async dispose(): Promise<void> {
     this.observer.dispose();
-    await this.workspace.dispose();
+    await this.disposeWorkspace();
   }
 }
