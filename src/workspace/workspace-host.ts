@@ -11,6 +11,11 @@ export type CsvSourceDescription = {
   defaultDelimiter: string;
 };
 
+/** The delimiter a CSV Source's file name implies, before any Working CSV override. */
+export function defaultDelimiterForSourceName(name: string): string {
+  return name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+}
+
 export type CsvExportRequestForDelivery = {
   sourceId: CsvSourceId;
   suggestedName: string;

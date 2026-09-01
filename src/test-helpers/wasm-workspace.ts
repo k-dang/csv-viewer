@@ -20,6 +20,7 @@ import { CsvWorkspaceImplementation } from '../workspace/csv-workspace-implement
 import { DuckDbWasmWorkspaceDatabase } from '../workspace/duckdb/duckdb-wasm-database';
 import {
   CsvSourceUnavailableError,
+  defaultDelimiterForSourceName,
   type CsvExportDelivery,
   type CsvExportRequestForDelivery,
   type CsvSourceDescription,
@@ -57,7 +58,7 @@ class WasmContractHost implements CsvWorkspaceHost {
       name: source.name,
       location: source.name,
       sizeBytes: encoder.encode(source.contents).byteLength,
-      defaultDelimiter: source.name.toLowerCase().endsWith('.tsv') ? '\t' : ',',
+      defaultDelimiter: defaultDelimiterForSourceName(source.name),
     };
   }
 
@@ -67,15 +68,11 @@ class WasmContractHost implements CsvWorkspaceHost {
   ): Promise<T> {
     const source = this.requireSource(sourceId);
     const extension = source.name.split('.').pop() ?? 'csv';
-    const reference = await this.database.registerFileBuffer(
+    return this.database.withRegisteredFile(
       `contract-${crypto.randomUUID()}.${extension}`,
       encoder.encode(source.contents),
+      use,
     );
-    try {
-      return await use(reference);
-    } finally {
-      await this.database.dropFile(reference);
-    }
   }
 
   deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
@@ -129,6 +126,17 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 }
 
+/** The single-threaded Wasm build the browser ships, hosted on Node's Worker implementation. */
+export function createNodeDuckDbWasmDatabase(): DuckDbWasmWorkspaceDatabase {
+  return new DuckDbWasmWorkspaceDatabase({
+    mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+    mainWorker: pathToFileURL(
+      require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+    ).toString(),
+    createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
+  });
+}
+
 /** Node-hosted contract fixture for the same single-threaded Wasm build used by the browser. */
 export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   private readonly observer: WorkspaceContractObserver;
@@ -145,14 +153,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   static async create(): Promise<WasmWorkspaceFixture> {
-    const mainWorker = pathToFileURL(
-      require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
-    ).toString();
-    const database = new DuckDbWasmWorkspaceDatabase({
-      mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
-      mainWorker,
-      createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
-    });
+    const database = createNodeDuckDbWasmDatabase();
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database);
     return new WasmWorkspaceFixture(workspace, host);

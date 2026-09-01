@@ -32,7 +32,7 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   constructor(private readonly connection: AsyncDuckDBConnection) {}
 
   async run(sql: string, values?: QueryValues): Promise<void> {
-    await normalizeDatabaseOperation(() => this.query(sql, values).then(() => undefined));
+    await normalizeDatabaseOperation(() => this.query(sql, values));
   }
 
   async readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
@@ -70,7 +70,7 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   }
 
   async cancelRunning(): Promise<void> {
-    await normalizeDatabaseOperation(() => this.connection.cancelSent().then(() => undefined));
+    await normalizeDatabaseOperation(() => this.connection.cancelSent());
   }
 
   async close(): Promise<void> {
@@ -146,10 +146,24 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return reference;
   }
 
+  /** Registers `contents` for the duration of `use`, dropping it even when `use` throws. */
+  async withRegisteredFile<T>(
+    name: string,
+    contents: Uint8Array,
+    use: (reference: string) => Promise<T>,
+  ): Promise<T> {
+    const reference = await this.registerFileBuffer(name, contents);
+    try {
+      return await use(reference);
+    } finally {
+      await this.dropFile(reference);
+    }
+  }
+
   async dropFile(reference: string): Promise<void> {
     const database = this.database;
     if (database) {
-      await normalizeDatabaseOperation(() => database.dropFile(reference).then(() => undefined));
+      await normalizeDatabaseOperation(() => database.dropFile(reference));
     }
   }
 

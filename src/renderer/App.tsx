@@ -358,7 +358,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
             <Table2 className="size-5" />
           </div>
           <div className="min-w-0">
-            <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Desktop CSV Viewer</p>
+            <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Local CSV workspace</p>
             <h1 className="truncate text-[22px] leading-tight font-semibold text-foreground">CSV Viewer</h1>
           </div>
         </div>

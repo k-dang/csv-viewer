@@ -14,6 +14,7 @@
     ".windsurf/**",
     "dist-electron",
     "dist-renderer",
+    "dist-web",
     "release",
     "src/renderer/components/ui",
     "tools/oxlint/anti-slop/**"
@@ -47,9 +48,9 @@
     "unicorn/no-useless-spread": "off"
   },
   "overrides": [
-    // The shared workspace runs in the Electron main process today and in a browser page once the
-    // web runtime lands, so it stays free of Electron, Node, and runtime-specific trees. The native
-    // DuckDB driver stays in the duckdb modules the web adapter will sit beside.
+    // The shared workspace runs in the Electron main process and in the browser page, so it stays
+    // free of Electron, Node, and runtime-specific trees. Concrete native and Wasm DuckDB drivers
+    // stay in the duckdb modules below it.
     {
       "files": ["src/workspace/**/*.ts"],
       "rules": {

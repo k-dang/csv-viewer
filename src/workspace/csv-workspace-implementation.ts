@@ -329,7 +329,7 @@ function sameImpact<T extends CloseImpact | WorkspaceCloseImpact>(current: T, co
   return confirmed !== undefined && JSON.stringify(current) === JSON.stringify(confirmed);
 }
 
-function unsupportedOperation(_request: never): never {
-  const operation = Object.getOwnPropertyDescriptor(Object(_request), 'operation')?.value;
+function unsupportedOperation(request: never): never {
+  const operation = Object.getOwnPropertyDescriptor(request, 'operation')?.value;
   throw new Error(`Unsupported CSV Viewer operation: ${String(operation)}`);
 }

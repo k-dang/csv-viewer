@@ -66,6 +66,7 @@ describe('EmptyCsvState', () => {
     expect(getRecentCsvSources).not.toHaveBeenCalled();
     expect(renderedText(renderer)).not.toContain('Recent CSV Sources');
     expect(renderedText(renderer)).not.toContain('sales.csv');
+    expect(renderedText(renderer)).toContain('Select your CSV Sources again after reload.');
   });
 
   /** A CSV Source that has become unreachable must drop off the list after a failed open. */

@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* The web build's Vite root is /web, so Tailwind needs the shared source tree explicitly. */
+@source "./";
+@source "../web/";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
