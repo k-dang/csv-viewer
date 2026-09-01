@@ -9,8 +9,9 @@ const require = createRequire(`${process.cwd()}/package.json`);
 let database: DuckDbWasmWorkspaceDatabase | undefined;
 
 afterEach(async () => {
-  await database?.close();
+  const failures = (await database?.close()) ?? [];
   database = undefined;
+  expect(failures).toEqual([]);
 });
 
 describe('DuckDbWasmWorkspaceDatabase', () => {
@@ -66,6 +67,26 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
         new DuckDbWasmWorkspaceDatabase({
           mainModule: 'duckdb.wasm',
           mainWorker: 'https://cdn.example.com/duckdb.worker.js',
+          createWorker: () => Promise.reject(new Error('not used')),
+        }),
+    ).toThrow('self-hosted');
+  });
+
+  it('rejects protocol-relative executable asset URLs', () => {
+    expect(
+      () =>
+        new DuckDbWasmWorkspaceDatabase({
+          mainModule: '//cdn.example.com/duckdb.wasm',
+          mainWorker: 'duckdb.worker.js',
+          createWorker: () => Promise.reject(new Error('not used')),
+        }),
+    ).toThrow('self-hosted');
+
+    expect(
+      () =>
+        new DuckDbWasmWorkspaceDatabase({
+          mainModule: 'duckdb.wasm',
+          mainWorker: '//cdn.example.com/duckdb.worker.js',
           createWorker: () => Promise.reject(new Error('not used')),
         }),
     ).toThrow('self-hosted');

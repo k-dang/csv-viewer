@@ -23,6 +23,16 @@ describe('DuckDbWorkspaceDatabase', () => {
     expect(database.isOpen()).toBe(false);
   });
 
+  it('waits for an in-flight owner connection before closing', async () => {
+    database = new DuckDbWorkspaceDatabase();
+
+    const opening = database.ownerConnection();
+    await expect(database.close()).resolves.toEqual([]);
+    await opening;
+
+    expect(database.isOpen()).toBe(false);
+  });
+
   it('normalizes driver query errors', async () => {
     database = new DuckDbWorkspaceDatabase();
 

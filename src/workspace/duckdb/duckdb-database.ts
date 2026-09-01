@@ -105,6 +105,10 @@ export class DuckDbWorkspaceDatabase implements WorkspaceDatabase {
   /** Closes the owner connection and instance, collecting rather than throwing teardown failures. */
   async close(): Promise<Error[]> {
     const failures: Error[] = [];
+    const opening = this.opening;
+    if (opening) {
+      await opening.catch((error) => failures.push(toError(error)));
+    }
     try {
       await this.connection?.close();
     } catch (error) {

@@ -210,7 +210,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
 }
 
 function assertLocalAsset(reference: string): void {
-  if (/^https?:\/\//i.test(reference)) {
+  if (/^(?:https?:)?\/\//i.test(reference)) {
     throw new Error('DuckDB-Wasm executable assets must be self-hosted.');
   }
 }
