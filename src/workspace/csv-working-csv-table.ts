@@ -24,11 +24,11 @@ import {
 } from './csv-query';
 import { normalizeCellValue, type EngineRow } from './csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
-import type { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
+import type { WorkspaceDatabase } from './database';
 
 const internalFields = new Set([csvInternalRowIdField, csvSourceOrderField, csvDeletedField]);
 
-export type CsvTable = { database: DuckDbWorkspaceDatabase; tableName: string };
+export type CsvTable = { database: WorkspaceDatabase; tableName: string };
 
 export async function createWorkingCsvTable(
   table: CsvTable,

@@ -21,7 +21,8 @@
   "dependencies": {
     "@babel/runtime": "^7.29.2",
     "@base-ui/react": "^1.4.1",
-    "@duckdb/node-api": "1.5.2-r.1",
+    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
+    "@duckdb/node-api": "1.5.5-r.4",
     "@floating-ui/react-dom": "^2.1.8",
     "@tailwindcss/vite": "^4.2.4",
     "@vitejs/plugin-react": "^5.0.4",
@@ -54,7 +55,8 @@
     "electron-builder": "^26.8.1",
     "oxlint": "1.80.0",
     "react-test-renderer": "19.1.1",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "web-worker": "1.2.0"
   },
   "build": {
     "appId": "com.kdang.csvviewer",

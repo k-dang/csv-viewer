@@ -12,7 +12,7 @@ Drive only an instance started by `control-csv-viewer.mjs launch`. Never attach 
 All helper commands below are run from the repo root:
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs <command>
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs <command>
 ```
 
 Read `features/README.md` before driving. Use the matching feature file. A proof that uses one convenient entry point is incomplete when that file lists others.
@@ -22,23 +22,23 @@ Read `features/README.md` before driving. Use the matching feature file. A proof
 Launch the **built** Electron app, not `pnpm run dev`. Dev mode opens a detached DevTools window, binds Vite to `127.0.0.1:5173` (shared, not isolatable), and is easy to confuse with a session the user already has open.
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch
 ```
 
 Rebuild first after source changes:
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch --rebuild
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch --rebuild
 ```
 
 What launch does:
 
 1. Installs with `pnpm install` if `node_modules/` is missing.
 2. Runs `pnpm run build` if `dist-electron/main/main.js` or `dist-renderer/index.html` is missing, or if `--rebuild` is set.
-3. Creates `.cursor/skills/verify-csv-viewer/runs/<id>/user-data/` and writes `recent-files.json` pointing at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
+3. Creates `.agents/skills/verify-csv-viewer/runs/<id>/user-data/` and writes `recent-files.json` pointing at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 4. Starts Electron through `scripts/launch-electron.cjs` with `--user-data-dir`, `--remote-debugging-port`, and `--remote-allow-origins=*`. Vite is not started. `VITE_DEV_SERVER_URL` is unset so the window loads `dist-renderer/index.html`.
-5. Waits until CDP answers and the renderer shows heading `CSV Viewer` plus `Main process connected`.
-6. Writes `.cursor/skills/verify-csv-viewer/runs/current.json` (pid, CDP port, userData dir).
+5. Waits until CDP answers, the renderer shows heading `CSV Viewer`, and a read-only Recent CSV Sources IPC call succeeds.
+6. Writes `.agents/skills/verify-csv-viewer/runs/current.json` (pid, CDP port, userData dir).
 
 Electron is spawned detached. The launch command returns once ready and leaves the window running.
 
@@ -53,7 +53,7 @@ Teardown is `cleanup`. Do not `taskkill` by process name.
 Run this first whenever the window looks wrong, CDP errors, or a previous run may still be alive.
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs doctor
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs doctor
 ```
 
 Require all of:
@@ -61,8 +61,8 @@ Require all of:
 - `"status": "ok"`
 - `alive` true for the pid in `current.json`
 - `inspect.heading` is `CSV Viewer`
-- `inspect.hasHealth` true (`Main process connected`)
-- `userDataDir` is under `.cursor/skills/verify-csv-viewer/runs/`
+- `inspect.hasHealth` true because the read-only `csv.get-recent-sources` IPC call succeeded
+- `userDataDir` is under `.agents/skills/verify-csv-viewer/runs/`
 
 If doctor fails, cleanup and launch again. If there is no `current.json`, launch. Do not probe default userData (`%APPDATA%\csv-viewer` or `%APPDATA%\CSV Viewer`) and do not connect to a random CDP port.
 
@@ -71,26 +71,26 @@ If doctor fails, cleanup and launch again. If there is no `current.json`, launch
 Use the helper. Do not open `http://127.0.0.1:5173` in Cursor's browser. That page has no preload API.
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "phase-2-sample.csv"
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "Close stats panel" --nth 0
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --role searchbox --name "Global search" --value "Ada"
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --focused --value "Ada Lovelace Edited"
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs type --text "Ada"
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs wait --text "1 visible of 5 rows" --timeout 10000
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs press --key Enter
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs snapshot --path evidence/open-csv/after.aria.txt
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs screenshot --path evidence/open-csv/after.png
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs text
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "phase-2-sample.csv"
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs click --role button --name "Close stats panel" --nth 0
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --role searchbox --name "Global search" --value "Ada"
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs fill --focused --value "Ada Lovelace Edited"
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs type --text "Ada"
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs wait --text "1 visible of 5 rows" --timeout 10000
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs press --key Enter
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs snapshot --path evidence/open-csv/after.aria.txt
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs screenshot --path evidence/open-csv/after.png
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs text
 ```
 
-Relative `--path` values resolve under `.cursor/skills/verify-csv-viewer/`.
+Relative `--path` values resolve under `.agents/skills/verify-csv-viewer/`.
 
 Stable handles from this renderer:
 
 | Control | Handle |
 | --- | --- |
 | Product title | heading `CSV Viewer` |
-| IPC health | text `Main process connected` |
+| IPC health | `doctor` reports `inspect.hasHealth: true` |
 | Empty state | text `No CSV open` |
 | Open from disk | button `Open CSV` (native OS dialog, do not click during automated proof) |
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
@@ -126,13 +126,13 @@ Wait for observable text. After search or filter, wait for the visible-row line 
 
 ## Evidence
 
-Put artifacts under `.cursor/skills/verify-csv-viewer/evidence/<feature-id>/`. Cleanup must not delete this directory.
+Put artifacts under `.agents/skills/verify-csv-viewer/evidence/<feature-id>/`. Cleanup must not delete this directory.
 
 Proof standards:
 
 - Exercise the real UI. Do not call `window.csvViewer.*` from CDP eval to open, edit, or compare. That skips the user path.
 - Capture before and after. Empty state plus the opened grid, query typed plus the filtered count, cell before plus `Unexported Changes`.
-- Every artifact set includes a snapshot (`.aria.txt`) and a screenshot (`.png`) that show `CSV Viewer` and `Main process connected`.
+- Every artifact set includes a snapshot (`.aria.txt`) and a screenshot (`.png`) that show `CSV Viewer` and the feature's observable result.
 - Record the feature id and the entry point used (recent-files button, header Compare, searchbox, and so on).
 - Opening a CSV also writes `recent-files.json` in the isolated userData dir. After a successful open, that file must still list the fixture path. The fixture bytes on disk must be unchanged. The app does not overwrite CSV sources.
 - Export CSV is not provable without a human finishing the OS dialog. Do not mark Export verified from an enabled button alone. `Compare…` is not provable in an unattended run: the second CSV requires that same OS dialog.
@@ -140,10 +140,10 @@ Proof standards:
 ## Cleanup
 
 ```powershell
-node .cursor/skills/verify-csv-viewer/bin/control-csv-viewer.mjs cleanup
+node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs cleanup
 ```
 
-Cleanup kills the pid from `current.json` (process tree, not the name `electron`), deletes that run directory (userData, logs), and deletes `current.json`. It leaves `.cursor/skills/verify-csv-viewer/evidence/` in place.
+Cleanup kills the pid from `current.json` (process tree, not the name `electron`), deletes that run directory (userData, logs), and deletes `current.json`. It leaves `.agents/skills/verify-csv-viewer/evidence/` in place.
 
 If launch or doctor fails partway through, run cleanup before the next launch so ports and pids are not left behind.
 

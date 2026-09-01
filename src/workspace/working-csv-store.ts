@@ -18,6 +18,7 @@ import type {
   WorkingCsvView,
 } from '../shared/csv-viewer-contract';
 import type { ComparisonExecutor } from './comparison-executor';
+import type { WorkspaceDatabase } from './database';
 import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import { assertKnownColumn, buildColumnValueCountsQuery, buildRowsQuery, maxRowWindowLimit } from './csv-query';
@@ -36,7 +37,6 @@ import {
   runEditCommand,
   type CsvTable,
 } from './csv-working-csv-table';
-import { DuckDbWorkspaceDatabase } from './duckdb/duckdb-database';
 import { DuckDbComparisonExecutor } from './duckdb/duckdb-comparison-executor';
 import { CsvSourceUnavailableError, type CsvWorkspaceHost } from './workspace-host';
 import { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
@@ -75,7 +75,6 @@ type WorkingCsvLease = {
 
 export class WorkingCsvStore {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
-  private readonly database = new DuckDbWorkspaceDatabase();
   private workingCsvs = new Map<string, WorkingCsvState>();
   private dataChangeListeners = new Set<(workingCsvId: WorkingCsvId) => void>();
   private closingWorkingCsvs = new Set<string>();
@@ -88,7 +87,10 @@ export class WorkingCsvStore {
   private comparisonExecutor: ComparisonExecutor | null = null;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
-  constructor(private readonly host: CsvWorkspaceHost) {}
+  constructor(
+    private readonly host: CsvWorkspaceHost,
+    private readonly database: WorkspaceDatabase,
+  ) {}
 
   beginDisposal(): void {
     if (this.lifecycle === 'active') this.lifecycle = 'disposing';
@@ -281,7 +283,7 @@ export class WorkingCsvStore {
     } catch (error) {
       disposalFailure = toError(error);
     } finally {
-      teardownFailures = this.database.close();
+      teardownFailures = await this.database.close();
       this.lifecycle = 'disposed';
     }
 

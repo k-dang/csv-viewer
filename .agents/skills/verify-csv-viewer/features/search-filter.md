@@ -26,7 +26,7 @@ Preconditions:
 - **Match.** Run `fill --role searchbox --name "Global search" --value "Ada"`. Wait `wait --text "1 visible of 5 rows"`. Grid shows `Ada Lovelace` and does not show `Grace Hopper`. Badge returns to `Ready`.
 - **Empty match.** Run `fill --role searchbox --name "Global search" --value "volcano"`. Wait for `0 visible of 5 rows` or `No rows match the current query.` `Ready` still appears after the query finishes.
 - **Clear.** Run `click --role button --name "Clear query"`. Wait for `5 visible of 5 rows`. Searchbox is empty. `Ada Lovelace` and `Grace Hopper` are both visible again.
-- **Proof.** Snapshot and screenshot `evidence/search-filter/match.aria.txt` and `match.png` during the Ada match, before clearing. They show `CSV Viewer`, `phase-2-sample.csv`, `1 visible of 5 rows`, `Ada`, and `Main process connected`.
+- **Proof.** Snapshot and screenshot `evidence/search-filter/match.aria.txt` and `match.png` during the Ada match, before clearing. They show `CSV Viewer`, `phase-2-sample.csv`, `1 visible of 5 rows`, and `Ada`.
 - **Source.** `fixtures/phase-2-sample.csv` bytes are unchanged.
 
 ## Gotchas
@@ -36,3 +36,4 @@ Preconditions:
 - `Clear query` is disabled when nothing is queried. Enable it by searching first.
 - Search is a case-insensitive substring across every column. `active` also matches `inactive`, so that query is `4 visible of 5 rows`, not 3.
 - A screenshot of the searchbox value alone is not proof. The visible-row line and missing non-matching names are the proof.
+

@@ -36,7 +36,7 @@ If two CSV tabs are already open (human finished the dialog):
 - **Choose candidate.** Open the picker again, then `click --role button --name "phase-2-sample-edited.csv"`. Wait for heading `Choose a Comparison Key`. Tab label contains `phase-2-sample.csv ⇄ phase-2-sample-edited.csv`.
 - **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait until badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged ` appear, plus `Applied key: id`. For these fixtures Ada's name differs, so `Changed` is at least 1.
 - **Swap.** Run `click --role button --name "Swap sides"`. Baseline and Candidate file names trade places. Badges refresh in place. Swap does not show `Outdated Comparison`; that banner appears only after a source Working CSV changes.
-- **Proof.** Snapshot and screenshot `evidence/compare-csvs/applied.aria.txt` and `applied.png` after Apply key, showing `CSV Viewer`, both file names, `Applied key: id`, the four count badges, and `Main process connected`.
+- **Proof.** Snapshot and screenshot `evidence/compare-csvs/applied.aria.txt` and `applied.png` after Apply key, showing `CSV Viewer`, both file names, `Applied key: id`, and the four count badges.
 
 ## Gotchas
 
@@ -45,3 +45,4 @@ If two CSV tabs are already open (human finished the dialog):
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.
 - Closing a CSV that a comparison depends on asks for confirmation and closes the Comparison Tab. Finish the comparison proof before closing sources.
 - Do not treat automated unit tests in `csv-workspace.comparison-verification.test.ts` as a substitute for this UI path.
+

@@ -115,10 +115,13 @@ function findFreePort(preferred) {
 
 function runProcess(commandName, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(commandName, args, {
+    const executable = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : commandName;
+    const processArgs =
+      process.platform === 'win32' ? ['/d', '/s', '/c', [commandName, ...args].join(' ')] : args;
+    const child = spawn(executable, processArgs, {
       cwd: repoRoot,
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      shell: false,
       env: options.env ?? process.env,
     });
     child.on('error', reject);
@@ -286,21 +289,27 @@ async function withCdp(run, fn) {
 }
 
 function inspectExpression() {
-  return `(() => {
+  return `(async () => {
     const text = (document.body && document.body.innerText) || '';
     const title = document.title;
     const heading = document.querySelector('h1')?.textContent?.trim() || '';
     const fileHeading = document.querySelector('#metadata-title')?.textContent?.trim() || '';
     const emptyTitle = document.querySelector('#empty-state-title')?.textContent?.trim() || '';
-    const hasHealth = text.includes('Main process connected');
-    const hasIpcDown = text.includes('IPC unavailable') || text.includes('Checking IPC');
+    let hasHealth = false;
+    let healthError = '';
+    try {
+      const recentSources = await window.csvViewer.call({ operation: 'csv.get-recent-sources' });
+      hasHealth = Array.isArray(recentSources);
+    } catch (error) {
+      healthError = error instanceof Error ? error.message : String(error);
+    }
     return {
       title,
       heading,
       fileHeading,
       emptyTitle,
       hasHealth,
-      hasIpcDown,
+      healthError,
       ready: heading === 'CSV Viewer' && hasHealth,
       textSnippet: text.replace(/\\s+/g, ' ').trim().slice(0, 2000),
     };

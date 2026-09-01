@@ -27,7 +27,7 @@ Electron, React, TypeScript, AG Grid Community, DuckDB, Vite, Vitest, and pnpm.
 
 CSV Sources are opened from disk by the Electron main process, queried through DuckDB, and displayed in the renderer through paged row-window requests so the full dataset is not held in React state. The Active Tab's Working CSV can be edited in memory and delivered with Export CSV; its CSV Source is never overwritten.
 
-The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime only through the `CsvWorkspaceHost` seam - file selection, source description, export delivery, and Recent CSV Sources - which `src/main/` implements with Electron dialogs and the Node filesystem. The restricted-import rules in `.oxlintrc.json` enforce this isolation during lint and every build, so the workspace cannot import Electron, Node primitives, or anything from a runtime-specific tree.
+The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime through two injected seams. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. The Electron composition root supplies the desktop host and native DuckDB adapter. The restricted-import rules in `.oxlintrc.json` enforce this isolation during lint and every build, so shared workspace modules cannot import Electron, Node primitives, or a concrete database driver.
 
 ## Requirements
 
