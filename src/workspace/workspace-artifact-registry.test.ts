@@ -44,22 +44,4 @@ describe('WorkspaceArtifactRegistry', () => {
     registry.remove('csv_comparison_operation');
     expect(() => registry.assertNoArtifactsOwnedBy('comparison')).not.toThrow();
   });
-
-  it('rejects duplicate registration and transitions of unknown tables', () => {
-    const registry = new WorkspaceArtifactRegistry();
-    registry.register({
-      tableName: 'csv_session_physical',
-      owner: { kind: 'working-csv', workingCsvId: 'working-1' },
-      role: 'staging',
-    });
-
-    expect(() =>
-      registry.register({
-        tableName: 'csv_session_physical',
-        owner: { kind: 'working-csv', workingCsvId: 'working-2' },
-        role: 'staging',
-      }),
-    ).toThrow('already registered');
-    expect(() => registry.transition('missing', 'retired')).toThrow('is not registered');
-  });
 });

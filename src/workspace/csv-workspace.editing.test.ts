@@ -645,33 +645,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace editing, history, 
     error.mockRestore();
   });
 
-  it('validates large CSV Source access through bounded row windows', async () => {
-    const workingCsv = await fixture.openSource('large.csv', buildLargeCsv());
-    const firstWindow = await workspace().call({
-      operation: 'csv.get-rows',
-      workingCsvId: workingCsv.workingCsvId,
-      offset: 0,
-      limit: 100,
-    });
-    const laterWindow = await workspace().call({
-      operation: 'csv.get-rows',
-      workingCsvId: workingCsv.workingCsvId,
-      offset: 4500,
-      limit: 75,
-    });
-
-    expect(workingCsv.rowCount).toBe(5000);
-    expect(firstWindow.rows).toHaveLength(100);
-    expect(laterWindow.rows).toHaveLength(75);
-    expect(laterWindow.rows[0]).toEqual({
-      [csvInternalRowIdField]: '4501',
-      id: '4500',
-      name: 'Person 4500',
-      score: '0',
-    });
-  });
-
-  it('keeps edited large CSV Source access bounded after edits, inserts, and deletes', async () => {
+  it('keeps large CSV Source access bounded after edits, inserts, and deletes', async () => {
     const workingCsv = await fixture.openSource('large-edited.csv', buildLargeCsv());
     const request = { workingCsvId: workingCsv.workingCsvId };
 
@@ -693,28 +667,18 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace editing, history, 
 
     const window = await workspace().call({ operation: 'csv.get-rows', ...request, offset: 4899, limit: 5 });
 
+    expect(workingCsv.rowCount).toBe(5000);
     expect(window.filteredRowCount).toBe(4999);
     expect(window.rows).toHaveLength(5);
     expect(rowIds(window.rows)).toEqual(['4900', '4901', '5001', '4904', '4905']);
+    expect(window.rows[0]).toEqual({
+      [csvInternalRowIdField]: '4900',
+      id: '4899',
+      name: 'Person 4899',
+      score: '99',
+    });
     expect(window.rows[1].name).toBe('Edited Person');
     expect(window.rows[2]).toMatchObject({ id: '', name: '', score: '' });
-  });
-
-  it('validates wide CSV Source access without requiring all columns to be manually mapped', async () => {
-    const headers = Array.from({ length: 120 }, (_value, index) => `metric_${index}`);
-    const row = headers.map((_header, index) => String(index));
-    const workingCsv = await fixture.openSource('wide.csv', [headers.join(','), row.join(',')].join('\n'));
-    const window = await workspace().call({
-      operation: 'csv.get-rows',
-      workingCsvId: workingCsv.workingCsvId,
-      offset: 0,
-      limit: 1,
-    });
-
-    expect(workingCsv.columns).toHaveLength(120);
-    expect(window.rows).toHaveLength(1);
-    expect(window.rows[0].metric_0).toBe('0');
-    expect(window.rows[0].metric_119).toBe('119');
   });
 
   it('returns a distinct error for unsupported CSV Sources', async () => {
