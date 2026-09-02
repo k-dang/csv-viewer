@@ -1,6 +1,6 @@
 # CSV Viewer
 
-A fast local desktop app for opening, inspecting, filtering, and cleaning CSV files without uploading them anywhere.
+A local desktop and web app for opening, inspecting, filtering, and cleaning CSV files without uploading them anywhere.
 
 <p align="center">
   <img src="images/app.png" alt="CSV Viewer showing a large CSV file with metadata, delimiter controls, filtering, and an editable data grid" width="900">
@@ -10,7 +10,7 @@ CSV Viewer is built for practical CSV work: open files from disk, browse large d
 
 ## Highlights
 
-- **Local-first desktop workflow.** CSV Sources are opened by the Electron app from your filesystem; CSV Sources are never uploaded or overwritten.
+- **Local Processing.** Desktop and web keep CSV Sources and Working CSV data on your device. CSV Sources are never uploaded or overwritten.
 - **Large-file friendly browsing.** DuckDB handles CSV querying while the renderer requests bounded row windows instead of loading the full dataset into React state.
 - **Rich table interaction.** AG Grid provides sorting, filtering, column resizing, horizontal scrolling, and focused row inspection for wide or messy files.
 - **CSV-aware controls.** Delimiter and header handling can be adjusted when a file needs explicit parsing settings instead of the sniffed defaults.
@@ -21,13 +21,13 @@ CSV Viewer is built for practical CSV work: open files from disk, browse large d
 
 ## Stack
 
-Electron, React, TypeScript, AG Grid Community, DuckDB, Vite, Vitest, and pnpm.
+Electron, React, TypeScript, AG Grid Community, native DuckDB, DuckDB-Wasm, Vite, Vitest, and pnpm.
 
 ## How It Works
 
-CSV Sources are opened from disk by the Electron main process, queried through DuckDB, and displayed in the renderer through paged row-window requests so the full dataset is not held in React state. The Active Tab's Working CSV can be edited in memory and delivered with Export CSV; its CSV Source is never overwritten.
+Desktop opens CSV Sources through the Electron main process and queries them with native DuckDB. Web reads one browser-selected CSV Source at a time into an in-memory DuckDB-Wasm Worker. Both runtimes display bounded row windows, so the full dataset is not held in React state.
 
-The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime through two injected seams. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. The Electron composition root supplies the desktop host and native DuckDB adapter. The restricted-import rules in `.oxlintrc.json` enforce this isolation during lint and every build, so shared workspace modules cannot import Electron, Node primitives, or a concrete database driver.
+The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime through two injected seams. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. The desktop composition root supplies the Electron host and native adapter. The web composition root supplies an in-page host and the Wasm adapter.
 
 ## Requirements
 
@@ -39,6 +39,7 @@ The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns th
 ```powershell
 pnpm install
 pnpm run dev
+pnpm run dev:web
 pnpm run typecheck
 pnpm run test
 pnpm run build
@@ -46,9 +47,10 @@ pnpm run package
 ```
 
 - `dev` starts Vite and launches Electron against the local dev server.
+- `dev:web` starts the browser composition root at `http://127.0.0.1:5173`.
 - `typecheck` checks renderer, shared, workspace, main, and preload TypeScript.
 - `test` runs the Vitest suite covering the workspace seam, editing, Comparison, and grid request behavior.
-- `build` runs the typecheck and lint, including the workspace isolation rules, then creates `dist-renderer/` and `dist-electron/`.
+- `build` runs typecheck and lint, then creates the desktop outputs (`dist-renderer/`, `dist-electron/`) and the static web artifact (`dist-web/`, including the self-hosted Worker and Wasm module).
 - `package` builds the app and creates platform installers under `release/`.
 
 ## CSV Editing
@@ -91,6 +93,8 @@ Feature validation belongs in deterministic tests at the data-service, workspace
 
 Recent CSV Sources are stored in Electron's per-user `userData` directory as `recent-files.json`. That filename predates the Recent CSV Source vocabulary and is kept so existing installs keep their list. CSV Sources are never modified.
 
+The web runtime keeps each selected CSV Source only for the current page lifetime. It cannot establish durable identity, so selecting the same physical file again opens another CSV Tab. Recent CSV Sources are unavailable and users must select their CSV Sources again after reload.
+
 ## Known Limitations
 
 - Export CSV is the only output-delivery path. A Working CSV's CSV Source is never overwritten.
@@ -99,6 +103,6 @@ Recent CSV Sources are stored in Electron's per-user `userData` directory as `re
 - Row insertion is disabled while sort, filter, or search is active.
 - A CSV Source whose identity can be established opens in at most one CSV Tab; opening it again focuses the existing Tab rather than creating a second one.
 - Aligned Comparison requires both Working CSVs to have exactly the same set of column names, and a Comparison Key whose combined value is present and unique in every row of both sides.
-- Recent CSV Sources store local file paths only and do not track moved or deleted files until reopening fails.
+- Desktop Recent CSV Sources store local filesystem locations and do not track moved or deleted CSV Sources until reopening fails.
 - Advanced spreadsheet features such as formulas, pivot tables, charts, joins, and SQL editing are out of scope.
 - Long-running general CSV queries can be superseded at the renderer request level but are not forcibly killed. Comparison generations use dedicated workers that are interrupted when cancelled.

@@ -58,9 +58,13 @@ export function EmptyCsvState({
             No CSV open
           </FieldTitle>
           <FieldDescription className="max-w-[46ch] text-[15px] leading-relaxed">
-            Open a local CSV file to inspect its columns, row count, and data without loading the full file into the
-            renderer.
+            Open a local CSV Source to inspect, query, edit, and compare its data. All processing stays on this device.
           </FieldDescription>
+          {!viewer.capabilities.recentCsvSources ? (
+            <FieldDescription className="max-w-[46ch] text-sm leading-relaxed">
+              Select your CSV Sources again after reload.
+            </FieldDescription>
+          ) : null}
         </Field>
         <Button className="w-fit" type="button" onClick={onOpenCsv} disabled={isOpening}>
           {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}

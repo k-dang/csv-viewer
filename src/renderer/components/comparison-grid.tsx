@@ -158,7 +158,7 @@ export function ComparisonGrid({
         onCellKeyDown={(params) => {
           const event = params.event;
           if (!(event instanceof KeyboardEvent)) return;
-          if (event?.key !== 'Enter' || !('value' in params) || !isDisplayValue(params.value)) {
+          if (event.key !== 'Enter' || !('value' in params) || !isDisplayValue(params.value)) {
             return;
           }
           event.preventDefault();

@@ -5,6 +5,7 @@ import { electronCsvViewerCapabilities } from '../shared/electron-csv-viewer-cap
 import type { CsvSourceId, RecentCsvSource } from '../shared/csv-viewer-contract';
 import {
   CsvSourceUnavailableError,
+  defaultDelimiterForSourceName,
   type CsvExportDelivery,
   type CsvExportRequestForDelivery,
   type CsvSourceDescription,
@@ -87,7 +88,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       name: path.basename(filePath),
       location: filePath,
       sizeBytes: fileStats.size,
-      defaultDelimiter: path.extname(filePath).toLowerCase() === '.tsv' ? '\t' : ',',
+      defaultDelimiter: defaultDelimiterForSourceName(filePath),
     };
   }
 
