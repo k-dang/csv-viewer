@@ -1,9 +1,13 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./packages/workspace" },
-    { "path": "./packages/ui" },
-    { "path": "./apps/desktop" },
-    { "path": "./apps/web" }
-  ]
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["packages/ui/src/*"]
+    },
+    "types": ["node", "vite/client"]
+  },
+  "include": ["apps", "packages", "vitest.config.ts", "vitest.setup.ts"],
+  "exclude": ["**/dist-electron", "**/dist-renderer", "**/dist-web"]
 }
