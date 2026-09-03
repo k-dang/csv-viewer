@@ -15,7 +15,7 @@
     "package": "pnpm --filter @csv-viewer/desktop package",
     "lint": "oxlint --deny-warnings",
     "test": "vitest run",
-    "typecheck": "pnpm --filter @csv-viewer/workspace typecheck && pnpm --filter @csv-viewer/ui typecheck && pnpm --filter @csv-viewer/desktop typecheck && pnpm --filter @csv-viewer/web typecheck && tsc -p tsconfig.test.json --noEmit",
+    "typecheck": "pnpm -r --if-present run typecheck && tsc -p tsconfig.test.json --noEmit",
     "start": "pnpm --filter @csv-viewer/desktop start"
   },
   "devDependencies": {
