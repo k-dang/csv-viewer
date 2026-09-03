@@ -16,7 +16,7 @@ export default defineConfig({
       'release/**',
     ],
     setupFiles: ['./vitest.setup.ts'],
-    // Run contract files serially so CI has at most one memory-heavy DuckDB-Wasm worker.
-    maxWorkers: 1,
+    // Matches the CI runner's core count; more workers stop paying for themselves past it.
+    maxWorkers: 4,
   },
 });

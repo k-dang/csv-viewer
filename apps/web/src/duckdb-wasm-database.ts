@@ -182,7 +182,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     this.connection = null;
     try {
       const database = this.database;
-      if (database) await normalizeDatabaseOperation(() => database.terminate());
+      if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
     } catch (error) {
       failures.push(toError(error));
     }
@@ -190,13 +190,24 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return failures;
   }
 
+  /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
+  protected async createEngine(): Promise<AsyncDuckDB> {
+    const worker = await this.options.createWorker(this.options.mainWorker);
+    const database = new AsyncDuckDB(new VoidLogger(), worker);
+    await database.instantiate(this.options.mainModule);
+    return database;
+  }
+
+  /** Disposes the engine. Overridden where the caller owns it and resets it instead. */
+  protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
+    await database.terminate();
+  }
+
   private async openOwnerConnection(): Promise<DuckDbWasmConnection> {
     return normalizeDatabaseOperation(async () => {
-      const worker = await this.options.createWorker(this.options.mainWorker);
-      const database = new AsyncDuckDB(new VoidLogger(), worker);
+      const database = await this.createEngine();
       this.database = database;
       try {
-        await database.instantiate(this.options.mainModule);
         await database.open({
           path: ':memory:',
           maximumThreads: 1,
@@ -215,7 +226,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
         this.connection = connection;
         return connection;
       } catch (error) {
-        await database.terminate().catch(() => undefined);
+        await this.releaseEngine(database).catch(() => undefined);
         this.database = null;
         throw error;
       }
