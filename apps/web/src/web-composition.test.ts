@@ -19,8 +19,8 @@ describe('web CsvViewer composition', () => {
     const pickFile = vi.fn<() => Promise<File | null>>();
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const database = new DuckDbWasmWorkspaceDatabase({
-      mainModule: 'duckdb-mvp.wasm',
-      mainWorker: 'duckdb-browser-mvp.worker.js',
+      mainModule: 'duckdb-eh.wasm',
+      mainWorker: 'duckdb-browser-eh.worker.js',
       createWorker: () => Promise.reject(new Error('Workers are unavailable.')),
     });
 
