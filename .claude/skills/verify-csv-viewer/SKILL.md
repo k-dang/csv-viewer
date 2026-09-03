@@ -34,9 +34,9 @@ node .claude/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch --rebuil
 What launch does:
 
 1. Installs with `pnpm install` if `node_modules/` is missing.
-2. Runs `pnpm run build` if `dist-electron/main/main.js` or `dist-renderer/index.html` is missing, or if `--rebuild` is set.
+2. Runs `pnpm run build:desktop` if `apps/desktop/dist-electron/main/main.js` or `apps/desktop/dist-renderer/index.html` is missing, or if `--rebuild` is set.
 3. Creates `.claude/skills/verify-csv-viewer/runs/<id>/user-data/` and writes `recent-files.json` pointing at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
-4. Starts Electron through `scripts/launch-electron.cjs` with `--user-data-dir`, `--remote-debugging-port`, and `--remote-allow-origins=*`. Vite is not started. `VITE_DEV_SERVER_URL` is unset so the window loads `dist-renderer/index.html`.
+4. Starts `apps/desktop` through `apps/desktop/scripts/launch-electron.cjs` with `--user-data-dir`, `--remote-debugging-port`, and `--remote-allow-origins=*`. Vite is not started. `VITE_DEV_SERVER_URL` is unset so the window loads the desktop app's `dist-renderer/index.html`.
 5. Waits until CDP answers, the renderer shows heading `CSV Viewer`, and a read-only Recent CSV Sources IPC call succeeds.
 6. Writes `.claude/skills/verify-csv-viewer/runs/current.json` (pid, CDP port, userData dir).
 

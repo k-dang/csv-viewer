@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const skillDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(skillDir, '../../..');
+const desktopAppRoot = path.join(repoRoot, 'apps/desktop');
 const runsDir = path.join(skillDir, 'runs');
 const currentRunPath = path.join(runsDir, 'current.json');
 const defaultCdpPort = 19322;
@@ -133,18 +134,18 @@ function runProcess(commandName, args, options = {}) {
 }
 
 async function ensureBuilt(rebuild) {
-  const mainJs = path.join(repoRoot, 'dist-electron/main/main.js');
-  const rendererIndex = path.join(repoRoot, 'dist-renderer/index.html');
-  const electronJs = path.join(repoRoot, 'scripts/launch-electron.cjs');
-  if (!(await pathExists(electronJs))) fail('Missing scripts/launch-electron.cjs');
+  const mainJs = path.join(desktopAppRoot, 'dist-electron/main/main.js');
+  const rendererIndex = path.join(desktopAppRoot, 'dist-renderer/index.html');
+  const electronJs = path.join(desktopAppRoot, 'scripts/launch-electron.cjs');
+  if (!(await pathExists(electronJs))) fail('Missing apps/desktop/scripts/launch-electron.cjs');
   if (!(await pathExists(path.join(repoRoot, 'node_modules')))) {
     await runProcess('pnpm', ['install']);
   }
   if (rebuild || !(await pathExists(mainJs)) || !(await pathExists(rendererIndex))) {
-    await runProcess('pnpm', ['run', 'build']);
+    await runProcess('pnpm', ['run', 'build:desktop']);
   }
   if (!(await pathExists(mainJs)) || !(await pathExists(rendererIndex))) {
-    fail('Build did not produce dist-electron/main/main.js and dist-renderer/index.html');
+    fail('Desktop build did not produce apps/desktop/dist-electron/main/main.js and apps/desktop/dist-renderer/index.html');
   }
 }
 
@@ -508,11 +509,11 @@ async function runLaunch(options) {
   const child = spawn(
     process.execPath,
     [
-      path.join(repoRoot, 'scripts/launch-electron.cjs'),
+      path.join(desktopAppRoot, 'scripts/launch-electron.cjs'),
       `--remote-debugging-port=${cdpPort}`,
       '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
-      repoRoot,
+      desktopAppRoot,
     ],
     {
       cwd: repoRoot,
