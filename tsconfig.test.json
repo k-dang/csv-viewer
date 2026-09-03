@@ -1,18 +1,13 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    // src/renderer is out of scope here, so vite/client supplies the `?url` asset declarations
-    // that src/renderer/vite-env.d.ts provides for the app build.
-    "types": ["vite/client"]
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["packages/ui/src/*"]
+    },
+    "types": ["node", "vite/client"]
   },
-  "include": [
-    "src/main",
-    "src/preload",
-    "src/renderer",
-    "src/shared",
-    "src/test-helpers",
-    "src/web",
-    "src/workspace"
-  ],
-  "exclude": []
+  "include": ["apps", "packages", "vitest.config.ts", "vitest.setup.ts"],
+  "exclude": ["**/dist-electron", "**/dist-renderer", "**/dist-web"]
 }

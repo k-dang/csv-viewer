@@ -1,0 +1,37 @@
+{
+  "name": "@csv-viewer/ui",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./App": "./src/App.tsx",
+    "./csv-viewer": "./src/csv-viewer.tsx",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.4.1",
+    "@csv-viewer/workspace": "workspace:*",
+    "@floating-ui/react-dom": "^2.1.8",
+    "ag-grid-community": "^35.2.1",
+    "ag-grid-react": "^35.2.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.14.0",
+    "radix-ui": "^1.4.3",
+    "react": "^19.1.1",
+    "react-day-picker": "^9.14.0",
+    "react-dom": "^19.1.1",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.4",
+    "tw-animate-css": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.3"
+  }
+}

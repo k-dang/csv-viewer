@@ -1,25 +1,9 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2024"],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/renderer/*"]
-    }
-  },
-  "include": ["src/renderer", "src/shared", "src/web", "vite.config.ts", "vite.web.config.ts", "vitest.setup.ts"],
-  "exclude": ["**/*.test.*"]
+  "files": [],
+  "references": [
+    { "path": "./packages/workspace" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/desktop" },
+    { "path": "./apps/web" }
+  ]
 }

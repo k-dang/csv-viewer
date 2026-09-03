@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "tsBuildInfoFile": "../../node_modules/.cache/typescript/ui.tsbuildinfo"
+  },
+  "include": ["src"],
+  "exclude": ["**/*.test.*", "src/test-helpers"]
+}

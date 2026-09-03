@@ -16,7 +16,7 @@
     "dist-renderer",
     "dist-web",
     "release",
-    "src/renderer/components/ui",
+    "packages/ui/src/components/ui",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
@@ -48,57 +48,36 @@
     "unicorn/no-useless-spread": "off"
   },
   "overrides": [
-    // The shared workspace runs in the Electron main process and in the browser page, so it stays
-    // free of Electron, Node, and runtime-specific trees. Concrete native and Wasm DuckDB drivers
-    // stay in the duckdb modules below it.
+    // The workspace package runs in Electron main and in the browser page. Runtime adapters stay
+    // in their application package.
     {
-      "files": ["src/workspace/**/*.ts"],
+      "files": ["packages/workspace/src/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^(electron|@duckdb/node-api)(/|$)|/(main|preload|renderer)/",
-                "message": "The shared workspace must run unchanged in a browser page: no Electron, no Node, no runtime-specific tree."
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^(electron|@duckdb/|@csv-viewer/(desktop|web|ui))",
+                "message": "The workspace package must run unchanged in both applications: no runtime imports."
               }
             ]
           }
         ]
       }
     },
-    // The two named database modules are where the native driver is allowed to live.
+    // Shared UI reaches its runtime only through CsvViewer. The comparison presentation helper is
+    // also part of the product interface; every other workspace implementation module stays hidden.
     {
-      "files": [
-        "src/workspace/duckdb/duckdb-database.ts",
-        "src/workspace/duckdb/duckdb-comparison-executor.ts"
-      ],
+      "files": ["packages/ui/src/**/*.ts", "packages/ui/src/**/*.tsx"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/(main|preload|renderer)/",
-                "message": "Only the native DuckDB driver is exempt here: no Electron, no Node, no runtime-specific tree."
-              }
-            ]
-          }
-        ]
-      }
-    },
-    // The renderer reaches its host only through the injected CsvViewer: no Electron, no
-    // Node, no transport names, and no reaching into the workspace or main trees.
-    {
-      "files": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"],
-      "rules": {
-        "no-restricted-imports": [
-          "error",
-          {
-            "patterns": [
-              {
-                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|/ipc-channels$|/(main|preload|workspace)/",
-                "message": "The renderer reaches its host through the injected CsvViewer, never through Electron, Node, or a transport name."
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|^@csv-viewer/(desktop|web)(/|$)|^@csv-viewer/workspace/(?!csv-viewer$|comparison-presentation$)",
+                "message": "Shared UI reaches runtime behavior through CsvViewer, never through an application or workspace implementation module."
               }
             ]
           }
@@ -107,7 +86,7 @@
     },
     // Tests build real CSV Sources on disk and drive the native driver directly.
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "src/test-helpers/**/*.ts", "src/test-helpers/**/*.tsx"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test-helpers/**/*.ts", "**/test-helpers/**/*.tsx"],
       "rules": {
         "no-restricted-imports": "off"
       }
