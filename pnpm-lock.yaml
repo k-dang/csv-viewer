@@ -74,9 +74,6 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@csv-viewer/workspace':
-        specifier: workspace:*
-        version: link:../../packages/workspace
       '@duckdb/node-api':
         specifier: 1.5.5-r.4
         version: 1.5.5-r.4
@@ -84,6 +81,9 @@ importers:
       '@csv-viewer/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@csv-viewer/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0))
