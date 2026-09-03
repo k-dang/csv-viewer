@@ -39,6 +39,10 @@ type MemorySource = {
   contents: string | null;
 };
 
+type NodeWebWorker = InstanceType<typeof WebWorker> & {
+  addEventListener(type: 'close', listener: () => void): void;
+};
+
 class WasmContractHost implements CsvWorkspaceHost {
   readonly capabilities = { recentCsvSources: false } as const;
   private readonly sourcesByName = new Map<string, MemorySource>();
@@ -127,31 +131,30 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 }
 
-type NodeWebWorker = InstanceType<typeof WebWorker> & {
-  addEventListener(type: 'close', listener: () => void): void;
+const nodeWasmOptions = {
+  mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+  mainWorker: pathToFileURL(
+    require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+  ).toString(),
+  createWorker: (reference: string) => Promise.resolve(new WebWorker(new URL(reference))),
 };
 
-const mainModule = require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm');
-const mainWorker = pathToFileURL(
-  require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
-).toString();
-
 /**
- * Compiling the Wasm module costs roughly half a second, which dwarfs everything else a contract
- * case does. One engine is compiled per test file and reset between cases instead, so the cost is
- * paid once rather than once per test. `vitest.setup.ts` terminates it when the file finishes.
+ * Compiling the Wasm module costs around half a second, which dwarfs the work a contract case
+ * does, so each test file compiles one engine and resets it between cases rather than paying the
+ * compile per case. `vitest.setup.ts` terminates it once the file finishes.
  */
 let sharedEngine: Promise<{ engine: AsyncDuckDB; closed: Promise<void> }> | null = null;
 
 function acquireSharedEngine(): Promise<AsyncDuckDB> {
   sharedEngine ??= (async () => {
     // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
-    const worker = new WebWorker(new URL(mainWorker)) as NodeWebWorker;
+    const worker = new WebWorker(new URL(nodeWasmOptions.mainWorker)) as NodeWebWorker;
     const closed = new Promise<void>((resolve) => {
       worker.addEventListener('close', resolve);
     });
     const engine = new AsyncDuckDB(new VoidLogger(), worker);
-    await engine.instantiate(mainModule);
+    await engine.instantiate(nodeWasmOptions.mainModule);
     return { engine, closed };
   })();
   return sharedEngine.then(({ engine }) => engine);
@@ -172,19 +175,14 @@ export async function closeSharedWasmEngine(): Promise<void> {
 }
 
 /**
- * Shares one compiled engine across a file's cases. Releasing drops the registered files, which
- * outlive the database itself, while reopening gives the next case an empty `:memory:` database.
+ * Shares the file's compiled engine. Releasing drops the registered files, which outlive the
+ * database itself, and reopening gives the next database an empty `:memory:` database.
  */
-/** Options for a database backed by the file's shared engine. */
-export function sharedEngineOptions() {
-  return {
-    mainModule,
-    mainWorker,
-    createWorker: (reference: string) => Promise.resolve(new WebWorker(new URL(reference))),
-  };
-}
-
 export class SharedEngineWasmDatabase extends DuckDbWasmWorkspaceDatabase {
+  constructor() {
+    super(nodeWasmOptions);
+  }
+
   protected createEngine(): Promise<AsyncDuckDB> {
     return acquireSharedEngine();
   }
@@ -196,11 +194,7 @@ export class SharedEngineWasmDatabase extends DuckDbWasmWorkspaceDatabase {
 
 /** The single-threaded Wasm build the browser ships, hosted on Node's Worker implementation. */
 export function createNodeDuckDbWasmDatabase(): DuckDbWasmWorkspaceDatabase {
-  return new DuckDbWasmWorkspaceDatabase({
-    mainModule,
-    mainWorker,
-    createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
-  });
+  return new DuckDbWasmWorkspaceDatabase(nodeWasmOptions);
 }
 
 /** Node-hosted contract fixture for the same single-threaded Wasm build used by the browser. */
@@ -219,11 +213,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   static async create(): Promise<WasmWorkspaceFixture> {
-    const database = new SharedEngineWasmDatabase({
-      mainModule,
-      mainWorker,
-      createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
-    });
+    const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database);
     return new WasmWorkspaceFixture(workspace, host);

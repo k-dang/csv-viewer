@@ -190,10 +190,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return failures;
   }
 
-  /**
-   * Builds and compiles the engine. Compiling the Wasm module is the dominant cost of opening, so
-   * tests override this to share one compiled engine across a file instead of paying it per case.
-   */
+  /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
   protected async createEngine(): Promise<AsyncDuckDB> {
     const worker = await this.options.createWorker(this.options.mainWorker);
     const database = new AsyncDuckDB(new VoidLogger(), worker);
@@ -201,10 +198,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return database;
   }
 
-  /**
-   * Disposes an engine this database opened. Overridden by tests that own the engine for longer
-   * than one database, where the engine is reset rather than torn down.
-   */
+  /** Disposes the engine. Overridden where the caller owns it and resets it instead. */
   protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
     await database.terminate();
   }

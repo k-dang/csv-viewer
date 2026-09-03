@@ -4,7 +4,6 @@ import {
   SharedEngineWasmDatabase,
   WasmWorkspaceFixture,
   closeSharedWasmEngine,
-  sharedEngineOptions,
 } from './wasm-workspace';
 
 it('waits for the DuckDB-Wasm worker thread to exit before completing engine shutdown', async () => {
@@ -36,12 +35,12 @@ it('waits for the DuckDB-Wasm worker thread to exit before completing engine shu
 });
 
 it('hands the next database an empty engine, dropping tables and registered files alike', async () => {
-  const first = new SharedEngineWasmDatabase(sharedEngineOptions());
+  const first = new SharedEngineWasmDatabase();
   const leaked = await first.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n'));
   await first.run('CREATE TABLE leftover(x INTEGER)');
   expect(await first.close()).toEqual([]);
 
-  const second = new SharedEngineWasmDatabase(sharedEngineOptions());
+  const second = new SharedEngineWasmDatabase();
   await expect(second.readObjects('SELECT * FROM leftover')).rejects.toThrow();
   await expect(
     second.readObjects(`SELECT * FROM read_csv('${leaked}', all_varchar = true)`),
