@@ -208,6 +208,12 @@ export class WorkingCsvStore {
     try {
       return await this.replaceWorkingCsv(workingCsvId, expectedDataRevision, options);
     } catch (error) {
+      if (this.lifecycle !== 'active') {
+        return { status: 'failed', failure: unavailableWorkingCsvFailure('replace-failed') };
+      }
+      if (this.closingWorkingCsvs.has(workingCsvId)) {
+        return { status: 'failed', failure: unavailableWorkingCsvFailure('replace-failed', 'This CSV is closing.') };
+      }
       return { status: 'failed', failure: workingCsvFailure('replace-failed', error) };
     }
   }
@@ -842,12 +848,11 @@ function workingCsvFailure(code: WorkingCsvFailure['code'], cause: unknown): Wor
   return { code, message: normalizeOpenError(cause).message, retryable: true };
 }
 
-function unavailableWorkingCsvFailure(code: WorkingCsvFailure['code']): WorkingCsvFailure {
-  return {
-    code,
-    message: 'The CSV workspace is closing.',
-    retryable: false,
-  };
+function unavailableWorkingCsvFailure(
+  code: WorkingCsvFailure['code'],
+  message = 'The CSV workspace is closing.',
+): WorkingCsvFailure {
+  return { code, message, retryable: false };
 }
 
 function normalizeOpenError(cause: unknown): Error {

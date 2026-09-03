@@ -520,13 +520,13 @@ export class CsvComparisonService {
         status: 'applied',
       });
     } catch (error) {
-      console.error(`Comparison operation ${operation.operationId} failed.`, error);
       if (stagingArtifactId) await this.retireSnapshot(stagingArtifactId);
       await this.releaseWorker(operation.operationId);
       if (operation.changedSides.length > 0) {
         return this.finishSourcesChanged(entity, operation, operation.changedSides);
       }
       if (operation.cancelRequested) return this.finishCancelled(entity, operation);
+      console.error(`Comparison operation ${operation.operationId} failed.`, error);
       return this.finishFailed(entity, operation, 'query-failed');
     } finally {
       await this.releaseWorker(operation.operationId);

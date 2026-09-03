@@ -339,6 +339,7 @@ describe('CsvComparisonService interaction contract', () => {
     const executor = new ScriptedComparisonExecutor();
     executor.deferSnapshots = true;
     const service = new CsvComparisonService(store, executor);
+    const errorLog = vi.spyOn(console, 'error');
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
 
@@ -367,6 +368,8 @@ describe('CsvComparisonService interaction contract', () => {
     });
     expect(executor.droppedArtifacts).toContain(begun.operationId);
     expect(executor.releaseAttemptCount).toBeGreaterThan(0);
+    expect(errorLog).not.toHaveBeenCalled();
+    errorLog.mockRestore();
     await service.dispose();
   });
 

@@ -235,12 +235,15 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace lifecycle', ({ cre
       });
 
       const request = { workingCsvId: baseline.workingCsvId };
+      const errorLog = vi.spyOn(console, 'error');
       await expect(
         workspace.call({ operation: 'csv.reopen', workingCsvId: baseline.workingCsvId }),
       ).resolves.toMatchObject({
         status: 'failed',
         message: expect.stringContaining('closing'),
       });
+      expect(errorLog).not.toHaveBeenCalled();
+      errorLog.mockRestore();
       const mutations = [
         workspace.call({ operation: 'csv.edit-cell', ...request, rowId: '1', column: 'value', value: 'changed' }),
         workspace.call({ operation: 'csv.delete-rows', ...request, rowIds: ['1'] }),
