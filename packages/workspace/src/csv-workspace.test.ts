@@ -25,6 +25,7 @@ const validDiagnostics: SourceKeyDiagnostics = {
 
 class ControlledExecutor implements ComparisonExecutor {
   private rejectSnapshot: ((error: Error) => void) | null = null;
+  private readonly snapshotStarted = Promise.withResolvers<void>();
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
     return validDiagnostics;
@@ -33,6 +34,7 @@ class ControlledExecutor implements ComparisonExecutor {
   createSnapshot(_request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary> {
     return new Promise((_resolve, reject) => {
       this.rejectSnapshot = reject;
+      this.snapshotStarted.resolve();
     });
   }
 
@@ -43,8 +45,15 @@ class ControlledExecutor implements ComparisonExecutor {
   async release(): Promise<void> {}
 
   releaseCancellation(): void {
-    this.rejectSnapshot?.(new Error('cancelled'));
+    if (this.rejectSnapshot === null) {
+      throw new Error('The controlled snapshot has not started.');
+    }
+    this.rejectSnapshot(new Error('cancelled'));
     this.rejectSnapshot = null;
+  }
+
+  waitForSnapshotStart(): Promise<void> {
+    return this.snapshotStarted.promise;
   }
 
   async readWindow(_request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
@@ -54,7 +63,8 @@ class ControlledExecutor implements ComparisonExecutor {
   async dropSnapshot(): Promise<void> {}
 
   async dispose(): Promise<void> {
-    this.releaseCancellation();
+    this.rejectSnapshot?.(new Error('cancelled'));
+    this.rejectSnapshot = null;
   }
 }
 
@@ -209,6 +219,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace lifecycle', ({ cre
       });
       if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
       await waitForComparing(fixture, comparisonId);
+      await executor.waitForSnapshotStart();
       await expect(
         workspace.call({ operation: 'comparison.cancel', comparisonId, operationId: started.operationId }),
       ).resolves.toEqual({ status: 'requested' });
@@ -290,6 +301,7 @@ describe.each(workspaceContractFactories)('$name CsvWorkspace lifecycle', ({ cre
       });
       if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
       await waitForComparing(fixture, comparisonId);
+      await executor.waitForSnapshotStart();
 
       await workspace.call({
         operation: 'csv.edit-cell',

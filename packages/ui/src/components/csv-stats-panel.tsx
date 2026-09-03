@@ -93,7 +93,12 @@ export function CsvStatsPanel({
         <Label className="mb-1.5 text-xs text-muted-foreground" htmlFor="stats-column">
           Stats Column
         </Label>
-        <Select value={selectedColumn} onValueChange={onColumnChange}>
+        <Select
+          value={selectedColumn}
+          onValueChange={(value) => {
+            if (value !== null) onColumnChange(value);
+          }}
+        >
           <SelectTrigger id="stats-column" className="w-full min-w-0 bg-card">
             <SelectValue placeholder="Select a column" />
           </SelectTrigger>
