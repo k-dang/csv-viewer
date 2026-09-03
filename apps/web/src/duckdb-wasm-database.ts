@@ -182,7 +182,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     this.connection = null;
     try {
       const database = this.database;
-      if (database) await normalizeDatabaseOperation(() => database.terminate());
+      if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
     } catch (error) {
       failures.push(toError(error));
     }
@@ -190,13 +190,30 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return failures;
   }
 
+  /**
+   * Builds and compiles the engine. Compiling the Wasm module is the dominant cost of opening, so
+   * tests override this to share one compiled engine across a file instead of paying it per case.
+   */
+  protected async createEngine(): Promise<AsyncDuckDB> {
+    const worker = await this.options.createWorker(this.options.mainWorker);
+    const database = new AsyncDuckDB(new VoidLogger(), worker);
+    await database.instantiate(this.options.mainModule);
+    return database;
+  }
+
+  /**
+   * Disposes an engine this database opened. Overridden by tests that own the engine for longer
+   * than one database, where the engine is reset rather than torn down.
+   */
+  protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
+    await database.terminate();
+  }
+
   private async openOwnerConnection(): Promise<DuckDbWasmConnection> {
     return normalizeDatabaseOperation(async () => {
-      const worker = await this.options.createWorker(this.options.mainWorker);
-      const database = new AsyncDuckDB(new VoidLogger(), worker);
+      const database = await this.createEngine();
       this.database = database;
       try {
-        await database.instantiate(this.options.mainModule);
         await database.open({
           path: ':memory:',
           maximumThreads: 1,
@@ -215,7 +232,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
         this.connection = connection;
         return connection;
       } catch (error) {
-        await database.terminate().catch(() => undefined);
+        await this.releaseEngine(database).catch(() => undefined);
         this.database = null;
         throw error;
       }

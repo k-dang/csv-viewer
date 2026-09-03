@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { AsyncDuckDB, VoidLogger } from '@duckdb/duckdb-wasm';
 import WebWorker from 'web-worker';
 import type {
   ComparisonAttemptOutcomeView,
@@ -36,10 +37,6 @@ type MemorySource = {
   sourceId: CsvSourceId;
   name: string;
   contents: string | null;
-};
-
-type NodeWebWorker = InstanceType<typeof WebWorker> & {
-  addEventListener(type: 'close', listener: () => void): void;
 };
 
 class WasmContractHost implements CsvWorkspaceHost {
@@ -130,13 +127,78 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 }
 
+type NodeWebWorker = InstanceType<typeof WebWorker> & {
+  addEventListener(type: 'close', listener: () => void): void;
+};
+
+const mainModule = require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm');
+const mainWorker = pathToFileURL(
+  require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+).toString();
+
+/**
+ * Compiling the Wasm module costs roughly half a second, which dwarfs everything else a contract
+ * case does. One engine is compiled per test file and reset between cases instead, so the cost is
+ * paid once rather than once per test. `vitest.setup.ts` terminates it when the file finishes.
+ */
+let sharedEngine: Promise<{ engine: AsyncDuckDB; closed: Promise<void> }> | null = null;
+
+function acquireSharedEngine(): Promise<AsyncDuckDB> {
+  sharedEngine ??= (async () => {
+    // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
+    const worker = new WebWorker(new URL(mainWorker)) as NodeWebWorker;
+    const closed = new Promise<void>((resolve) => {
+      worker.addEventListener('close', resolve);
+    });
+    const engine = new AsyncDuckDB(new VoidLogger(), worker);
+    await engine.instantiate(mainModule);
+    return { engine, closed };
+  })();
+  return sharedEngine.then(({ engine }) => engine);
+}
+
+/**
+ * Terminates the file's shared engine, if any case in the file created one. Terminating returns
+ * before the worker thread has actually exited, so this waits for the exit as well - otherwise
+ * workers accumulate across the files sharing a Vitest process.
+ */
+export async function closeSharedWasmEngine(): Promise<void> {
+  const pending = sharedEngine;
+  if (!pending) return;
+  sharedEngine = null;
+  const { engine, closed } = await pending;
+  await engine.terminate();
+  await closed;
+}
+
+/**
+ * Shares one compiled engine across a file's cases. Releasing drops the registered files, which
+ * outlive the database itself, while reopening gives the next case an empty `:memory:` database.
+ */
+/** Options for a database backed by the file's shared engine. */
+export function sharedEngineOptions() {
+  return {
+    mainModule,
+    mainWorker,
+    createWorker: (reference: string) => Promise.resolve(new WebWorker(new URL(reference))),
+  };
+}
+
+export class SharedEngineWasmDatabase extends DuckDbWasmWorkspaceDatabase {
+  protected createEngine(): Promise<AsyncDuckDB> {
+    return acquireSharedEngine();
+  }
+
+  protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
+    await database.dropFiles();
+  }
+}
+
 /** The single-threaded Wasm build the browser ships, hosted on Node's Worker implementation. */
 export function createNodeDuckDbWasmDatabase(): DuckDbWasmWorkspaceDatabase {
   return new DuckDbWasmWorkspaceDatabase({
-    mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
-    mainWorker: pathToFileURL(
-      require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
-    ).toString(),
+    mainModule,
+    mainWorker,
     createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
   });
 }
@@ -148,7 +210,6 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   private constructor(
     private readonly workspace: CsvWorkspaceImplementation,
     private readonly host: WasmContractHost,
-    private readonly workerClosures: Promise<void>[],
   ) {
     this.observer = new WorkspaceContractObserver(workspace);
   }
@@ -158,27 +219,14 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   static async create(): Promise<WasmWorkspaceFixture> {
-    const workerClosures: Promise<void>[] = [];
-    const mainWorker = pathToFileURL(
-      require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
-    ).toString();
-    const database = new DuckDbWasmWorkspaceDatabase({
-      mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+    const database = new SharedEngineWasmDatabase({
+      mainModule,
       mainWorker,
-      createWorker: (reference) => {
-        // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
-        const worker = new WebWorker(new URL(reference)) as NodeWebWorker;
-        workerClosures.push(
-          new Promise((resolve) => {
-            worker.addEventListener('close', resolve);
-          }),
-        );
-        return Promise.resolve(worker);
-      },
+      createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
     });
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database);
-    return new WasmWorkspaceFixture(workspace, host, workerClosures);
+    return new WasmWorkspaceFixture(workspace, host);
   }
 
   registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
@@ -228,7 +276,6 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
 
   async disposeWorkspace(): Promise<void> {
     await this.workspace.dispose();
-    await Promise.all(this.workerClosures);
   }
 
   awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
