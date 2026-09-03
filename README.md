@@ -29,7 +29,12 @@ Desktop opens CSV Sources through the Electron main process and queries them wit
 
 The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose the React product from `packages/ui/` with the runtime-neutral CSV module from `packages/workspace/`. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. Desktop supplies Electron and native DuckDB adapters. Web supplies browser and DuckDB-Wasm adapters.
 
-See [Workspace layout](docs/internals/workspace-layout.md) for package ownership, dependency rules, and build outputs.
+### Workspace boundaries
+
+- Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.
+- `packages/ui` depends on the `CsvViewer` interface, not a runtime implementation. `packages/workspace` exposes explicit subpaths instead of a barrel export.
+- `packages/workspace` compiles to CommonJS for Electron main. Vite consumes its TypeScript source for renderer and web builds.
+- Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
 
 ## Requirements
 
