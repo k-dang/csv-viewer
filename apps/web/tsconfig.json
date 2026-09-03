@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["packages/ui/src/*"]
+    },
+    "types": ["vite/client"],
+    "tsBuildInfoFile": "../../node_modules/.cache/typescript/web.tsbuildinfo"
+  },
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["**/*.test.*"]
+}

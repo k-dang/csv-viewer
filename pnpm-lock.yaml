@@ -7,28 +7,153 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@babel/runtime':
-        specifier: ^7.29.2
-        version: 7.29.2
-      '@base-ui/react':
-        specifier: ^1.4.1
-        version: 1.4.1(@date-fns/tz@1.4.1)(@types/react@19.2.14)(date-fns@4.1.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+    devDependencies:
       '@duckdb/duckdb-wasm':
         specifier: 1.33.1-dev64.0
         version: 1.33.1-dev64.0
+      '@oxlint/plugins':
+        specifier: 1.80.0
+        version: 1.80.0
+      '@types/node':
+        specifier: ^24.8.1
+        version: 24.12.2
+      '@types/react':
+        specifier: ^19.1.16
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.2.3(@types/react@19.2.14)
+      '@types/react-test-renderer':
+        specifier: 19.1.0
+        version: 19.1.0
+      oxlint:
+        specifier: 1.80.0
+        version: 1.80.0
+      react-test-renderer:
+        specifier: 19.1.1
+        version: 19.1.1(react@19.2.5)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.12
+        version: 7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0)
+      vitest:
+        specifier: ^4.1.5
+        version: 4.1.5(@types/node@24.12.2)(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
+      web-worker:
+        specifier: 1.2.0
+        version: 1.2.0
+
+  apps/desktop:
+    dependencies:
+      '@csv-viewer/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@duckdb/node-api':
         specifier: 1.5.5-r.4
         version: 1.5.5-r.4
-      '@floating-ui/react-dom':
-        specifier: ^2.1.8
-        version: 2.1.8(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+    devDependencies:
+      '@csv-viewer/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tailwindcss/vite':
         specifier: ^4.2.4
         version: 4.2.4(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
+      '@types/node':
+        specifier: ^24.8.1
+        version: 24.12.2
+      '@types/react':
+        specifier: ^19.1.16
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.2.3(@types/react@19.2.14)
       '@vitejs/plugin-react':
         specifier: ^5.0.4
         version: 5.2.0(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
+      concurrently:
+        specifier: ^9.2.1
+        version: 9.2.1
+      cross-env:
+        specifier: ^10.1.0
+        version: 10.1.0
+      electron:
+        specifier: ^38.8.6
+        version: 38.8.6
+      electron-builder:
+        specifier: ^26.8.1
+        version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.5
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.12
+        version: 7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0)
+      wait-on:
+        specifier: ^9.0.1
+        version: 9.0.5
+
+  apps/web:
+    dependencies:
+      '@csv-viewer/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@csv-viewer/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
+      '@duckdb/duckdb-wasm':
+        specifier: 1.33.1-dev64.0
+        version: 1.33.1-dev64.0
+      lucide-react:
+        specifier: ^1.14.0
+        version: 1.14.0(react@19.2.5)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.5
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.2.4
+        version: 4.2.4(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
+      '@types/node':
+        specifier: ^24.8.1
+        version: 24.12.2
+      '@types/react':
+        specifier: ^19.1.16
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.2.3(@types/react@19.2.14)
+      '@vitejs/plugin-react':
+        specifier: ^5.0.4
+        version: 5.2.0(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.12
+        version: 7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0)
+
+  packages/ui:
+    dependencies:
+      '@base-ui/react':
+        specifier: ^1.4.1
+        version: 1.4.1(@date-fns/tz@1.4.1)(@types/react@19.2.14)(date-fns@4.1.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@csv-viewer/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+      '@floating-ui/react-dom':
+        specifier: ^2.1.8
+        version: 2.1.8(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       ag-grid-community:
         specifier: ^35.2.1
         version: 35.2.1
@@ -41,12 +166,6 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
-      concurrently:
-        specifier: ^9.2.1
-        version: 9.2.1
-      cross-env:
-        specifier: ^10.1.0
-        version: 10.1.0
       date-fns:
         specifier: ^4.1.0
         version: 4.1.0
@@ -74,49 +193,24 @@ importers:
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.1.12
-        version: 7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0)
-      wait-on:
-        specifier: ^9.0.1
-        version: 9.0.5
     devDependencies:
-      '@oxlint/plugins':
-        specifier: 1.80.0
-        version: 1.80.0
-      '@types/node':
-        specifier: ^24.8.1
-        version: 24.12.2
       '@types/react':
         specifier: ^19.1.16
         version: 19.2.14
       '@types/react-dom':
         specifier: ^19.1.9
         version: 19.2.3(@types/react@19.2.14)
-      '@types/react-test-renderer':
-        specifier: 19.1.0
-        version: 19.1.0
-      electron:
-        specifier: ^38.8.6
-        version: 38.8.6
-      electron-builder:
-        specifier: ^26.8.1
-        version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
-      oxlint:
-        specifier: 1.80.0
-        version: 1.80.0
-      react-test-renderer:
-        specifier: 19.1.1
-        version: 19.1.1(react@19.2.5)
-      vitest:
-        specifier: ^4.1.5
-        version: 4.1.5(@types/node@24.12.2)(vite@7.3.2(@types/node@24.12.2)(jiti@2.6.1)(lightningcss@1.32.0))
-      web-worker:
-        specifier: 1.2.0
-        version: 1.2.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/workspace:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  tools/oxlint/anti-slop: {}
 
 packages:
 
@@ -1743,10 +1837,12 @@ packages:
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
+    deprecated: this version has critical issues, please update to the latest version
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -3540,7 +3636,7 @@ snapshots:
       fs-extra: 10.1.0
       isbinaryfile: 4.0.10
       minimist: 1.2.8
-      plist: 3.1.0
+      plist: 3.1.1
     transitivePeerDependencies:
       - supports-color
 
@@ -3563,7 +3659,7 @@ snapshots:
       dir-compare: 4.2.0
       fs-extra: 11.3.5
       minimatch: 9.0.9
-      plist: 3.1.0
+      plist: 3.1.1
     transitivePeerDependencies:
       - supports-color
 
@@ -4846,8 +4942,7 @@ snapshots:
 
   '@xmldom/xmldom@0.8.13': {}
 
-  '@xmldom/xmldom@0.9.10':
-    optional: true
+  '@xmldom/xmldom@0.9.10': {}
 
   abbrev@4.0.0: {}
 
@@ -5902,7 +5997,6 @@ snapshots:
       '@xmldom/xmldom': 0.9.10
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
-    optional: true
 
   postcss@8.5.12:
     dependencies:

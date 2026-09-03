@@ -27,7 +27,14 @@ Electron, React, TypeScript, AG Grid Community, native DuckDB, DuckDB-Wasm, Vite
 
 Desktop opens CSV Sources through the Electron main process and queries them with native DuckDB. Web reads one browser-selected CSV Source at a time into an in-memory DuckDB-Wasm Worker. Both runtimes display bounded row windows, so the full dataset is not held in React state.
 
-The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns the Working CSV store, edit history, query construction, and Comparison orchestration. It reaches its runtime through two injected seams. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. The desktop composition root supplies the Electron host and native adapter. The web composition root supplies an in-page host and the Wasm adapter.
+The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose the React product from `packages/ui/` with the runtime-neutral CSV module from `packages/workspace/`. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. Desktop supplies Electron and native DuckDB adapters. Web supplies browser and DuckDB-Wasm adapters.
+
+### Workspace boundaries
+
+- Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.
+- `packages/ui` depends on the `CsvViewer` interface, not a runtime implementation. `packages/workspace` exposes explicit subpaths instead of a barrel export.
+- `packages/workspace` compiles to CommonJS for Electron main. Vite consumes its TypeScript source for renderer and web builds.
+- Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
 
 ## Requirements
 
@@ -38,19 +45,23 @@ The domain logic lives in `src/workspace/`, a runtime-neutral layer that owns th
 
 ```powershell
 pnpm install
-pnpm run dev
+pnpm run dev:desktop
 pnpm run dev:web
+pnpm run build:desktop
+pnpm run build:web
 pnpm run typecheck
 pnpm run test
 pnpm run build
 pnpm run package
 ```
 
-- `dev` starts Vite and launches Electron against the local dev server.
+- `dev:desktop` starts Vite and launches Electron against the local dev server. `dev` is an alias.
 - `dev:web` starts the browser composition root at `http://127.0.0.1:5173`.
-- `typecheck` checks renderer, shared, workspace, main, and preload TypeScript.
-- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, and grid request behavior.
-- `build` runs typecheck and lint, then creates the desktop outputs (`dist-renderer/`, `dist-electron/`) and the static web artifact (`dist-web/`, including the self-hosted Worker and Wasm module).
+- `build:desktop` creates `apps/desktop/dist-renderer/` and `apps/desktop/dist-electron/`.
+- `build:web` creates `apps/web/dist-web/`, including the self-hosted Worker and Wasm module.
+- `typecheck` checks both applications and both shared packages.
+- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and grid request behavior.
+- `build` runs typecheck and lint, then builds both applications.
 - `package` builds the app and creates platform installers under `release/`.
 
 ## CSV Editing
@@ -89,7 +100,7 @@ Feature validation belongs in deterministic tests at the data-service, workspace
 
 ## Packaging Notes
 
-`pnpm run package` uses `electron-builder` to produce platform-specific release artifacts in `release/`. On Windows this creates an NSIS installer and a portable executable; the GitHub Actions release workflow also builds a macOS DMG and Linux AppImage on their native runners.
+`apps/desktop/package.json` owns the Electron Builder configuration. `pnpm run package` produces platform-specific release artifacts in `release/`. On Windows this creates an NSIS installer and a portable executable; the GitHub Actions release workflow also builds a macOS DMG and Linux AppImage on their native runners.
 
 Recent CSV Sources are stored in Electron's per-user `userData` directory as `recent-files.json`. That filename predates the Recent CSV Source vocabulary and is kept so existing installs keep their list. CSV Sources are never modified.
 

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["packages/ui/src/*"]
+    },
+    "types": ["vite/client"],
+    "tsBuildInfoFile": "../../node_modules/.cache/typescript/desktop-renderer.tsbuildinfo"
+  },
+  "include": ["src/renderer.tsx", "src/electron-csv-viewer.ts", "vite.config.ts"]
+}

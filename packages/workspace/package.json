@@ -1,0 +1,56 @@
+{
+  "name": "@csv-viewer/workspace",
+  "version": "1.1.0",
+  "private": true,
+  "type": "commonjs",
+  "exports": {
+    "./comparison-presentation": {
+      "types": "./src/comparison-presentation.ts",
+      "import": "./src/comparison-presentation.ts",
+      "require": "./dist/comparison-presentation.js"
+    },
+    "./csv-query": {
+      "types": "./src/csv-query.ts",
+      "import": "./src/csv-query.ts",
+      "require": "./dist/csv-query.js"
+    },
+    "./csv-result-normalization": {
+      "types": "./src/csv-result-normalization.ts",
+      "import": "./src/csv-result-normalization.ts",
+      "require": "./dist/csv-result-normalization.js"
+    },
+    "./csv-viewer": {
+      "types": "./src/contracts/csv-viewer.ts",
+      "import": "./src/contracts/csv-viewer.ts",
+      "require": "./dist/contracts/csv-viewer.js"
+    },
+    "./csv-workspace": {
+      "types": "./src/csv-workspace.ts",
+      "import": "./src/csv-workspace.ts",
+      "require": "./dist/csv-workspace.js"
+    },
+    "./database": {
+      "types": "./src/database.ts",
+      "import": "./src/database.ts",
+      "require": "./dist/database.js"
+    },
+    "./errors": {
+      "types": "./src/errors.ts",
+      "import": "./src/errors.ts",
+      "require": "./dist/errors.js"
+    },
+    "./workspace-host": {
+      "types": "./src/workspace-host.ts",
+      "import": "./src/workspace-host.ts",
+      "require": "./dist/workspace-host.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

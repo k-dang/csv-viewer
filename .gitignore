@@ -1,7 +1,8 @@
 node_modules/
-dist-renderer/
-dist-electron/
-dist-web/
+**/dist-renderer/
+**/dist-electron/
+**/dist-web/
+packages/workspace/dist/
 release/
 .vite/
 *.log

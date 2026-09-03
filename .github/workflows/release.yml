@@ -64,12 +64,19 @@ jobs:
 
           "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
 
-      - name: Stamp package version
+      - name: Stamp package versions
         shell: pwsh
         run: |
-          $package = Get-Content package.json -Raw | ConvertFrom-Json
-          $package.version = $env:PACKAGE_VERSION
-          $package | ConvertTo-Json -Depth 100 | Set-Content package.json
+          $packagePaths = @(
+            "package.json"
+            "apps/desktop/package.json"
+          )
+
+          foreach ($packagePath in $packagePaths) {
+            $package = Get-Content $packagePath -Raw | ConvertFrom-Json
+            $package.version = $env:PACKAGE_VERSION
+            $package | ConvertTo-Json -Depth 100 | Set-Content $packagePath
+          }
           Write-Host "Packaging version $env:PACKAGE_VERSION"
 
       - name: Package Electron app
