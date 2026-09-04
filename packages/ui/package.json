@@ -28,8 +28,6 @@
   "devDependencies": {
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@types/react-test-renderer": "19.1.0",
-    "react-test-renderer": "19.1.1",
     "typescript": "catalog:"
   }
 }
