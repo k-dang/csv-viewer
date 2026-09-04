@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { csvInternalRowIdField } from './contracts/csv-viewer';
-import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
+import { csvInternalRowIdField } from '../../../packages/workspace/src/contracts/csv-viewer';
+import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 
 describe('Desktop CsvViewer Reopen CSV seam', () => {
   let fixture: CsvWorkspaceFixture;
@@ -31,7 +31,10 @@ describe('Desktop CsvViewer Reopen CSV seam', () => {
 
     fixture.prompts.discardChoices.push(false);
     await expect(
-      fixture.viewer.call({ operation: 'csv.reopen', workingCsvId: opened.workingCsvId }),
+      fixture.viewer.call({
+        operation: 'csv.reopen',
+        workingCsvId: opened.workingCsvId,
+      }),
     ).resolves.toEqual({ status: 'cancelled' });
 
     const unchanged = await fixture.viewer.call({
@@ -98,10 +101,15 @@ describe('Desktop CsvViewer Reopen CSV seam', () => {
       offset: 0,
       limit: 10,
     });
-    const originalWithEngineSource = fixture.host.withEngineSource.bind(fixture.host);
+    const originalWithEngineSource = fixture.host.withEngineSource.bind(
+      fixture.host,
+    );
     const sourceRead = Promise.withResolvers<void>();
     const sourceReadRelease = Promise.withResolvers<void>();
-    fixture.host.withEngineSource = async <T>(sourceId: string, use: (reference: string) => Promise<T>) => {
+    fixture.host.withEngineSource = async <T>(
+      sourceId: string,
+      use: (reference: string) => Promise<T>,
+    ) => {
       sourceRead.resolve();
       await sourceReadRelease.promise;
       return originalWithEngineSource(sourceId, use);
@@ -131,5 +139,4 @@ describe('Desktop CsvViewer Reopen CSV seam', () => {
     });
     expect(currentRows.rows[0].name).toBe('Grace');
   });
-
 });

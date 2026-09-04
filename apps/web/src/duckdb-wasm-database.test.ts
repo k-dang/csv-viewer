@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createNodeDuckDbWasmDatabase } from '../../../packages/workspace/test-helpers/wasm-workspace';
+import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 
 let database: DuckDbWasmWorkspaceDatabase | undefined;

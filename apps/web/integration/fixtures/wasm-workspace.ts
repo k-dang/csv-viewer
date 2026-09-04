@@ -16,9 +16,10 @@ import type {
   WorkingCsvId,
   WorkingCsvView,
   WorkspaceCloseImpact,
-} from '../src/contracts/csv-viewer';
-import { CsvWorkspaceImplementation } from '../src/csv-workspace-implementation';
-import { DuckDbWasmWorkspaceDatabase } from '../../../apps/web/src/duckdb-wasm-database';
+} from '../../../../packages/workspace/src/contracts/csv-viewer';
+import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
+import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison-executor';
+import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
 import {
   CsvSourceUnavailableError,
   defaultDelimiterForSourceName,
@@ -26,9 +27,9 @@ import {
   type CsvExportRequestForDelivery,
   type CsvSourceDescription,
   type CsvWorkspaceHost,
-} from '../src/workspace-host';
-import type { WorkspaceContractFixture } from './workspace-contract';
-import { WorkspaceContractObserver } from './workspace-contract-observer';
+} from '../../../../packages/workspace/src/workspace-host';
+import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
+import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -80,7 +81,9 @@ class WasmContractHost implements CsvWorkspaceHost {
     );
   }
 
-  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
+  deliverExport(
+    request: CsvExportRequestForDelivery,
+  ): Promise<CsvExportDelivery> {
     const name = this.exportNames.shift();
     if (!name) return Promise.resolve({ status: 'cancelled' });
     this.exports.set(name, request.contents);
@@ -101,7 +104,11 @@ class WasmContractHost implements CsvWorkspaceHost {
 
   writeSource(fileName: string, contents: string): CsvSourceId {
     const existing = this.sourcesByName.get(fileName);
-    const source = existing ?? { sourceId: crypto.randomUUID(), name: fileName, contents };
+    const source = existing ?? {
+      sourceId: crypto.randomUUID(),
+      name: fileName,
+      contents,
+    };
     source.contents = contents;
     this.sourcesByName.set(fileName, source);
     this.sourcesById.set(source.sourceId, source);
@@ -117,15 +124,21 @@ class WasmContractHost implements CsvWorkspaceHost {
     this.exportNames.push(fileName);
     return async () => {
       const contents = this.exports.get(fileName);
-      if (contents === undefined) throw new Error(`Export CSV did not deliver ${fileName}.`);
+      if (contents === undefined)
+        throw new Error(`Export CSV did not deliver ${fileName}.`);
       return contents;
     };
   }
 
-  private requireSource(sourceId: CsvSourceId): MemorySource & { contents: string } {
+  private requireSource(
+    sourceId: CsvSourceId,
+  ): MemorySource & { contents: string } {
     const source = this.sourcesById.get(sourceId);
     if (!source || source.contents === null) {
-      throw new CsvSourceUnavailableError('missing-source', 'CSV Source is no longer available.');
+      throw new CsvSourceUnavailableError(
+        'missing-source',
+        'CSV Source is no longer available.',
+      );
     }
     return { ...source, contents: source.contents };
   }
@@ -139,9 +152,12 @@ class WasmContractHost implements CsvWorkspaceHost {
 function createQuietWorker(reference: string): NodeWebWorker {
   const bootstrap = `console.log = () => {}; await import(${JSON.stringify(reference)});`;
   // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
-  return new WebWorker(`data:text/javascript,${encodeURIComponent(bootstrap)}`, {
-    type: 'module',
-  }) as NodeWebWorker;
+  return new WebWorker(
+    `data:text/javascript,${encodeURIComponent(bootstrap)}`,
+    {
+      type: 'module',
+    },
+  ) as NodeWebWorker;
 }
 
 const nodeWasmOptions = {
@@ -149,7 +165,8 @@ const nodeWasmOptions = {
   mainWorker: pathToFileURL(
     require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs'),
   ).toString(),
-  createWorker: (reference: string) => Promise.resolve(createQuietWorker(reference)),
+  createWorker: (reference: string) =>
+    Promise.resolve(createQuietWorker(reference)),
 };
 
 /**
@@ -157,7 +174,10 @@ const nodeWasmOptions = {
  * does, so each test file compiles one engine and resets it between cases rather than paying the
  * compile per case. `vitest.setup.ts` terminates it once the file finishes.
  */
-let sharedEngine: Promise<{ engine: AsyncDuckDB; closed: Promise<void> }> | null = null;
+let sharedEngine: Promise<{
+  engine: AsyncDuckDB;
+  closed: Promise<void>;
+}> | null = null;
 
 function acquireSharedEngine(): Promise<AsyncDuckDB> {
   sharedEngine ??= (async () => {
@@ -224,10 +244,12 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(): Promise<WasmWorkspaceFixture> {
+  static async create(
+    executor?: ComparisonExecutor,
+  ): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = new CsvWorkspaceImplementation(host, database);
+    const workspace = new CsvWorkspaceImplementation(host, database, executor);
     return new WasmWorkspaceFixture(workspace, host);
   }
 
@@ -247,10 +269,16 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     options?: CsvDialectOptions,
   ): Promise<WorkingCsvView> {
     const sourceId = await this.registerSource(fileName, contents);
-    const result = await this.viewer.call({ operation: 'csv.open-recent', sourceId, options });
+    const result = await this.viewer.call({
+      operation: 'csv.open-recent',
+      sourceId,
+      options,
+    });
     if (result.status !== 'opened') {
       throw new Error(
-        result.status === 'failed' ? result.message : `CSV Source was ${result.status}.`,
+        result.status === 'failed'
+          ? result.message
+          : `CSV Source was ${result.status}.`,
       );
     }
     return result.workingCsv;
@@ -272,7 +300,9 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.observer.latestComparison(comparisonId);
   }
 
-  confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
+  confirmClose(
+    confirmedImpact?: WorkspaceCloseImpact,
+  ): Promise<ConfirmWorkspaceCloseOutcome> {
     return this.workspace.confirmClose(confirmedImpact);
   }
 
@@ -280,7 +310,9 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     await this.workspace.dispose();
   }
 
-  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
+  awaitComparisonOutcome(
+    operationId: ComparisonOperationId,
+  ): Promise<ComparisonAttemptOutcomeView> {
     return this.observer.awaitComparisonOutcome(operationId);
   }
 

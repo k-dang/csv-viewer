@@ -51,7 +51,7 @@
     // The workspace package runs in Electron main and in the browser page. Runtime adapters stay
     // in their application package.
     {
-      "files": ["packages/workspace/src/**/*.ts"],
+      "files": ["packages/workspace/src/**/*.ts", "packages/workspace/test/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -82,13 +82,6 @@
             ]
           }
         ]
-      }
-    },
-    // Tests build real CSV Sources on disk and drive the native driver directly.
-    {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test-helpers/**/*.ts", "**/test-helpers/**/*.tsx"],
-      "rules": {
-        "no-restricted-imports": "off"
       }
     }
   ]
