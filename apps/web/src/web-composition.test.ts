@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createNodeDuckDbWasmDatabase } from '../../../packages/workspace/test-helpers/wasm-workspace';
+import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { startWebCsvViewer } from './web-composition';

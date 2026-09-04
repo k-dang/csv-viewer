@@ -230,15 +230,9 @@ importers:
 
   packages/workspace:
     devDependencies:
-      '@duckdb/duckdb-wasm':
-        specifier: 'catalog:'
-        version: 1.33.1-dev64.0
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
-      web-worker:
-        specifier: 'catalog:'
-        version: 1.2.0
 
 packages:
 

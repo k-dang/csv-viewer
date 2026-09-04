@@ -33,6 +33,7 @@ The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose t
 
 - Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.
 - `packages/ui` depends on the `CsvViewer` interface, not a runtime implementation. `packages/workspace` exposes explicit subpaths instead of a barrel export.
+- Focused unit tests stay beside the source they cover. Runtime-neutral contract definitions live in `packages/workspace/test/contract/`, and each application runs them from its own `integration/` directory with its runtime adapters.
 - Vite consumes the `packages/workspace` TypeScript source in the Electron main, renderer, and web bundles.
 - Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
 

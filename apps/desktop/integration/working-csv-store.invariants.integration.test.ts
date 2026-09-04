@@ -1,9 +1,9 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CsvWorkspaceFixture } from '../test-helpers/desktop-workspace';
-import { DuckDbWorkspaceDatabase } from '../../../apps/desktop/src/main/duckdb-database';
-import { WorkingCsvStore } from './working-csv-store';
-import type { WorkspaceArtifactRegistry } from './workspace-artifact-registry';
+import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
+import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
+import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv-store';
+import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
 
 /**
  * Store invariants that the CsvWorkspace surface cannot observe: disposal ordering when its own
@@ -25,7 +25,8 @@ afterEach(async () => {
 async function openWorkingCsv(fileName: string, contents: string) {
   const filePath = await fixture.writeSource(fileName, contents);
   const outcome = await store.open(await fixture.sourceId(filePath));
-  if (outcome.status !== 'opened') throw new Error(`Working CSV was ${outcome.status}.`);
+  if (outcome.status !== 'opened')
+    throw new Error(`Working CSV was ${outcome.status}.`);
   return outcome.workingCsv;
 }
 
@@ -35,7 +36,8 @@ describe('WorkingCsvStore invariants', () => {
 
     const descriptors = Object.getOwnPropertyDescriptors(store);
     const database: DuckDbWorkspaceDatabase = descriptors.database.value;
-    const artifactRegistry: WorkspaceArtifactRegistry = descriptors.artifactRegistry.value;
+    const artifactRegistry: WorkspaceArtifactRegistry =
+      descriptors.artifactRegistry.value;
     const databaseClose = vi.spyOn(database, 'close');
     artifactRegistry.register({
       tableName: 'unexpected_artifact',
@@ -43,7 +45,9 @@ describe('WorkingCsvStore invariants', () => {
       role: 'current',
     });
 
-    await expect(store.disposeStore()).rejects.toThrow('Workspace artifact invariant violated');
+    await expect(store.disposeStore()).rejects.toThrow(
+      'Workspace artifact invariant violated',
+    );
     expect(databaseClose).toHaveBeenCalledOnce();
     expect(database.isOpen()).toBe(false);
     await expect(
@@ -52,8 +56,13 @@ describe('WorkingCsvStore invariants', () => {
   });
 
   it('isolates data-change listeners so one failure cannot suppress later listeners', async () => {
-    const workingCsv = await openWorkingCsv('listeners.csv', ['name', 'Ada'].join('\n'));
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const workingCsv = await openWorkingCsv(
+      'listeners.csv',
+      ['name', 'Ada'].join('\n'),
+    );
+    const error = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
     const notified: string[] = [];
     store.subscribeToDataChanges(() => {
       throw new Error('listener failure');
@@ -75,11 +84,20 @@ describe('WorkingCsvStore invariants', () => {
   });
 
   it('stops notifying a data-change listener once it unsubscribes', async () => {
-    const workingCsv = await openWorkingCsv('unsubscribe.csv', ['name', 'Ada'].join('\n'));
+    const workingCsv = await openWorkingCsv(
+      'unsubscribe.csv',
+      ['name', 'Ada'].join('\n'),
+    );
     const notified: string[] = [];
-    const unsubscribe = store.subscribeToDataChanges((workingCsvId) => notified.push(workingCsvId));
+    const unsubscribe = store.subscribeToDataChanges((workingCsvId) =>
+      notified.push(workingCsvId),
+    );
 
-    const request = { workingCsvId: workingCsv.workingCsvId, rowId: '1', column: 'name' };
+    const request = {
+      workingCsvId: workingCsv.workingCsvId,
+      rowId: '1',
+      column: 'name',
+    };
     await store.editCell({ ...request, value: 'Grace' });
     unsubscribe();
     await store.editCell({ ...request, value: 'Linus' });

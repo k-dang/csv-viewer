@@ -4,11 +4,14 @@ import type {
   ComparisonOperationId,
   ComparisonView,
   CsvViewer,
-} from '../src/contracts/csv-viewer';
+} from '../../src/contracts/csv-viewer';
 
 /** Shared event-side observations used by every engine's workspace contract fixture. */
 export class WorkspaceContractObserver {
-  private readonly outcomes = new Map<ComparisonOperationId, ComparisonAttemptOutcomeView>();
+  private readonly outcomes = new Map<
+    ComparisonOperationId,
+    ComparisonAttemptOutcomeView
+  >();
   private readonly comparisons = new Map<ComparisonId, ComparisonView>();
   private readonly outcomeWaiters = new Map<
     ComparisonOperationId,
@@ -38,7 +41,9 @@ export class WorkspaceContractObserver {
     return this.comparisons.get(comparisonId) ?? null;
   }
 
-  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
+  awaitComparisonOutcome(
+    operationId: ComparisonOperationId,
+  ): Promise<ComparisonAttemptOutcomeView> {
     const settled = this.outcomes.get(operationId);
     if (settled) return Promise.resolve(settled);
     return new Promise((resolve) => {
