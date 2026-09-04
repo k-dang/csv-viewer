@@ -1,5 +1,6 @@
-import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
 import { App, type AppComponents } from './App';
 import { CsvViewerProvider } from './csv-viewer';
@@ -31,8 +32,17 @@ const testComponents: AppComponents = {
   TabStrip: () => <></>,
 };
 
+beforeEach(() => {
+  // jsdom ships neither of these: the App reads matchMedia for the initial theme and confirm on close.
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+});
+
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  window.localStorage.clear();
   renderedApp.exportRequestSequence = 0;
   renderedApp.onChooseCandidate = undefined;
 });
@@ -59,25 +69,12 @@ describe('App CsvViewer intents', () => {
         return () => {};
       },
     });
-    vi.stubGlobal('window', {
-      localStorage: { getItem: () => null, setItem: vi.fn() },
-      matchMedia: () => ({ matches: false }),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      confirm: vi.fn(() => true),
-    });
-    vi.stubGlobal('document', {
-      documentElement: { classList: { toggle: vi.fn() }, style: {} },
-    });
-    let renderer!: ReactTestRenderer;
 
-    await act(async () => {
-      renderer = create(
-        <CsvViewerProvider viewer={viewer}>
-          <App components={testComponents} />
-        </CsvViewerProvider>,
-      );
-    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App components={testComponents} />
+      </CsvViewerProvider>,
+    );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
 
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
@@ -98,8 +95,6 @@ describe('App CsvViewer intents', () => {
       operation: 'csv.close',
       workingCsvId: workingCsv.workingCsvId,
     });
-
-    await act(async () => renderer.unmount());
   });
 
   it('shows an error when opening a Comparison rejects', async () => {
@@ -122,33 +117,20 @@ describe('App CsvViewer intents', () => {
         return () => {};
       },
     });
-    vi.stubGlobal('window', {
-      localStorage: { getItem: () => null, setItem: vi.fn() },
-      matchMedia: () => ({ matches: false }),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    });
-    vi.stubGlobal('document', {
-      documentElement: { classList: { toggle: vi.fn() }, style: {} },
-    });
-    let renderer!: ReactTestRenderer;
 
-    await act(async () => {
-      renderer = create(
-        <CsvViewerProvider viewer={viewer}>
-          <App components={testComponents} />
-        </CsvViewerProvider>,
-      );
-    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App components={testComponents} />
+      </CsvViewerProvider>,
+    );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
 
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
-    const compareButton = renderer.root
-      .findAllByType('button')
-      .find((button) => button.children.includes('Compare…'));
-    if (!compareButton) throw new Error('Compare button was not rendered.');
-    await act(async () => compareButton.props.onClick());
+
+    await act(async () => {
+      screen.getByRole('button', { name: /Compare/ }).click();
+    });
     if (!renderedApp.onChooseCandidate) throw new Error('Candidate picker was not rendered.');
 
     await act(async () => {
@@ -156,7 +138,6 @@ describe('App CsvViewer intents', () => {
       await Promise.resolve();
     });
 
-    expect(renderer.root.findByProps({ role: 'alert' }).children).toEqual(['Comparison request failed.']);
-    await act(async () => renderer.unmount());
+    expect(screen.getByRole('alert').textContent).toBe('Comparison request failed.');
   });
 });

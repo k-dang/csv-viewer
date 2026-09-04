@@ -4,8 +4,8 @@ import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { startWebCsvViewer } from './web-composition';
 
-// The CsvViewer contract itself is proven against this same Wasm engine in
-// csv-viewer-contract.test.ts, so these cases only cover what the web composition root adds:
+// The CsvViewer contract itself runs against this same Wasm engine from the integration suite,
+// so these cases only cover what the web composition root adds:
 // the startup gate, the browser capability set, and browser-selection identity.
 let viewer: CsvWorkspaceOwner | undefined;
 
@@ -17,14 +17,18 @@ afterEach(async () => {
 describe('web CsvViewer composition', () => {
   it('does not offer CSV Source selection when the pinned Worker cannot start', async () => {
     const pickFile = vi.fn<() => Promise<File | null>>();
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
     const database = new DuckDbWasmWorkspaceDatabase({
-      mainModule: 'duckdb-mvp.wasm',
-      mainWorker: 'duckdb-browser-mvp.worker.js',
+      mainModule: 'duckdb-eh.wasm',
+      mainWorker: 'duckdb-browser-eh.worker.js',
       createWorker: () => Promise.reject(new Error('Workers are unavailable.')),
     });
 
-    await expect(startWebCsvViewer(database, pickFile)).resolves.toEqual({ status: 'unsupported' });
+    await expect(startWebCsvViewer(database, pickFile)).resolves.toEqual({
+      status: 'unsupported',
+    });
     expect(pickFile).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
@@ -40,11 +44,15 @@ describe('web CsvViewer composition', () => {
       createNodeDuckDbWasmDatabase(),
       async () => selections.shift() ?? null,
     );
-    if (started.status !== 'ready') throw new Error('Web startup check failed.');
+    if (started.status !== 'ready')
+      throw new Error('Web startup check failed.');
     viewer = started.viewer;
 
     expect(viewer.capabilities).toEqual({ recentCsvSources: false });
-    const open = { operation: 'csv.open', options: { delimiter: ';', header: true } } as const;
+    const open = {
+      operation: 'csv.open',
+      options: { delimiter: ';', header: true },
+    } as const;
     const first = await viewer.call(open);
     const second = await viewer.call(open);
     if (first.status !== 'opened' || second.status !== 'opened') {
@@ -53,9 +61,17 @@ describe('web CsvViewer composition', () => {
 
     // The same physical file selected twice stays two unrelated CSV Sources: the browser gives the
     // runtime nothing it may treat as durable identity.
-    expect(first.workingCsv.source.sourceId).not.toBe(second.workingCsv.source.sourceId);
-    expect(first.workingCsv.workingCsvId).not.toBe(second.workingCsv.workingCsvId);
-    expect(first.workingCsv.columns.map((column) => column.name)).toEqual(['id', 'name', 'status']);
+    expect(first.workingCsv.source.sourceId).not.toBe(
+      second.workingCsv.source.sourceId,
+    );
+    expect(first.workingCsv.workingCsvId).not.toBe(
+      second.workingCsv.workingCsvId,
+    );
+    expect(first.workingCsv.columns.map((column) => column.name)).toEqual([
+      'id',
+      'name',
+      'status',
+    ]);
     await expect(
       viewer.call({
         operation: 'csv.get-rows',

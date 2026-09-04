@@ -144,13 +144,29 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 }
 
+/**
+ * DuckDB-Wasm's Worker `console.log`s every error it hands back, and a Worker thread writes to the
+ * process streams rather than through Vitest, so the thread starts on a bootstrap that stubs
+ * `console.log` before importing the real Worker script. Errors still arrive as rejections.
+ */
+function createQuietWorker(reference: string): NodeWebWorker {
+  const bootstrap = `console.log = () => {}; await import(${JSON.stringify(reference)});`;
+  // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
+  return new WebWorker(
+    `data:text/javascript,${encodeURIComponent(bootstrap)}`,
+    {
+      type: 'module',
+    },
+  ) as NodeWebWorker;
+}
+
 const nodeWasmOptions = {
-  mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+  mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-eh.wasm'),
   mainWorker: pathToFileURL(
-    require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+    require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs'),
   ).toString(),
   createWorker: (reference: string) =>
-    Promise.resolve(new WebWorker(new URL(reference))),
+    Promise.resolve(createQuietWorker(reference)),
 };
 
 /**
@@ -165,10 +181,7 @@ let sharedEngine: Promise<{
 
 function acquireSharedEngine(): Promise<AsyncDuckDB> {
   sharedEngine ??= (async () => {
-    // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
-    const worker = new WebWorker(
-      new URL(nodeWasmOptions.mainWorker),
-    ) as NodeWebWorker;
+    const worker = createQuietWorker(nodeWasmOptions.mainWorker);
     const closed = new Promise<void>((resolve) => {
       worker.addEventListener('close', resolve);
     });

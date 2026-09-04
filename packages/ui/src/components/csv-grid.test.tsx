@@ -1,5 +1,6 @@
-import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CsvEditState, CsvViewerRequest } from '@csv-viewer/workspace/csv-viewer';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
@@ -7,17 +8,33 @@ import { CsvGrid } from './csv-grid';
 
 const DataGrid = () => null;
 
-describe('CsvGrid edit state', () => {
-  it('reports clean export state after an edited Working CSV is reopened', async () => {
-    const editedWorkingCsv = workingCsvFixture({
-      dataRevision: 1,
-      editState: {
-        workingCsvId: 'working-csv-1',
-        hasUnexportedChanges: true,
-        canUndo: true,
-        canRedo: false,
-      },
+const editedWorkingCsvFixture = () =>
+  workingCsvFixture({
+    dataRevision: 1,
+    editState: {
+      workingCsvId: 'working-csv-1',
+      hasUnexportedChanges: true,
+      canUndo: true,
+      canRedo: false,
+    },
+  });
+
+afterEach(cleanup);
+
+describe('CsvGrid', () => {
+  it('presents Unexported Changes using the product language', () => {
+    const workingCsv = editedWorkingCsvFixture();
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-edit-state': async () => workingCsv.editState },
     });
+
+    render(withCsvViewer(<CsvGrid workingCsv={workingCsv} themeMode="light" DataGrid={DataGrid} />, viewer));
+
+    expect(screen.getByText('Unexported Changes')).toBeDefined();
+  });
+
+  it('reports clean export state after an edited Working CSV is reopened', async () => {
+    const editedWorkingCsv = editedWorkingCsvFixture();
     const reopenedWorkingCsv = workingCsvFixture({ dataRevision: 1 });
     const getCsvEditState = vi
       .fn()
@@ -27,25 +44,23 @@ describe('CsvGrid edit state', () => {
       handlers: { 'csv.get-edit-state': getCsvEditState },
     });
     const onUnexportedChangesChange = vi.fn();
-    let renderer: ReactTestRenderer;
 
-    await act(async () => {
-      renderer = create(
-        withCsvViewer(
-          <CsvGrid
-            workingCsv={editedWorkingCsv}
-            themeMode="light"
-            DataGrid={DataGrid}
-            onUnexportedChangesChange={onUnexportedChangesChange}
-          />,
-          viewer,
-        ),
-      );
-    });
+    const { rerender } = render(
+      withCsvViewer(
+        <CsvGrid
+          workingCsv={editedWorkingCsv}
+          themeMode="light"
+          DataGrid={DataGrid}
+          onUnexportedChangesChange={onUnexportedChangesChange}
+        />,
+        viewer,
+      ),
+    );
+    await act(async () => {});
     expect(onUnexportedChangesChange).toHaveBeenLastCalledWith(true);
 
-    await act(async () => {
-      renderer.update(
+    await act(async () =>
+      rerender(
         withCsvViewer(
           <CsvGrid
             workingCsv={reopenedWorkingCsv}
@@ -55,8 +70,8 @@ describe('CsvGrid edit state', () => {
           />,
           viewer,
         ),
-      );
-    });
+      ),
+    );
 
     expect(getCsvEditState).toHaveBeenCalledTimes(2);
     expect(onUnexportedChangesChange).toHaveBeenLastCalledWith(false);
@@ -74,23 +89,20 @@ describe('CsvGrid edit state', () => {
       handlers: { 'csv.get-edit-state': getCsvEditState },
     });
     const onUnexportedChangesChange = vi.fn();
-    let renderer: ReactTestRenderer;
 
-    await act(async () => {
-      renderer = create(
-        withCsvViewer(
-          <CsvGrid
-            workingCsv={firstWorkingCsv}
-            themeMode="light"
-            DataGrid={DataGrid}
-            onUnexportedChangesChange={onUnexportedChangesChange}
-          />,
-          viewer,
-        ),
-      );
-    });
-    await act(async () => {
-      renderer.update(
+    const { rerender } = render(
+      withCsvViewer(
+        <CsvGrid
+          workingCsv={firstWorkingCsv}
+          themeMode="light"
+          DataGrid={DataGrid}
+          onUnexportedChangesChange={onUnexportedChangesChange}
+        />,
+        viewer,
+      ),
+    );
+    await act(async () =>
+      rerender(
         withCsvViewer(
           <CsvGrid
             workingCsv={secondWorkingCsv}
@@ -100,8 +112,8 @@ describe('CsvGrid edit state', () => {
           />,
           viewer,
         ),
-      );
-    });
+      ),
+    );
 
     const resolveFirst = pending.get('working-csv-1');
     const resolveSecond = pending.get('working-csv-2');
