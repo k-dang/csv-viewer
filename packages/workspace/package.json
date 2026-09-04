@@ -45,12 +45,16 @@
       "require": "./dist/workspace-host.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@duckdb/duckdb-wasm": "catalog:",
+    "typescript": "catalog:",
+    "web-worker": "catalog:"
   }
 }

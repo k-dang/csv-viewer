@@ -19,18 +19,16 @@
     "start": "pnpm --filter @csv-viewer/desktop start"
   },
   "devDependencies": {
-    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
     "@oxlint/plugins": "1.80.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^24.13.3",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "jsdom": "^30.0.1",
     "oxlint": "1.80.0",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.6",
-    "vitest": "^4.1.11",
-    "web-worker": "1.2.0"
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "^4.1.11"
   }
 }

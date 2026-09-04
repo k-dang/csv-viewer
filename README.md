@@ -33,7 +33,7 @@ The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose t
 
 - Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.
 - `packages/ui` depends on the `CsvViewer` interface, not a runtime implementation. `packages/workspace` exposes explicit subpaths instead of a barrel export.
-- `packages/workspace` compiles to CommonJS for Electron main. Vite consumes its TypeScript source for renderer and web builds.
+- Vite consumes the `packages/workspace` TypeScript source in the Electron main, renderer, and web bundles.
 - Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
 
 ## Requirements
@@ -57,7 +57,7 @@ pnpm run package
 
 - `dev:desktop` starts Vite and launches Electron against the local dev server. `dev` is an alias.
 - `dev:web` starts the browser composition root at `http://127.0.0.1:5173`.
-- `build:desktop` creates `apps/desktop/dist-renderer/` and `apps/desktop/dist-electron/`.
+- `build:desktop` creates the renderer plus standalone `main.cjs` and `preload.cjs` Electron bundles.
 - `build:web` creates `apps/web/dist-web/`, including the self-hosted Worker and Wasm module.
 - `typecheck` checks both applications and both shared packages.
 - `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and grid request behavior.
