@@ -115,7 +115,7 @@ function createWindow() {
     title: 'CSV Viewer',
     backgroundColor: '#f6f7f9',
     webPreferences: {
-      preload: path.join(electronRoot, '../preload/index.js'),
+      preload: path.join(electronRoot, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -152,7 +152,7 @@ function createWindow() {
     return;
   }
 
-  void mainWindow.loadFile(path.join(electronRoot, '../../dist-renderer/index.html'));
+  void mainWindow.loadFile(path.join(electronRoot, '../dist-renderer/index.html'));
 }
 
 function createApplicationMenu() {

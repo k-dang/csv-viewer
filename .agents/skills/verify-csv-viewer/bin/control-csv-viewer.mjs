@@ -134,7 +134,7 @@ function runProcess(commandName, args, options = {}) {
 }
 
 async function ensureBuilt(rebuild) {
-  const mainJs = path.join(desktopAppRoot, 'dist-electron/main/main.js');
+  const mainJs = path.join(desktopAppRoot, 'dist-electron/main.cjs');
   const rendererIndex = path.join(desktopAppRoot, 'dist-renderer/index.html');
   const electronJs = path.join(desktopAppRoot, 'scripts/launch-electron.cjs');
   if (!(await pathExists(electronJs))) fail('Missing apps/desktop/scripts/launch-electron.cjs');
@@ -145,7 +145,7 @@ async function ensureBuilt(rebuild) {
     await runProcess('pnpm', ['run', 'build:desktop']);
   }
   if (!(await pathExists(mainJs)) || !(await pathExists(rendererIndex))) {
-    fail('Desktop build did not produce apps/desktop/dist-electron/main/main.js and apps/desktop/dist-renderer/index.html');
+    fail('Desktop build did not produce apps/desktop/dist-electron/main.cjs and apps/desktop/dist-renderer/index.html');
   }
 }
 

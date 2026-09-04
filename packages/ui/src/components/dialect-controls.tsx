@@ -8,6 +8,12 @@ import {
 } from '@/components/ui/select';
 import { isCsvHeaderMode, type CsvHeaderMode } from './csv-dialect';
 
+const headerModeLabels = {
+  auto: 'Auto header',
+  yes: 'First row headers',
+  no: 'No headers',
+} satisfies Record<CsvHeaderMode, string>;
+
 export function DialectControls({
   delimiter,
   headerMode,
@@ -39,11 +45,11 @@ export function DialectControls({
       <Select
         value={headerMode}
         onValueChange={(value) => {
-          if (isCsvHeaderMode(value)) onHeaderModeChange(value);
+          if (value !== null && isCsvHeaderMode(value)) onHeaderModeChange(value);
         }}
       >
         <SelectTrigger id="csv-header-mode" className="w-[158px] bg-card" title="Header handling">
-          <SelectValue />
+          <SelectValue>{headerModeLabels[headerMode]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="auto">Auto header</SelectItem>

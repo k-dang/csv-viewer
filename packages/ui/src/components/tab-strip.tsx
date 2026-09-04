@@ -27,7 +27,7 @@ export function TabStrip({
       <TabsList
         aria-label="Open CSV and Comparison Tabs"
         variant="line"
-        className="group-data-[orientation=horizontal]/tabs:h-auto max-w-full justify-start overflow-x-auto rounded-none px-3 pt-1.5 pb-0"
+        className="group-data-horizontal/tabs:h-auto max-w-full justify-start overflow-x-auto rounded-none px-3 pt-1.5 pb-0"
         onWheel={(event) => {
           if (event.deltaY !== 0) {
             event.currentTarget.scrollLeft += event.deltaY;
@@ -56,7 +56,7 @@ export function TabStrip({
             >
               <TabsTrigger
                 value={tab.id}
-                className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none"
               >
                 {!isCsv ? <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" /> : null}
                 <span className="truncate">{label}</span>
