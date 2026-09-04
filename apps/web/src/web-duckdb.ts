@@ -1,5 +1,5 @@
-import mainModule from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
-import mainWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
+import mainModule from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
+import mainWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 
 /** Creates the browser's single-threaded database from assets emitted by the web build. */

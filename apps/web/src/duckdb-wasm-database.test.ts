@@ -1,10 +1,6 @@
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
-import WebWorker from 'web-worker';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createNodeDuckDbWasmDatabase } from '../../../packages/workspace/test-helpers/wasm-workspace';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
-
-const require = createRequire(`${process.cwd()}/package.json`);
 
 let database: DuckDbWasmWorkspaceDatabase | undefined;
 
@@ -16,7 +12,7 @@ afterEach(async () => {
 
 describe('DuckDbWasmWorkspaceDatabase', () => {
   it('runs parameterized queries on the pinned in-memory DuckDB core', async () => {
-    database = createDatabase();
+    database = createNodeDuckDbWasmDatabase();
 
     const rows = await database.readObjects(
       'SELECT version() AS version, ?::VARCHAR AS text, ?::BOOLEAN AS enabled, ?::INTEGER AS count',
@@ -34,7 +30,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   });
 
   it('reads registered memory files while rejecting remote sources and extension fetching', async () => {
-    database = createDatabase();
+    database = createNodeDuckDbWasmDatabase();
     const reference = await database.registerFileBuffer(
       'people.csv',
       new TextEncoder().encode('name,age\nAda,37\n'),
@@ -93,7 +89,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   });
 
   it('cancels pending work without publishing its table and keeps the connection usable', async () => {
-    database = createDatabase();
+    database = createNodeDuckDbWasmDatabase();
     const worker = await database.connectWorker();
     const work = worker.runCancellable(
       'CREATE TABLE cancelled_wasm_work AS SELECT sum(a.range * b.range) FROM range(1000000) a, range(1000000) b',
@@ -115,15 +111,3 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await worker.close();
   }, 15_000);
 });
-
-function createDatabase(): DuckDbWasmWorkspaceDatabase {
-  const mainModule = require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm');
-  const mainWorker = pathToFileURL(
-    require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
-  ).toString();
-  return new DuckDbWasmWorkspaceDatabase({
-    mainModule,
-    mainWorker,
-    createWorker: (reference) => Promise.resolve(new WebWorker(new URL(reference))),
-  });
-}
