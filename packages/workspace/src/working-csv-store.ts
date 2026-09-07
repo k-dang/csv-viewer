@@ -261,6 +261,7 @@ export class WorkingCsvStore {
       if (this.workingCsvs.get(workingCsvId)?.tableName !== state.tableName) continue;
       this.workingCsvs.delete(workingCsvId);
       this.closingWorkingCsvs.delete(workingCsvId);
+      this.host.releaseSource(state.sourceId);
       return;
     }
   }

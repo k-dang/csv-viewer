@@ -1,4 +1,5 @@
 import type {
+  CsvCapacityExceeded,
   CsvSourceId,
   RecentCsvSource,
 } from '@csv-viewer/workspace/csv-viewer';
@@ -14,6 +15,17 @@ import {
 
 export type WebCsvFilePicker = () => Promise<File | null>;
 
+export type WebCsvCapacityLimits = {
+  sourceBytes: number;
+  workspaceBytes: number;
+};
+
+// Provisional policy in original file bytes, not an estimate of engine memory.
+const webCsvCapacityLimits: WebCsvCapacityLimits = {
+  sourceBytes: 100_000_000,
+  workspaceBytes: 200_000_000,
+};
+
 /** Keeps browser-selected CSV Sources in memory for the lifetime of one page. */
 export class WebWorkspaceHost implements CsvWorkspaceHost {
   readonly capabilities = {
@@ -26,14 +38,37 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
   constructor(
     private readonly database: DuckDbWasmWorkspaceDatabase,
     private readonly pickFile: WebCsvFilePicker,
+    private readonly limits: WebCsvCapacityLimits = webCsvCapacityLimits,
   ) {}
 
-  async acquireSource(): Promise<CsvSourceId | null> {
+  async acquireSource(): Promise<CsvSourceId | CsvCapacityExceeded | null> {
     const file = await this.pickFile();
     if (!file) return null;
+    if (file.size > this.limits.sourceBytes) {
+      return {
+        status: 'capacity-exceeded',
+        limit: 'source-bytes',
+        limitBytes: this.limits.sourceBytes,
+        message: `CSV Viewer Web supports files up to ${this.limits.sourceBytes / 1_000_000} MB. Use the desktop application for larger files.`,
+      };
+    }
+    const reservedBytes = [...this.sources.values()].reduce((total, source) => total + source.size, 0);
+    if (reservedBytes + file.size > this.limits.workspaceBytes) {
+      return {
+        status: 'capacity-exceeded',
+        limit: 'workspace-source-bytes',
+        limitBytes: this.limits.workspaceBytes,
+        message: `CSV Viewer Web supports up to ${this.limits.workspaceBytes / 1_000_000} MB of open CSV files. Use the desktop application for larger workspaces.`,
+      };
+    }
+    // Check and reserve without yielding so concurrent selections include in-flight opens.
     const sourceId = crypto.randomUUID();
     this.sources.set(sourceId, file);
     return sourceId;
+  }
+
+  releaseSource(sourceId: CsvSourceId): void {
+    this.sources.delete(sourceId);
   }
 
   describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {

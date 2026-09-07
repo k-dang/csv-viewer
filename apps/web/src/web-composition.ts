@@ -8,7 +8,7 @@ import type {
   WorkspaceCloseImpact,
 } from '@csv-viewer/workspace/csv-viewer';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
-import type { WebCsvFilePicker } from './web-workspace-host';
+import type { WebCsvCapacityLimits, WebCsvFilePicker } from './web-workspace-host';
 import { WebWorkspaceHost } from './web-workspace-host';
 
 export type WebCsvViewerStartup =
@@ -19,13 +19,14 @@ export type WebCsvViewerStartup =
 export async function startWebCsvViewer(
   database: DuckDbWasmWorkspaceDatabase,
   pickFile: WebCsvFilePicker,
+  limits?: WebCsvCapacityLimits,
 ): Promise<WebCsvViewerStartup> {
   const fatalError = Promise.withResolvers<never>();
   const stopWatchingStartup = database.onFatalError(fatalError.reject);
   try {
     await Promise.race([verifyRequiredWasmFeatures(database), fatalError.promise]);
     stopWatchingStartup();
-    const workspace = createCsvViewer(new WebWorkspaceHost(database, pickFile), database);
+    const workspace = createCsvViewer(new WebWorkspaceHost(database, pickFile, limits), database);
     return {
       status: 'ready',
       viewer: new WebCsvViewerSession(workspace, database),

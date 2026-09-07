@@ -74,6 +74,10 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     return filePath ? this.registerSource(filePath) : null;
   }
 
+  releaseSource(): void {
+    // Desktop retains identity for Recent CSV Sources; it holds no open file or byte reservation.
+  }
+
   async describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
     const filePath = this.requireSource(sourceId).filePath;
     const fileStats = await stat(filePath).catch((cause: unknown) => {
