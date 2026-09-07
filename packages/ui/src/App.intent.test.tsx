@@ -33,6 +33,31 @@ afterEach(() => {
 });
 
 describe('App CsvViewer intents', () => {
+  it.each(['source-bytes', 'workspace-source-bytes'] as const)('shows the %s capacity outcome while keeping the existing Tab', async (limit) => {
+    const workingCsv = workingCsvFixture();
+    const message = limit === 'source-bytes'
+      ? 'CSV Viewer Web supports files up to 100 MB. Use the desktop application for larger files.'
+      : 'CSV Viewer Web supports up to 200 MB of open CSV files. Use the desktop application for larger workspaces.';
+    let opened = false;
+    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+    const viewer = createTestCsvViewer({
+      handlers: {
+        ...tabHandlers(workingCsv),
+        'csv.open': async () => {
+          if (opened) return { status: 'capacity-exceeded', limit, limitBytes: 100_000_000, message };
+          opened = true;
+          return { status: 'opened', workingCsv };
+        },
+      },
+      onEvent: (listener) => { receiveEvent = listener; return () => {}; },
+    });
+    render(<CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider>);
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByRole('tab', { name: new RegExp(workingCsv.source.name) }).getAttribute('aria-selected')).toBe('true');
+  });
+
   it('maps all four menu intents to the active CsvViewer behavior', async () => {
     const workingCsv = workingCsvFixture();
     const open = vi.fn(async () => ({ status: 'opened' as const, workingCsv }));

@@ -61,6 +61,10 @@ class WasmContractHost implements CsvWorkspaceHost {
     return Promise.resolve(null);
   }
 
+  releaseSource(): void {
+    // Contract fixtures remain available for subsequent source selections.
+  }
+
   async describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
     const source = this.requireSource(sourceId);
     return {

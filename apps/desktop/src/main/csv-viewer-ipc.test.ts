@@ -27,6 +27,19 @@ function setup(call: CsvViewer['call']) {
 const ipcEvent = {} as Electron.IpcMainInvokeEvent;
 
 describe('CsvViewer Electron request bridge', () => {
+  it('transports the shared capacity outcome with its limit and desktop fallback', async () => {
+    const result = {
+      status: 'capacity-exceeded',
+      limit: 'source-bytes',
+      limitBytes: 100_000_000,
+      message: 'CSV Viewer Web supports files up to 100 MB. Use the desktop application for larger files.',
+    } as const;
+    // SAFETY: This fixture handles only csv.open, whose result includes capacity rejection.
+    const call = vi.fn(async () => result) as CsvViewer['call'];
+    const handler = setup(call);
+    expect(structuredClone(await handler(ipcEvent, { operation: 'csv.open' }))).toEqual(result);
+  });
+
   it('forwards a valid request and returns the exact result', async () => {
     const request = { operation: 'csv.get-recent-sources' } as const;
     const result = [

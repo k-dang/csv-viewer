@@ -189,8 +189,16 @@ export type CsvEditState = {
 export type OpenCsvResult =
   | { status: 'opened'; workingCsv: WorkingCsvView }
   | { status: 'already-open'; workingCsv: WorkingCsvView }
+  | CsvCapacityExceeded
   | { status: 'failed'; message: string }
   | { status: 'cancelled' };
+
+export type CsvCapacityExceeded = {
+  status: 'capacity-exceeded';
+  limit: 'source-bytes' | 'workspace-source-bytes';
+  limitBytes: number;
+  message: string;
+};
 
 export type CloseImpact = {
   hasUnexportedChanges: boolean;

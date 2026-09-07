@@ -5,16 +5,16 @@ export function formatNumber(value: number): string {
 }
 
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
+  if (bytes < 1000) {
     return `${bytes} B`;
   }
 
   const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
+  let value = bytes / 1000;
   let unitIndex = 0;
 
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
+  while (value >= 1000 && unitIndex < units.length - 1) {
+    value /= 1000;
     unitIndex += 1;
   }
 

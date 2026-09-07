@@ -1,4 +1,4 @@
-import type { CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './contracts/csv-viewer';
+import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './contracts/csv-viewer';
 
 export type CsvSourceDescription = {
   sourceId: CsvSourceId;
@@ -33,8 +33,10 @@ export type CsvSourceUnavailableCode = 'missing-source' | 'permission-denied' | 
  */
 export interface CsvWorkspaceHost {
   readonly capabilities: CsvViewerCapabilities;
-  /** Ask the user for one CSV Source. Resolves to null when the selection is cancelled. */
-  acquireSource(): Promise<CsvSourceId | null>;
+  /** Select and reserve one CSV Source, return a capacity rejection, or null for cancellation. */
+  acquireSource(): Promise<CsvSourceId | CsvCapacityExceeded | null>;
+  /** Releases resources reserved for a CSV Source. Durable source identity may be retained. */
+  releaseSource(sourceId: CsvSourceId): void;
   describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription>;
   /**
    * Makes the CSV Source readable by the data engine for the duration of `use`, which receives

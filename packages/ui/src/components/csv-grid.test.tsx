@@ -22,6 +22,16 @@ const editedWorkingCsvFixture = () =>
 afterEach(cleanup);
 
 describe('CsvGrid', () => {
+  it('shows source size in decimal MB to match capacity limits', () => {
+    const workingCsv = workingCsvFixture();
+    workingCsv.source.sizeBytes = 100_000_000;
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-edit-state': async () => workingCsv.editState },
+    });
+    render(withCsvViewer(<CsvGrid workingCsv={workingCsv} themeMode="light" DataGrid={DataGrid} />, viewer));
+    expect(screen.getByText('100.0 MB')).toBeDefined();
+  });
+
   it('presents Unexported Changes using the product language', () => {
     const workingCsv = editedWorkingCsvFixture();
     const viewer = createTestCsvViewer({

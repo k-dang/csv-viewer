@@ -116,7 +116,15 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   private async openCsv(options?: CsvDialectOptions): Promise<OpenCsvResult> {
     const sourceId = await this.host.acquireSource();
     if (!sourceId) return { status: 'cancelled' };
-    return this.openRecentCsv(sourceId, options);
+    if (sourceId instanceof Object) return sourceId;
+    let retained = false;
+    try {
+      const result = await this.openRecentCsv(sourceId, options);
+      retained = result.status === 'opened' || result.status === 'already-open';
+      return result;
+    } finally {
+      if (!retained) this.host.releaseSource(sourceId);
+    }
   }
 
   private async openRecentCsv(sourceId: CsvSourceId, options?: CsvDialectOptions): Promise<OpenCsvResult> {

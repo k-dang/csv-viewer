@@ -144,7 +144,7 @@ export function App() {
 
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
-    if (result.status === 'failed') {
+    if (result.status === 'failed' || result.status === 'capacity-exceeded') {
       setOpenError(result.message);
       return;
     }
