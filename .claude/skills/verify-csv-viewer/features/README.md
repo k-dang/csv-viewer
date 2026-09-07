@@ -6,14 +6,16 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 - Launch with `node .claude/skills/verify-csv-viewer/bin/control-csv-viewer.mjs launch` so Electron uses a disposable `--user-data-dir` under `.claude/skills/verify-csv-viewer/runs/`.
 - Require `doctor` status `ok`, heading `CSV Viewer`, and `inspect.hasHealth` true.
-- Seeded Recent files are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
+- Seeded Recent CSV Sources are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
 - Never drive a `pnpm run dev` window or the user's default Electron userData.
-- Native Open/Export dialogs are out of band. Open CSVs from Recent files on the empty window. Do not click `Open CSV` or `Export CSV` in unattended runs.
+- Native Open/Export dialogs are out of band. Open CSVs from Recent CSV Sources on the empty window. Do not click `Open CSV` or `Export CSV` in unattended runs.
 
 ## Driving conventions
 
 - Start every recipe from the launched empty window unless the feature file says otherwise.
 - Prefer `--role` plus `--name` over CSS or coordinates. Use `--nth` when two visible controls share a name.
+- Read every "button is disabled" claim from `click`'s `"disabled"` JSON field. The `snapshot` AX dump does not carry disabled state.
+- Base UI popups (the `Stats Column` select) do not open from a synthetic click. Click the trigger, `press --key ArrowDown`, then click the option, and close the list before clicking anything else.
 - Treat `Compare…` as the ellipsis character `…`, not three dots.
 - After each mutation, wait for concrete text (`Ready`, row counts, `Unexported Changes`, comparison badges).
 - Restore the empty window by closing tabs when a recipe says to. Do not delete evidence during cleanup.
@@ -24,7 +26,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 - UI proof includes `snapshot` and `screenshot` under `evidence/<feature-id>/` with `CSV Viewer` visible.
 - Opening a file is proven by the tab, `#metadata-title`, row counts, and grid values. Also confirm the fixture file on disk is unchanged.
 - Edits are proven by grid text plus `Unexported Changes`. Re-read the fixture to prove the source was not overwritten.
-- Report an unreachable path with the command and the unmet prerequisite. Do not report a skipped native dialog as verified through Recent files.
+- Report an unreachable path with the command run, its output, and the unmet prerequisite. Do not report a skipped native dialog as verified through Recent CSV Sources.
 
 ## Feature entry contract
 
@@ -39,7 +41,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Open a CSV](./open-csv.md) covers the empty window, Recent files, tabs, reopen, and close.
+- [Open a CSV](./open-csv.md) covers the empty window, Recent CSV Sources, tabs, reopen, and close.
 - [Search and clear query](./search-filter.md) covers global search, empty matches, and Clear query.
 - [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, undo/redo, and the undriveable Export CSV dialog.
 - [Compare two CSVs](./compare-csvs.md) covers Compare…, the candidate picker, Apply key, and result badges.

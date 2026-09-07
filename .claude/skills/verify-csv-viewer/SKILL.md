@@ -42,7 +42,7 @@ What launch does:
 
 Electron is spawned detached. The launch command returns once ready and leaves the window running.
 
-Ready means stdout JSON has `"status": "ready"` and `inspect.ready` is `true`. The empty window shows `No CSV open`, `Open CSV`, `Recent files`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`. Recent files exist only on that empty window.
+Ready means stdout JSON has `"status": "ready"` and `inspect.ready` is `true`. The empty window shows `No CSV open`, `Open CSV`, `Recent CSV Sources`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`. Recent CSV Sources exist only on that empty window.
 
 Launch refuses if `current.json` points at a live pid. Cleanup first. Do not start a second instance against the same run file.
 
@@ -96,7 +96,7 @@ Stable handles from this renderer:
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
 | Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`) |
 | Header mode | combobox `Header mode` (`#csv-header-mode`), options `Auto header`, `First row headers`, `No headers` |
-| Compare | button `Compare…` (ellipsis character `…`, U+2026). Hidden on the empty window. Disabled until two CSV tabs are open. Unattended runs cannot open a second CSV (Recent files unmount after the first open; `Open CSV` is a native dialog). |
+| Compare | button `Compare…` (ellipsis character `…`, U+2026). Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Unattended runs cannot open a second CSV (Recent CSV Sources unmount after the first open; `Open CSV` is a native dialog). |
 | Reopen | button `Reopen` |
 | Theme | button `Switch to dark mode` / `Switch to light mode` |
 | Tabs | tablist `Open CSV and Comparison Tabs`, tab named with the file name |
@@ -111,14 +111,18 @@ Stable handles from this renderer:
 | Undo / redo | buttons `Undo edit`, `Redo edit` |
 | Dirty marker | text `Unexported Changes` |
 | Grid | `aria-label="CSV row grid"` |
-| Stats | button `Open stats panel` / `Close stats panel`, region `Stats Panel`. While open, two Close buttons share that name; use `--nth 0` |
-| Stats column | combobox `Stats Column`, then `--role option --name "status"` (not `--exact`) |
+| Stats | button `Open stats panel` / `Close stats panel`. The panel is `<aside aria-label="Stats Panel">` with no `role`, so `--role region` never matches it; wait for text `Column Value Counts` instead. While open, two Close buttons share the Close name; use `--nth 0` |
+| Stats column | combobox `Stats Column`. A click alone does not open it; follow with `press --key ArrowDown`, then `click --role option --name "status"`. The option name is exactly `status`, so `--exact` also works here, but `Close stats panel` needs substring matching |
 | Candidate picker | dialog `Choose a Candidate`, button `Close Candidate picker`, button `Cancel` |
 | Comparison | region `CSV comparison`, button `Swap sides`, button `Apply key`, button `Refresh comparison`, heading `Choose a Comparison Key` |
 
 `--name` is a substring match unless `--exact` is set. Prefer the full visible label. When two visible controls share a name, pass `--nth 0` (first match) or `--nth 1`.
 
-Native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through the seeded Recent files list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
+Disabled state is only readable from `click`, which prints `"disabled": true` and exits `0` without the control acting. The `snapshot` AX dump omits it. Prove every "button is disabled" claim from that JSON field, never from a snapshot or screenshot.
+
+Base UI popups (the `Stats Column` select) do not open from a synthetic click. Click the trigger, then `press --key ArrowDown`, then click the option.
+
+Native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through the seeded Recent CSV Sources list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
 
 AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `fill --focused` and `press --key Enter`. Column header filters use AG Grid's own widgets and a 1500ms filter debounce. Global search is the stable query path. Search is a case-insensitive substring: `active` also matches `inactive`.
 
