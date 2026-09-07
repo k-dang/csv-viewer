@@ -43,7 +43,6 @@ type ComparisonWorker = {
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
-  private readonly artifacts = new Set<ComparisonOperationId>();
   private readonly workers = new Map<ComparisonOperationId, ComparisonWorker>();
   private readonly readCounts = new Map<ComparisonOperationId, number>();
   private readonly readWaiters = new Map<ComparisonOperationId, Array<() => void>>();
@@ -163,11 +162,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         await this.dropSnapshot(request.artifactId);
         this.artifactRegistry.register({
           tableName,
-          owner: { kind: 'comparison', comparisonId: request.comparisonId },
+          owner: { kind: 'comparison', comparisonId: request.comparisonId, operationId: request.artifactId },
           role: 'staging',
-          operationId: request.artifactId,
         });
-        this.artifacts.add(request.artifactId);
         await writer.runCancellable(
           `CREATE TABLE ${table} AS SELECT ${projection}
            FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
@@ -212,7 +209,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   activateSnapshot(artifactId: ComparisonOperationId): void {
-    if (!this.artifacts.has(artifactId) || this.retirements.has(artifactId)) {
+    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
       throw new Error('Comparison staging snapshot is no longer available.');
     }
     this.artifactRegistry.transition(buildComparisonTableName(artifactId), 'active');
@@ -301,7 +298,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   async dropSnapshot(artifactId: ComparisonOperationId): Promise<void> {
     const existing = this.retirements.get(artifactId);
     if (existing) return existing;
-    if (!this.artifacts.has(artifactId)) return;
+    if (!this.hasSnapshot(artifactId)) return;
     const retirement = this.retireSnapshot(artifactId);
     this.retirements.set(artifactId, retirement);
     return retirement;
@@ -317,9 +314,10 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         failures.push(toError(error));
       }
     }
-    for (const artifactId of [...this.artifacts]) {
+    for (const artifact of this.artifactRegistry.list()) {
+      if (artifact.owner.kind !== 'comparison') continue;
       try {
-        await this.dropSnapshot(artifactId);
+        await this.dropSnapshot(artifact.owner.operationId);
       } catch (error) {
         failures.push(toError(error));
       }
@@ -375,7 +373,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   private acquireRead(artifactId: ComparisonOperationId): void {
-    if (!this.artifacts.has(artifactId) || this.retirements.has(artifactId)) {
+    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
       throw new Error('Comparison snapshot is no longer available.');
     }
     this.readCounts.set(artifactId, (this.readCounts.get(artifactId) ?? 0) + 1);
@@ -409,7 +407,6 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       await this.waitForReaders(artifactId);
       const connection = await this.database.getOwnerConnection();
       await connection.run(buildDropTableSql(tableName));
-      this.artifacts.delete(artifactId);
       this.artifactRegistry.remove(tableName);
     } finally {
       this.retirements.delete(artifactId);
@@ -417,12 +414,15 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }
 
   private async cleanupFailedSnapshot(artifactId: ComparisonOperationId): Promise<void> {
-    if (!this.artifacts.has(artifactId)) return;
+    if (!this.hasSnapshot(artifactId)) return;
     const tableName = buildComparisonTableName(artifactId);
     const connection = await this.database.getOwnerConnection();
     await connection.run(buildDropTableSql(tableName));
-    this.artifacts.delete(artifactId);
     this.artifactRegistry.remove(tableName);
+  }
+
+  private hasSnapshot(artifactId: ComparisonOperationId): boolean {
+    return this.artifactRegistry.get(buildComparisonTableName(artifactId)) !== null;
   }
 }
 

@@ -45,9 +45,7 @@ describe('WorkingCsvStore invariants', () => {
       role: 'current',
     });
 
-    await expect(store.disposeStore()).rejects.toThrow(
-      'Workspace artifact invariant violated',
-    );
+    await expect(store.disposeStore()).rejects.toThrow('Workspace artifact invariant violated');
     expect(databaseClose).toHaveBeenCalledOnce();
     expect(database.isOpen()).toBe(false);
     await expect(
@@ -56,10 +54,7 @@ describe('WorkingCsvStore invariants', () => {
   });
 
   it('isolates data-change listeners so one failure cannot suppress later listeners', async () => {
-    const workingCsv = await openWorkingCsv(
-      'listeners.csv',
-      ['name', 'Ada'].join('\n'),
-    );
+    const workingCsv = await openWorkingCsv('listeners.csv', ['name', 'Ada'].join('\n'));
     const error = vi
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
@@ -84,10 +79,7 @@ describe('WorkingCsvStore invariants', () => {
   });
 
   it('stops notifying a data-change listener once it unsubscribes', async () => {
-    const workingCsv = await openWorkingCsv(
-      'unsubscribe.csv',
-      ['name', 'Ada'].join('\n'),
-    );
+    const workingCsv = await openWorkingCsv('unsubscribe.csv', ['name', 'Ada'].join('\n'));
     const notified: string[] = [];
     const unsubscribe = store.subscribeToDataChanges((workingCsvId) =>
       notified.push(workingCsvId),

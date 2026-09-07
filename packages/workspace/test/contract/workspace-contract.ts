@@ -26,24 +26,16 @@ export interface WorkspaceContractFixture {
   readonly viewer: CsvViewer;
   registerSource(fileName: string, contents: string): Promise<CsvSourceId>;
   removeSource(fileName: string): Promise<void>;
-  openSource(
-    fileName: string,
-    contents: string,
-    options?: CsvDialectOptions,
-  ): Promise<WorkingCsvView>;
+  openSource(fileName: string, contents: string, options?: CsvDialectOptions): Promise<WorkingCsvView>;
   /** Writes `fileName` inside the fixture, creating it or replacing what is there. */
   writeSource(fileName: string, contents: string): Promise<string>;
   /** Points the next Export CSV at `fileName` and returns a reader for the delivered bytes. */
   captureNextExport(fileName: string): () => Promise<string>;
   editState(workingCsvId: WorkingCsvId): Promise<CsvEditState>;
   latestComparison(comparisonId: ComparisonId): ComparisonView | null;
-  confirmClose(
-    confirmedImpact?: WorkspaceCloseImpact,
-  ): Promise<ConfirmWorkspaceCloseOutcome>;
+  confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome>;
   disposeWorkspace(): Promise<void>;
-  awaitComparisonOutcome(
-    operationId: ComparisonOperationId,
-  ): Promise<ComparisonAttemptOutcomeView>;
+  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView>;
   dispose(): Promise<void>;
 }
 
@@ -59,9 +51,6 @@ export function rowIds(rows: CsvRow[]): string[] {
 
 /** Asserts on row windows with the internal row identifier stripped. */
 export function expectVisibleRows(rows: CsvRow[]) {
-  return expect(
-    rows.map(
-      ({ [csvInternalRowIdField]: _rowId, ...visibleRow }) => visibleRow,
-    ),
+  return expect(rows.map( ({ [csvInternalRowIdField]: _rowId, ...visibleRow }) => visibleRow),
   );
 }

@@ -41,9 +41,7 @@ export class WorkspaceContractObserver {
     return this.comparisons.get(comparisonId) ?? null;
   }
 
-  awaitComparisonOutcome(
-    operationId: ComparisonOperationId,
-  ): Promise<ComparisonAttemptOutcomeView> {
+  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
     const settled = this.outcomes.get(operationId);
     if (settled) return Promise.resolve(settled);
     return new Promise((resolve) => {

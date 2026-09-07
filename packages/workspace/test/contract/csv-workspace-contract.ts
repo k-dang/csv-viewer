@@ -6,9 +6,7 @@ import { defineCsvWorkspaceWorkingCsvContract } from './working-csv.contract';
 import type { WorkspaceContractFactory } from './workspace-contract';
 
 /** Registers the complete CsvViewer behavior against one runtime adapter. */
-export function defineCsvWorkspaceContract(
-  factory: WorkspaceContractFactory,
-): void {
+export function defineCsvWorkspaceContract(factory: WorkspaceContractFactory): void {
   defineCsvViewerRequestContract(factory);
   defineCsvWorkspaceWorkingCsvContract(factory);
   defineCsvWorkspaceEditingContract(factory);

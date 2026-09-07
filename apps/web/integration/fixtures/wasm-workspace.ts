@@ -68,10 +68,7 @@ class WasmContractHost implements CsvWorkspaceHost {
     };
   }
 
-  async withEngineSource<T>(
-    sourceId: CsvSourceId,
-    use: (reference: string) => Promise<T>,
-  ): Promise<T> {
+  async withEngineSource<T>(sourceId: CsvSourceId, use: (reference: string) => Promise<T>): Promise<T> {
     const source = this.requireSource(sourceId);
     const extension = source.name.split('.').pop() ?? 'csv';
     return this.database.withRegisteredFile(
@@ -81,9 +78,7 @@ class WasmContractHost implements CsvWorkspaceHost {
     );
   }
 
-  deliverExport(
-    request: CsvExportRequestForDelivery,
-  ): Promise<CsvExportDelivery> {
+  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
     const name = this.exportNames.shift();
     if (!name) return Promise.resolve({ status: 'cancelled' });
     this.exports.set(name, request.contents);
@@ -130,15 +125,10 @@ class WasmContractHost implements CsvWorkspaceHost {
     };
   }
 
-  private requireSource(
-    sourceId: CsvSourceId,
-  ): MemorySource & { contents: string } {
+  private requireSource(sourceId: CsvSourceId): MemorySource & { contents: string } {
     const source = this.sourcesById.get(sourceId);
     if (!source || source.contents === null) {
-      throw new CsvSourceUnavailableError(
-        'missing-source',
-        'CSV Source is no longer available.',
-      );
+      throw new CsvSourceUnavailableError('missing-source', 'CSV Source is no longer available.');
     }
     return { ...source, contents: source.contents };
   }
@@ -152,19 +142,12 @@ class WasmContractHost implements CsvWorkspaceHost {
 function createQuietWorker(reference: string): NodeWebWorker {
   const bootstrap = `console.log = () => {}; await import(${JSON.stringify(reference)});`;
   // SAFETY: web-worker's Node implementation emits `close` after its worker thread exits.
-  return new WebWorker(
-    `data:text/javascript,${encodeURIComponent(bootstrap)}`,
-    {
-      type: 'module',
-    },
-  ) as NodeWebWorker;
+  return new WebWorker(`data:text/javascript,${encodeURIComponent(bootstrap)}`, { type: 'module', }) as NodeWebWorker;
 }
 
 const nodeWasmOptions = {
   mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-eh.wasm'),
-  mainWorker: pathToFileURL(
-    require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs'),
-  ).toString(),
+  mainWorker: pathToFileURL(require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs')).toString(),
   createWorker: (reference: string) =>
     Promise.resolve(createQuietWorker(reference)),
 };
@@ -244,9 +227,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(
-    executor?: ComparisonExecutor,
-  ): Promise<WasmWorkspaceFixture> {
+  static async create(executor?: ComparisonExecutor): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database, executor);
@@ -263,11 +244,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   /** Registers a CSV Source and opens it as a Working CSV. */
-  async openSource(
-    fileName: string,
-    contents: string,
-    options?: CsvDialectOptions,
-  ): Promise<WorkingCsvView> {
+  async openSource(fileName: string, contents: string, options?: CsvDialectOptions): Promise<WorkingCsvView> {
     const sourceId = await this.registerSource(fileName, contents);
     const result = await this.viewer.call({
       operation: 'csv.open-recent',
@@ -275,11 +252,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
       options,
     });
     if (result.status !== 'opened') {
-      throw new Error(
-        result.status === 'failed'
-          ? result.message
-          : `CSV Source was ${result.status}.`,
-      );
+      throw new Error(result.status === 'failed' ? result.message : `CSV Source was ${result.status}.`);
     }
     return result.workingCsv;
   }
@@ -300,9 +273,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.observer.latestComparison(comparisonId);
   }
 
-  confirmClose(
-    confirmedImpact?: WorkspaceCloseImpact,
-  ): Promise<ConfirmWorkspaceCloseOutcome> {
+  confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
     return this.workspace.confirmClose(confirmedImpact);
   }
 
@@ -310,9 +281,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     await this.workspace.dispose();
   }
 
-  awaitComparisonOutcome(
-    operationId: ComparisonOperationId,
-  ): Promise<ComparisonAttemptOutcomeView> {
+  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
     return this.observer.awaitComparisonOutcome(operationId);
   }
 

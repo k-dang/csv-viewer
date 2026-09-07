@@ -7,9 +7,7 @@ import {
   type WorkspaceContractFixture,
 } from './workspace-contract';
 
-export function defineCsvWorkspaceEditingContract(
-  factory: WorkspaceContractFactory,
-): void {
+export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} CsvWorkspace editing, history, and Export CSV contract`, () => {
     let fixture: WorkspaceContractFixture;
 
@@ -26,10 +24,7 @@ export function defineCsvWorkspaceEditingContract(
     }
 
     it('edits a cell by row identifier and returns edited values in later row windows', async () => {
-      const workingCsv = await fixture.openSource(
-        'edit.csv',
-        ['name,code', 'Ada,001', 'Grace,002'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('edit.csv', ['name,code', 'Ada,001', 'Grace,002'].join('\n'));
       const firstWindow = await workspace().call({
         operation: 'csv.get-rows',
         workingCsvId: workingCsv.workingCsvId,
@@ -144,10 +139,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('undoes and redoes the most recent cell edit while updating Unexported Changes', async () => {
-      const workingCsv = await fixture.openSource(
-        'edit-history.csv',
-        ['name,code', 'Ada,001'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('edit-history.csv', ['name,code', 'Ada,001'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
 
       await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(
@@ -215,10 +207,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('clears redo history when a new cell edit is made after undo', async () => {
-      const workingCsv = await fixture.openSource(
-        'edit-redo-clear.csv',
-        ['name,code', 'Ada,001'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('edit-redo-clear.csv', ['name,code', 'Ada,001'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
 
       await workspace().call({
@@ -290,9 +279,7 @@ export function defineCsvWorkspaceEditingContract(
     it('deletes multiple selected source rows from a sorted window', async () => {
       const workingCsv = await fixture.openSource(
         'delete-many-sorted.csv',
-        ['name,score', 'Ada,10', 'Grace,30', 'Linus,20', 'Margaret,40'].join(
-          '\n',
-        ),
+        ['name,score', 'Ada,10', 'Grace,30', 'Linus,20', 'Margaret,40'].join('\n'),
       );
       const sorted = await workspace().call({
         operation: 'csv.get-rows',
@@ -422,10 +409,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('rejects row deletion when no valid selected row identifiers are provided', async () => {
-      const workingCsv = await fixture.openSource(
-        'delete-invalid.csv',
-        ['name', 'Ada'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('delete-invalid.csv', ['name', 'Ada'].join('\n'));
 
       await expect(
         workspace().call({
@@ -492,10 +476,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('appends an empty row when no row is selected', async () => {
-      const workingCsv = await fixture.openSource(
-        'insert-append.csv',
-        ['name,code', 'Ada,001'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('insert-append.csv', ['name,code', 'Ada,001'].join('\n'));
       const result = await workspace().call({
         operation: 'csv.insert-row',
         workingCsvId: workingCsv.workingCsvId,
@@ -524,10 +505,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('rejects ambiguous insert requests below the UI boundary', async () => {
-      const workingCsv = await fixture.openSource(
-        'insert-invalid.csv',
-        ['name', 'Ada', 'Grace'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('insert-invalid.csv', ['name', 'Ada', 'Grace'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
 
       await expect(
@@ -538,9 +516,7 @@ export function defineCsvWorkspaceEditingContract(
           rowIds: ['1'],
           hasActiveQuery: true,
         }),
-      ).rejects.toThrow(
-        'cannot be inserted while sort, filter, or search is active',
-      );
+      ).rejects.toThrow('cannot be inserted while sort, filter, or search is active');
       await expect(
         workspace().call({
           operation: 'csv.insert-row',
@@ -571,10 +547,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('undoes and redoes row insertion', async () => {
-      const workingCsv = await fixture.openSource(
-        'insert-history.csv',
-        ['name', 'Ada', 'Grace'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('insert-history.csv', ['name', 'Ada', 'Grace'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
       await workspace().call({
         operation: 'csv.insert-row',
@@ -718,16 +691,11 @@ export function defineCsvWorkspaceEditingContract(
         workingCsvId: workingCsv.workingCsvId,
       });
 
-      await expect(readExported()).resolves.toBe(
-        ['Ada|38', 'Grace|41', ''].join('\n'),
-      );
+      await expect(readExported()).resolves.toBe(['Ada|38', 'Grace|41', ''].join('\n'));
     });
 
     it('defaults a TSV export to tab delimiters', async () => {
-      const workingCsv = await fixture.openSource(
-        'export-tabs.tsv',
-        ['name\tage', 'Ada\t37'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('export-tabs.tsv', ['name\tage', 'Ada\t37'].join('\n'));
       const readExported = fixture.captureNextExport('exported-tabs.tsv');
 
       await workspace().call({
@@ -735,16 +703,11 @@ export function defineCsvWorkspaceEditingContract(
         workingCsvId: workingCsv.workingCsvId,
       });
 
-      await expect(readExported()).resolves.toBe(
-        ['name\tage', 'Ada\t37', ''].join('\n'),
-      );
+      await expect(readExported()).resolves.toBe(['name\tage', 'Ada\t37', ''].join('\n'));
     });
 
     it('keeps Unexported Changes when Export CSV is cancelled', async () => {
-      const workingCsv = await fixture.openSource(
-        'export-cancelled.csv',
-        ['name', 'Ada'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('export-cancelled.csv', ['name', 'Ada'].join('\n'));
       await workspace().call({
         operation: 'csv.edit-cell',
         workingCsvId: workingCsv.workingCsvId,
@@ -761,18 +724,13 @@ export function defineCsvWorkspaceEditingContract(
       ).resolves.toEqual({
         status: 'cancelled',
       });
-      await expect(
-        fixture.editState(workingCsv.workingCsvId),
-      ).resolves.toMatchObject({
+      await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toMatchObject({
         hasUnexportedChanges: true,
       });
     });
 
     it('tracks Unexported Changes by revision identity while preserving edit history', async () => {
-      const workingCsv = await fixture.openSource(
-        'export-revisions.csv',
-        ['name,code', 'Ada,001'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('export-revisions.csv', ['name,code', 'Ada,001'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
       fixture.captureNextExport('exported.csv');
 
@@ -783,9 +741,7 @@ export function defineCsvWorkspaceEditingContract(
         column: 'code',
         value: '002',
       });
-      await expect(
-        workspace().call({ operation: 'csv.export', ...request }),
-      ).resolves.toEqual({
+      await expect(workspace().call({ operation: 'csv.export', ...request })).resolves.toEqual({
         status: 'exported',
         editState: {
           workingCsvId: workingCsv.workingCsvId,
@@ -794,16 +750,12 @@ export function defineCsvWorkspaceEditingContract(
           canRedo: false,
         },
       });
-      await expect(
-        workspace().call({ operation: 'csv.undo', ...request }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.undo', ...request })).resolves.toMatchObject({
         hasUnexportedChanges: true,
         canUndo: false,
         canRedo: true,
       });
-      await expect(
-        workspace().call({ operation: 'csv.redo', ...request }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.redo', ...request })).resolves.toMatchObject({
         hasUnexportedChanges: false,
         canUndo: true,
         canRedo: false,
@@ -826,10 +778,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('preserves redo history when Export CSV establishes an undone revision as exported', async () => {
-      const workingCsv = await fixture.openSource(
-        'export-redo.csv',
-        ['name,code', 'Ada,001'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('export-redo.csv', ['name,code', 'Ada,001'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
       fixture.captureNextExport('exported-undone-revision.csv');
 
@@ -842,9 +791,7 @@ export function defineCsvWorkspaceEditingContract(
       });
       await workspace().call({ operation: 'csv.undo', ...request });
 
-      await expect(
-        workspace().call({ operation: 'csv.export', ...request }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.export', ...request })).resolves.toMatchObject({
         status: 'exported',
         editState: {
           hasUnexportedChanges: false,
@@ -852,9 +799,7 @@ export function defineCsvWorkspaceEditingContract(
           canRedo: true,
         },
       });
-      await expect(
-        workspace().call({ operation: 'csv.redo', ...request }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.redo', ...request })).resolves.toMatchObject({
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
@@ -862,10 +807,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('rejects unknown Working CSVs and oversized row windows', async () => {
-      const workingCsv = await fixture.openSource(
-        'windows.csv',
-        ['value', '1'].join('\n'),
-      );
+      const workingCsv = await fixture.openSource('windows.csv', ['value', '1'].join('\n'));
 
       await expect(
         workspace().call({
@@ -886,18 +828,13 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('returns a clear error for missing CSV Sources without keeping a Working CSV', async () => {
-      const sourceId = await fixture.registerSource(
-        'missing.csv',
-        'value\n1\n',
-      );
+      const sourceId = await fixture.registerSource('missing.csv', 'value\n1\n');
       await fixture.removeSource('missing.csv');
       const error = vi
         .spyOn(console, 'error')
         .mockImplementation(() => undefined);
 
-      await expect(
-        workspace().call({ operation: 'csv.open-recent', sourceId: sourceId }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.open-recent', sourceId: sourceId })).resolves.toMatchObject({
         status: 'failed',
         message: expect.stringContaining('Unable to open CSV'),
       });
@@ -905,10 +842,7 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('keeps large CSV Source access bounded after edits, inserts, and deletes', async () => {
-      const workingCsv = await fixture.openSource(
-        'large-edited.csv',
-        buildLargeCsv(),
-      );
+      const workingCsv = await fixture.openSource('large-edited.csv', buildLargeCsv());
       const request = { workingCsvId: workingCsv.workingCsvId };
 
       await workspace().call({
@@ -959,17 +893,12 @@ export function defineCsvWorkspaceEditingContract(
     });
 
     it('returns a distinct error for unsupported CSV Sources', async () => {
-      const sourceId = await fixture.registerSource(
-        'people.json',
-        '{"name":"Ada"}',
-      );
+      const sourceId = await fixture.registerSource('people.json', '{"name":"Ada"}');
       const error = vi
         .spyOn(console, 'error')
         .mockImplementation(() => undefined);
 
-      await expect(
-        workspace().call({ operation: 'csv.open-recent', sourceId: sourceId }),
-      ).resolves.toMatchObject({
+      await expect(workspace().call({ operation: 'csv.open-recent', sourceId: sourceId })).resolves.toMatchObject({
         status: 'failed',
         message: expect.stringContaining('Unsupported file type'),
       });
@@ -978,10 +907,7 @@ export function defineCsvWorkspaceEditingContract(
 
     describe('concurrent CSV mutations', () => {
       it('gives every concurrently inserted row its own identifier and position', async () => {
-        const workingCsv = await fixture.openSource(
-          'insert-concurrent.csv',
-          ['name', 'Ada'].join('\n'),
-        );
+        const workingCsv = await fixture.openSource('insert-concurrent.csv', ['name', 'Ada'].join('\n'));
         const request = {
           workingCsvId: workingCsv.workingCsvId,
           hasActiveQuery: false,
@@ -1026,10 +952,7 @@ export function defineCsvWorkspaceEditingContract(
       });
 
       it('steps back one edit per concurrent undo', async () => {
-        const workingCsv = await fixture.openSource(
-          'undo-concurrent.csv',
-          ['name,code', 'Ada,001'].join('\n'),
-        );
+        const workingCsv = await fixture.openSource('undo-concurrent.csv', ['name,code', 'Ada,001'].join('\n'));
         const request = { workingCsvId: workingCsv.workingCsvId };
         await workspace().call({
           operation: 'csv.edit-cell',
@@ -1051,9 +974,7 @@ export function defineCsvWorkspaceEditingContract(
           workspace().call({ operation: 'csv.undo', ...request }),
         ]);
 
-        await expect(
-          fixture.editState(workingCsv.workingCsvId),
-        ).resolves.toMatchObject({
+        await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toMatchObject({
           canUndo: false,
           canRedo: true,
         });

@@ -1,36 +1,23 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
-import { App, type AppComponents } from './App';
+import type { CsvViewerEvent, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import { App } from './App';
 import { CsvViewerProvider } from './csv-viewer';
 import { workingCsvFixture } from './test-helpers/csv-views';
 import { createTestCsvViewer } from './test-helpers/csv-viewer';
 
-type RenderedAppState = {
-  exportRequestSequence: number;
-  onChooseCandidate: ((candidateId: string) => void) | undefined;
-};
-
-const renderedApp: RenderedAppState = {
-  exportRequestSequence: 0,
-  onChooseCandidate: undefined,
-};
-
-const testComponents: AppComponents = {
-  ComparisonCandidateDialog: ({ onChoose }) => {
-    renderedApp.onChooseCandidate = onChoose;
-    return <></>;
-  },
-  ComparisonTab: () => <></>,
-  CsvMetadataView: ({ exportRequestSequence = 0 }) => {
-    renderedApp.exportRequestSequence = exportRequestSequence;
-    return <></>;
-  },
-  DialectControls: () => <></>,
-  EmptyCsvState: () => <></>,
-  TabStrip: () => <></>,
-};
+/** Calls a rendered CSV Tab makes on its own, leaving each test to stub what it asserts on. */
+const tabHandlers = (workingCsv: WorkingCsvView) => ({
+  'csv.get-recent-sources': async () => [],
+  'csv.get-edit-state': async () => workingCsv.editState,
+  'csv.get-rows': async () => ({
+    workingCsvId: workingCsv.workingCsvId,
+    offset: 0,
+    rows: [],
+    filteredRowCount: 0,
+  }),
+});
 
 beforeEach(() => {
   // jsdom ships neither of these: the App reads matchMedia for the initial theme and confirm on close.
@@ -43,8 +30,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
-  renderedApp.exportRequestSequence = 0;
-  renderedApp.onChooseCandidate = undefined;
 });
 
 describe('App CsvViewer intents', () => {
@@ -52,6 +37,7 @@ describe('App CsvViewer intents', () => {
     const workingCsv = workingCsvFixture();
     const open = vi.fn(async () => ({ status: 'opened' as const, workingCsv }));
     const reopen = vi.fn(async () => ({ status: 'opened' as const, workingCsv }));
+    const exportCsv = vi.fn(async () => ({ status: 'cancelled' as const }));
     const close = vi.fn(async () => ({
       status: 'closed' as const,
       closedWorkingCsvId: workingCsv.workingCsvId,
@@ -60,8 +46,10 @@ describe('App CsvViewer intents', () => {
     let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
     const viewer = createTestCsvViewer({
       handlers: {
+        ...tabHandlers(workingCsv),
         'csv.open': open,
         'csv.reopen': reopen,
+        'csv.export': exportCsv,
         'csv.close': close,
       },
       onEvent: (listener) => {
@@ -72,7 +60,7 @@ describe('App CsvViewer intents', () => {
 
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App components={testComponents} />
+        <App />
       </CsvViewerProvider>,
     );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
@@ -88,7 +76,10 @@ describe('App CsvViewer intents', () => {
     });
 
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'export-csv' }));
-    expect(renderedApp.exportRequestSequence).toBe(1);
+    expect(exportCsv).toHaveBeenCalledWith({
+      operation: 'csv.export',
+      workingCsvId: workingCsv.workingCsvId,
+    });
 
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'close-tab' }));
     expect(close).toHaveBeenCalledWith({
@@ -104,6 +95,7 @@ describe('App CsvViewer intents', () => {
     let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
     const viewer = createTestCsvViewer({
       handlers: {
+        ...tabHandlers(candidate),
         'csv.open': async () => ({ status: 'opened', workingCsv: openedCsvs.shift() ?? candidate }),
         'comparison.get-candidates': async () => [
           { workingCsv: baseline, compatibility: { kind: 'compatible' } },
@@ -120,7 +112,7 @@ describe('App CsvViewer intents', () => {
 
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App components={testComponents} />
+        <App />
       </CsvViewerProvider>,
     );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
@@ -131,11 +123,9 @@ describe('App CsvViewer intents', () => {
     await act(async () => {
       screen.getByRole('button', { name: /Compare/ }).click();
     });
-    if (!renderedApp.onChooseCandidate) throw new Error('Candidate picker was not rendered.');
 
     await act(async () => {
-      renderedApp.onChooseCandidate?.(baseline.workingCsvId);
-      await Promise.resolve();
+      within(screen.getByRole('dialog')).getByRole('button', { name: /baseline\.csv/ }).click();
     });
 
     expect(screen.getByRole('alert').textContent).toBe('Comparison request failed.');

@@ -12,7 +12,9 @@ import { EmptyCsvState } from '@/components/empty-csv-state';
 import { TabStrip, type OpenRendererTab } from '@/components/tab-strip';
 import type {
   ComparisonCandidate,
+  CsvDialectOptions,
   CsvViewerIntent,
+  CsvViewerRequest,
   WorkingCsvView,
   OpenCsvResult,
   CsvSourceId,
@@ -30,25 +32,8 @@ type ThemeMode = 'light' | 'dark';
 
 const themeStorageKey = 'csv-viewer-theme';
 
-export type AppComponents = {
-  ComparisonCandidateDialog: typeof ComparisonCandidateDialog;
-  ComparisonTab: typeof ComparisonTab;
-  CsvMetadataView: typeof CsvMetadataView;
-  DialectControls: typeof DialectControls;
-  EmptyCsvState: typeof EmptyCsvState;
-  TabStrip: typeof TabStrip;
-};
-
-const defaultAppComponents: AppComponents = {
-  ComparisonCandidateDialog,
-  ComparisonTab,
-  CsvMetadataView,
-  DialectControls,
-  EmptyCsvState,
-  TabStrip,
-};
-
-type AppProps = { components?: AppComponents };
+/** Every request that opens a Working CSV, so runOpen covers all three the same way. */
+type OpenRequest = Extract<CsvViewerRequest, { operation: 'csv.open' | 'csv.open-recent' | 'csv.reopen' }>;
 
 function getInitialTheme(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
@@ -56,15 +41,7 @@ function getInitialTheme(): ThemeMode {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function App({ components = defaultAppComponents }: AppProps = {}) {
-  const {
-    ComparisonCandidateDialog: ComparisonCandidateDialogComponent,
-    ComparisonTab: ComparisonTabComponent,
-    CsvMetadataView: CsvMetadataViewComponent,
-    DialectControls: DialectControlsComponent,
-    EmptyCsvState: EmptyCsvStateComponent,
-    TabStrip: TabStripComponent,
-  } = components;
+export function App() {
   const viewer = useCsvViewer();
   const [workspaceState, dispatchWorkspace] = useReducer(rendererWorkspaceReducer, initialRendererWorkspace);
   const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<ReadonlySet<string>>(
@@ -165,7 +142,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
     setOpenError(null);
   }
 
-  async function openCsv() {
+  async function runOpen(toRequest: (options: CsvDialectOptions) => OpenRequest, failureMessage: string) {
     const options = buildDialectOptions(delimiter, headerMode);
     if (isDialectError(options)) {
       setDialectError(options);
@@ -174,58 +151,31 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
     setDialectError(null);
     setIsOpening(true);
     try {
-      const result = await viewer.call({ operation: 'csv.open', options });
-      applyOpenResult(result);
+      applyOpenResult(await viewer.call(toRequest(options)));
     } catch (error: unknown) {
-      setOpenError(error instanceof Error ? error.message : 'Unable to open CSV.');
+      setOpenError(error instanceof Error ? error.message : failureMessage);
     } finally {
       setIsOpening(false);
     }
   }
 
+  async function openCsv() {
+    await runOpen((options) => ({ operation: 'csv.open', options }), 'Unable to open CSV.');
+  }
+
   async function openRecentCsv(sourceId: CsvSourceId) {
-    const options = buildDialectOptions(delimiter, headerMode);
-    if (isDialectError(options)) {
-      setDialectError(options);
-      return;
-    }
-    setDialectError(null);
-    setIsOpening(true);
-    try {
-      const result = await viewer.call({
-        operation: 'csv.open-recent',
-        sourceId,
-        options,
-      });
-      applyOpenResult(result);
-    } catch (error: unknown) {
-      setOpenError(error instanceof Error ? error.message : 'Unable to open recent CSV.');
-    } finally {
-      setIsOpening(false);
-    }
+    await runOpen(
+      (options) => ({ operation: 'csv.open-recent', sourceId, options }),
+      'Unable to open recent CSV.',
+    );
   }
 
   async function reopenActiveTab() {
     if (!activeCsv) return;
-    const options = buildDialectOptions(delimiter, headerMode);
-    if (isDialectError(options)) {
-      setDialectError(options);
-      return;
-    }
-    setDialectError(null);
-    setIsOpening(true);
-    try {
-      const result = await viewer.call({
-        operation: 'csv.reopen',
-        workingCsvId: activeCsv.workingCsvId,
-        options,
-      });
-      applyOpenResult(result);
-    } catch (error: unknown) {
-      setOpenError(error instanceof Error ? error.message : 'Unable to reopen CSV.');
-    } finally {
-      setIsOpening(false);
-    }
+    await runOpen(
+      (options) => ({ operation: 'csv.reopen', workingCsvId: activeCsv.workingCsvId, options }),
+      'Unable to reopen CSV.',
+    );
   }
 
   async function showCandidatePicker() {
@@ -363,7 +313,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
           </div>
         </div>
         <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
-          <DialectControlsComponent
+          <DialectControls
             delimiter={delimiter}
             headerMode={headerMode}
             onDelimiterChange={setDelimiter}
@@ -406,7 +356,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
       {hasTabs ? (
         <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
           <div className="min-w-0">
-            <TabStripComponent
+            <TabStrip
               tabs={openTabs}
               activeTabId={activeTabId}
               workingCsvIdsWithUnexportedChanges={workingCsvIdsWithUnexportedChanges}
@@ -427,7 +377,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
                   key={workingCsv.workingCsvId}
                   className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
-                  <CsvMetadataViewComponent
+                  <CsvMetadataView
                     workingCsv={workingCsv}
                     dialectError={tab.id === activeTabId ? dialectError : null}
                     themeMode={themeMode}
@@ -449,7 +399,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
                   key={tab.comparisonId}
                   className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
                 >
-                  <ComparisonTabComponent
+                  <ComparisonTab
                     comparison={comparison}
                     presentation={tab.presentation}
                     themeMode={themeMode}
@@ -463,7 +413,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
           </div>
         </div>
       ) : (
-        <EmptyCsvStateComponent
+        <EmptyCsvState
           isOpening={isOpening}
           errorMessage={openError}
           dialectError={dialectError}
@@ -472,7 +422,7 @@ export function App({ components = defaultAppComponents }: AppProps = {}) {
         />
       )}
       {candidatePicker ? (
-        <ComparisonCandidateDialogComponent
+        <ComparisonCandidateDialog
           baseline={candidatePicker.baseline}
           candidates={candidatePicker.candidates}
           onChoose={(candidateId) => void chooseCandidate(candidateId)}
