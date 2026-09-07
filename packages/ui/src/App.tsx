@@ -314,7 +314,7 @@ export function App() {
   const isDarkMode = themeMode === 'dark';
   const hasTabs = openTabs.length > 0;
 
-  if (fatalError) {
+  if (fatalError !== null) {
     return (
       <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
         <section

@@ -184,36 +184,32 @@ describe('App CsvViewer intents', () => {
     expect(exportedUnload.defaultPrevented).toBe(false);
   });
 
-  it('replaces the workspace with one reload action after a fatal data engine failure', async () => {
-    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
-    const viewer = createTestCsvViewer({
-      handlers: {
-        'csv.get-recent-sources': async () => [],
-      },
-      onEvent: (listener) => {
-        receiveEvent = listener;
-        return () => {};
-      },
-    });
+  it.each(['The local data engine stopped unexpectedly.', ''])(
+    'replaces the workspace with one reload action after a fatal data engine failure (%j)',
+    async (message) => {
+      let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+      const viewer = createTestCsvViewer({
+        handlers: {
+          'csv.get-recent-sources': async () => [],
+        },
+        onEvent: (listener) => {
+          receiveEvent = listener;
+          return () => {};
+        },
+      });
 
-    render(
-      <CsvViewerProvider viewer={viewer}>
-        <App />
-      </CsvViewerProvider>,
-    );
-    if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
+      render(
+        <CsvViewerProvider viewer={viewer}>
+          <App />
+        </CsvViewerProvider>,
+      );
+      if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
 
-    await act(async () =>
-      receiveEvent?.({
-        type: 'fatal-error',
-        message: 'The local data engine stopped unexpectedly.',
-      }),
-    );
+      await act(async () => receiveEvent?.({ type: 'fatal-error', message }));
 
-    expect(screen.getByRole('alert').textContent).toContain(
-      'The local data engine stopped unexpectedly.',
-    );
-    expect(screen.getByRole('button', { name: 'Reload CSV Viewer' })).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'Open CSV' })).toBeNull();
-  });
+      expect(screen.getByRole('alert').textContent).toContain(message);
+      expect(screen.getByRole('button', { name: 'Reload CSV Viewer' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Open CSV' })).toBeNull();
+    },
+  );
 });
