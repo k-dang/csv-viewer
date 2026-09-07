@@ -116,52 +116,32 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     database = new DuckDbWasmWorkspaceDatabase({
       mainModule: 'duckdb.wasm',
       mainWorker: 'duckdb.worker.js',
-      // SAFETY: ControllableWorker implements every Worker member used by AsyncDuckDB in this test.
-      createWorker: () => Promise.resolve(worker as never),
+      createWorker: () => Promise.resolve(worker),
     });
     const fatalError = vi.fn();
     database.onFatalError(fatalError);
     void database.ownerConnection();
-    await vi.waitFor(() => expect(worker.listenerCount('error')).toBe(2));
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
 
     worker.emitError(new Error('Worker crashed.'));
     worker.emitError(new Error('Worker crashed again.'));
 
     expect(fatalError).toHaveBeenCalledOnce();
-    expect(worker.terminateCount).toBe(1);
+    expect(worker.terminate).toHaveBeenCalledOnce();
     await expect(database.readObjects('SELECT 1')).rejects.toThrow(
       'The data engine has stopped. Reload CSV Viewer to start a new workspace.',
     );
   });
 });
 
-class ControllableWorker {
-  private readonly listeners = new Map<string, Set<EventListener>>();
-  terminateCount = 0;
-
-  addEventListener(type: string, listener: EventListener): void {
-    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
-    listeners.add(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  removeEventListener(type: string, listener: EventListener): void {
-    this.listeners.get(type)?.delete(listener);
-  }
-
-  postMessage(): void {}
-
-  terminate(): void {
-    this.terminateCount += 1;
-  }
-
-  listenerCount(type: string): number {
-    return this.listeners.get(type)?.size ?? 0;
-  }
+class ControllableWorker extends EventTarget implements Worker {
+  onerror: Worker['onerror'] = null;
+  onmessage: Worker['onmessage'] = null;
+  onmessageerror: Worker['onmessageerror'] = null;
+  postMessage = vi.fn();
+  terminate = vi.fn();
 
   emitError(error: Error): void {
-    // SAFETY: Both listeners read only the ErrorEvent error and message fields supplied here.
-    const event = { error, message: error.message } as ErrorEvent;
-    for (const listener of this.listeners.get('error') ?? []) listener(event);
+    this.dispatchEvent(Object.assign(new Event('error'), { error, message: error.message }));
   }
 }

@@ -5,6 +5,7 @@ import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonView, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { startWebCsvViewer } from './web-composition';
+import type { WebCsvCapacityLimits } from './web-workspace-host';
 
 let viewer: CsvWorkspaceOwner | undefined;
 
@@ -148,12 +149,10 @@ describe('web CsvViewer capacity', () => {
   it('rejects a CSV Source above the file limit before reading its bytes', async () => {
     const file = new File(['id\n12345\n'], 'large.csv');
     const read = vi.spyOn(file, 'arrayBuffer');
-    const started = await startWebCsvViewer(createNodeDuckDbWasmDatabase(), async () => file, {
+    viewer = await capacityViewer([file], {
       sourceBytes: 8,
       workspaceBytes: 16,
     });
-    if (started.status !== 'ready') throw new Error('Web startup check failed.');
-    viewer = started.viewer;
     await expect(viewer.call({ operation: 'csv.open' })).resolves.toEqual({
       status: 'capacity-exceeded',
       limit: 'source-bytes',
@@ -162,7 +161,6 @@ describe('web CsvViewer capacity', () => {
     });
     expect(read).not.toHaveBeenCalled();
   });
-
 });
 
 function csvFile(size: number): File {
@@ -171,7 +169,7 @@ function csvFile(size: number): File {
 
 async function capacityViewer(
   selections: Array<File | null>,
-  limits?: { sourceBytes: number; workspaceBytes: number },
+  limits?: WebCsvCapacityLimits,
 ): Promise<CsvWorkspaceOwner> {
   const started = await startWebCsvViewer(createNodeDuckDbWasmDatabase(), async () => selections.shift() ?? null, limits);
   if (started.status !== 'ready') throw new Error('Web startup check failed.');

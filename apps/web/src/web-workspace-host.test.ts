@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
+import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { WebWorkspaceHost } from './web-workspace-host';
 
 afterEach(() => {
@@ -13,8 +13,7 @@ describe('WebWorkspaceHost', () => {
     const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:export');
     const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     const host = new WebWorkspaceHost(
-      // SAFETY: Export delivery does not access the database dependency.
-      {} as DuckDbWasmWorkspaceDatabase,
+      createNodeDuckDbWasmDatabase(),
       async () => null,
     );
 

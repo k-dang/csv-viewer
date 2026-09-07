@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CsvViewerEvent, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvViewerEvent, OpenCsvResult, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import { App } from './App';
 import { CsvViewerProvider } from './csv-viewer';
 import { workingCsvFixture } from './test-helpers/csv-views';
@@ -38,20 +38,30 @@ describe('App CsvViewer intents', () => {
     const message = limit === 'source-bytes'
       ? 'CSV Viewer Web supports files up to 100 MB. Use the desktop application for larger files.'
       : 'CSV Viewer Web supports up to 200 MB of open CSV files. Use the desktop application for larger workspaces.';
-    let opened = false;
+    const open = vi.fn<() => Promise<OpenCsvResult>>()
+      .mockResolvedValueOnce({ status: 'opened', workingCsv })
+      .mockResolvedValue({
+        status: 'capacity-exceeded',
+        limit,
+        limitBytes: limit === 'source-bytes' ? 100_000_000 : 200_000_000,
+        message,
+      });
     let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
     const viewer = createTestCsvViewer({
       handlers: {
         ...tabHandlers(workingCsv),
-        'csv.open': async () => {
-          if (opened) return { status: 'capacity-exceeded', limit, limitBytes: 100_000_000, message };
-          opened = true;
-          return { status: 'opened', workingCsv };
-        },
+        'csv.open': open,
       },
-      onEvent: (listener) => { receiveEvent = listener; return () => {}; },
+      onEvent: (listener) => {
+        receiveEvent = listener;
+        return () => {};
+      },
     });
-    render(<CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider>);
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App />
+      </CsvViewerProvider>,
+    );
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     expect(screen.getByText(message)).toBeTruthy();
