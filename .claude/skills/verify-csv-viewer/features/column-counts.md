@@ -30,6 +30,10 @@ Preconditions:
 - **Close.** Clear the query first, then run `click --role button --name "Close stats panel" --nth 0`. The panel is gone and the toolbar button returns to `Open stats panel`.
 - **Source.** `fixtures/phase-2-sample.csv` is unchanged.
 
+## Web differences
+
+None. The Stats Panel, its Count Scope, and the Base UI select all behave identically. The `press --key ArrowDown` step is required on both targets.
+
 ## Gotchas
 
 - A click on the `Stats Column` trigger does not open the list. It is a Base UI select and needs `press --key ArrowDown` after the click. Without that, `click --role option` fails with `No control matched role=option`.

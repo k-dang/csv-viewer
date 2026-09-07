@@ -9,9 +9,13 @@ import { fileURLToPath } from 'node:url';
 const skillDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(skillDir, '../../..');
 const desktopAppRoot = path.join(repoRoot, 'apps/desktop');
+const webAppRoot = path.join(repoRoot, 'apps/web');
+const webBrowserDir = path.join(skillDir, 'bin/web-browser');
 const runsDir = path.join(skillDir, 'runs');
 const currentRunPath = path.join(runsDir, 'current.json');
 const defaultCdpPort = 19322;
+// Deliberately not Vite 5173: that port is shared with any dev server the user already has open.
+const defaultWebPort = 19323;
 const launchTimeoutMs = 45_000;
 
 const commands = {
@@ -26,6 +30,7 @@ const commands = {
   press: runPress,
   wait: runWait,
   text: runText,
+  upload: runUpload,
 };
 
 function parseFlags(argv) {
@@ -149,6 +154,19 @@ async function ensureBuilt(rebuild) {
   }
 }
 
+async function ensureWebBuilt(rebuild) {
+  const webIndex = path.join(webAppRoot, 'dist-web/index.html');
+  if (!(await pathExists(path.join(repoRoot, 'node_modules')))) {
+    await runProcess('pnpm', ['install']);
+  }
+  if (rebuild || !(await pathExists(webIndex))) {
+    await runProcess('pnpm', ['run', 'build:web']);
+  }
+  if (!(await pathExists(webIndex))) {
+    fail('Web build did not produce apps/web/dist-web/index.html');
+  }
+}
+
 async function seedRecentFiles(userDataDir) {
   const fixtures = [
     path.join(repoRoot, 'fixtures/phase-2-sample.csv'),
@@ -225,6 +243,7 @@ class CdpSession {
     this.webSocketUrl = webSocketUrl;
     this.nextId = 0;
     this.pending = new Map();
+    this.eventWaiters = new Map();
     this.ws = null;
   }
 
@@ -238,7 +257,14 @@ class CdpSession {
     });
     this.ws.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      if (message.id == null) return;
+      if (message.id == null) {
+        const waiter = this.eventWaiters.get(message.method);
+        if (waiter) {
+          this.eventWaiters.delete(message.method);
+          waiter.resolve(message.params);
+        }
+        return;
+      }
       const waiter = this.pending.get(message.id);
       if (!waiter) return;
       this.pending.delete(message.id);
@@ -252,6 +278,22 @@ class CdpSession {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  /** Resolves with the next payload for a CDP event, or rejects once timeoutMs elapses. */
+  waitForEvent(method, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.eventWaiters.delete(method);
+        reject(new Error(`Timed out waiting for CDP event ${method}`));
+      }, timeoutMs);
+      this.eventWaiters.set(method, {
+        resolve: (params) => {
+          clearTimeout(timer);
+          resolve(params);
+        },
+      });
     });
   }
 
@@ -289,7 +331,11 @@ async function withCdp(run, fn) {
   }
 }
 
-function inspectExpression() {
+function inspectExpression(target) {
+  // Web has no preload, so `window.csvViewer` never exists there. Its liveness proof is that the
+  // app rendered past its own startup gate: the h1 stops reading "Checking browser support" or
+  // "This browser cannot start CSV Viewer Web" and becomes the product title.
+  const web = target === 'web';
   return `(async () => {
     const text = (document.body && document.body.innerText) || '';
     const title = document.title;
@@ -298,11 +344,16 @@ function inspectExpression() {
     const emptyTitle = document.querySelector('#empty-state-title')?.textContent?.trim() || '';
     let hasHealth = false;
     let healthError = '';
-    try {
-      const recentSources = await window.csvViewer.call({ operation: 'csv.get-recent-sources' });
-      hasHealth = Array.isArray(recentSources);
-    } catch (error) {
-      healthError = error instanceof Error ? error.message : String(error);
+    if (${web ? 'true' : 'false'}) {
+      hasHealth = heading === 'CSV Viewer';
+      if (!hasHealth) healthError = heading || 'CSV Viewer Web has not finished starting.';
+    } else {
+      try {
+        const recentSources = await window.csvViewer.call({ operation: 'csv.get-recent-sources' });
+        hasHealth = Array.isArray(recentSources);
+      } catch (error) {
+        healthError = error instanceof Error ? error.message : String(error);
+      }
     }
     return {
       title,
@@ -480,7 +531,7 @@ async function waitForReady(run, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
-    last = await withCdp(run, (session) => session.evaluate(inspectExpression()));
+    last = await withCdp(run, (session) => session.evaluate(inspectExpression(run.target)));
     if (last?.ready) return last;
     await sleep(300);
   }
@@ -494,18 +545,28 @@ async function runLaunch(options) {
       `A verification instance is already running (pid ${existing.pid}, CDP ${existing.cdpPort}). Reuse it or run cleanup first.`,
     );
   }
-  await ensureBuilt(Boolean(options.rebuild));
-  const runId = `csv-viewer-${Date.now().toString(36)}`;
+  const web = Boolean(options.web);
+  if (web) await ensureWebBuilt(Boolean(options.rebuild));
+  else await ensureBuilt(Boolean(options.rebuild));
+  const runId = `csv-viewer-${web ? 'web-' : ''}${Date.now().toString(36)}`;
   const runDir = path.join(runsDir, runId);
   const userDataDir = path.join(runDir, 'user-data');
+  const downloadDir = path.join(runDir, 'downloads');
   await fs.mkdir(runDir, { recursive: true });
-  const recentFiles = await seedRecentFiles(userDataDir);
+  // Web declares recentCsvSources: false, so seeding a Recent list there would be a lie.
+  const recentFiles = web ? [] : await seedRecentFiles(userDataDir);
   const cdpPort = await findFreePort(defaultCdpPort);
+  const webPort = web ? await findFreePort(defaultWebPort) : null;
   const logPath = path.join(runDir, 'electron.log');
   const log = await fs.open(logPath, 'w');
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.VITE_DEV_SERVER_URL;
+  if (web) {
+    env.CSV_VIEWER_WEB_ROOT = path.join(webAppRoot, 'dist-web');
+    env.CSV_VIEWER_WEB_PORT = String(webPort);
+    env.CSV_VIEWER_DOWNLOAD_DIR = downloadDir;
+  }
   const child = spawn(
     process.execPath,
     [
@@ -513,7 +574,7 @@ async function runLaunch(options) {
       `--remote-debugging-port=${cdpPort}`,
       '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
-      desktopAppRoot,
+      web ? webBrowserDir : desktopAppRoot,
     ],
     {
       cwd: repoRoot,
@@ -527,8 +588,12 @@ async function runLaunch(options) {
   await log.close();
   const run = {
     id: runId,
+    target: web ? 'web' : 'desktop',
     pid: child.pid,
     cdpPort,
+    webPort,
+    webUrl: web ? `http://127.0.0.1:${webPort}/index.html` : null,
+    downloadDir: web ? downloadDir : null,
     userDataDir,
     runDir,
     logPath,
@@ -562,15 +627,18 @@ async function runDoctor() {
   let error = null;
   try {
     cdp = await waitForJson(`http://127.0.0.1:${run.cdpPort}/json/version`, 2000);
-    inspect = await withCdp(run, (session) => session.evaluate(inspectExpression()));
+    inspect = await withCdp(run, (session) => session.evaluate(inspectExpression(run.target)));
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
   }
   const report = {
     status: alive && inspect?.ready ? 'ok' : 'unhealthy',
+    target: run.target ?? 'desktop',
     pid: run.pid,
     alive,
     cdpPort: run.cdpPort,
+    webUrl: run.webUrl ?? null,
+    downloadDir: run.downloadDir ?? null,
     userDataDir: run.userDataDir,
     browser: cdp?.Browser ?? null,
     inspect,
@@ -722,6 +790,33 @@ async function runClick(options) {
     })()`);
     await dispatchMouseClick(session, found.x, found.y, clickCount);
     printJson({ status: 'ok', name: found.name, disabled: found.disabled });
+  });
+}
+
+/**
+ * Feeds a file to the page's <input type="file"> without touching the OS dialog. Interception has
+ * to be armed, the control clicked, and the chooser answered inside one CDP session, so this is a
+ * single command rather than a click the caller follows up on.
+ */
+async function runUpload(options) {
+  const run = await requireCurrentRun();
+  if (!options.file) fail('upload requires --file');
+  const filePath = path.resolve(repoRoot, String(options.file));
+  if (!(await pathExists(filePath))) fail(`Missing file ${filePath}`);
+  await withCdp(run, async (session) => {
+    await session.send('DOM.enable');
+    await session.send('Page.setInterceptFileChooserDialog', { enabled: true });
+    // Arm the waiter before the click; the event can land before the click call resolves.
+    const chooser = session.waitForEvent('Page.fileChooserOpened', 15_000);
+    const found = await locate(session, options);
+    await dispatchMouseClick(session, found.x, found.y, 1);
+    const event = await chooser;
+    await session.send('DOM.setFileInputFiles', {
+      files: [filePath],
+      backendNodeId: event.backendNodeId,
+    });
+    await session.send('Page.setInterceptFileChooserDialog', { enabled: false });
+    printJson({ status: 'ok', name: found.name, file: filePath });
   });
 }
 

@@ -44,6 +44,16 @@ Count your edits as you go. Each bullet below records exactly one command, and t
 - **Proof.** Snapshot and screenshot `evidence/edit-csv/dirty.aria.txt` and `dirty.png` while `Unexported Changes`, `Ada Lovelace Edited`, and `CSV Viewer` are visible.
 - **Return to clean.** Click `Undo edit` once per recorded command. The recipe above records four (cell edit, append, insert, delete), so that is four clicks, not one. Confirm with `text` that `Unexported Changes` is gone and the row count is back to `5 visible of 5 rows` before `Close phase-2-sample.csv`.
 
+## Web differences
+
+Editing is shared, but export is only provable on web.
+
+- `Export CSV` writes through an `<a download>` click with no dialog. The status line reads `Download started` (desktop says `Export complete`), and the file lands in the run's `downloads/` directory, which `doctor` prints as `downloadDir`.
+- That makes `edit-export` verifiable end to end: edit a cell, export, then read the downloaded bytes and confirm they contain `Ada Lovelace Edited` and that `Unexported Changes` has cleared. Do not settle for the desktop-only negative proof.
+- Exported CSVs are written with LF line endings even when the source fixture uses CRLF. Compare content, not bytes, or the diff is noise.
+- Repeated exports of one source reuse the same file name and overwrite each other in `downloads/`. Copy anything you need into `evidence/` before the next export and before `cleanup`.
+- Closing a dirty tab uses the same `window.confirm` and wedges the run the same way.
+
 ## Gotchas
 
 - Closing a dirty tab opens `window.confirm` (`Unexported Changes will be lost.`), which blocks the renderer. The helper never sends `Page.handleJavaScriptDialog`, so every later command hangs and the run is lost. Undo all the way to clean before closing. The exact confirm text is only verifiable from source, never from CDP.

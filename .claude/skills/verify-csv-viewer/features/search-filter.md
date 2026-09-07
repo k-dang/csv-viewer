@@ -29,6 +29,10 @@ Preconditions:
 - **Proof.** Snapshot and screenshot `evidence/search-filter/match.aria.txt` and `match.png` during the Ada match, before clearing. They show `CSV Viewer`, `phase-2-sample.csv`, `1 visible of 5 rows`, and `Ada`.
 - **Source.** `fixtures/phase-2-sample.csv` bytes are unchanged.
 
+## Web differences
+
+None. Global search, the empty-match overlay, and Clear query all live in the shared grid and behave identically on both targets.
+
 ## Gotchas
 
 - `5 visible of 5 rows` reappears optimistically right after Clear query, before the refetch lands. Pair that wait with both grid names via `text`; the count alone is not proof.
