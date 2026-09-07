@@ -6,7 +6,7 @@ import type {
 
 export type WorkspaceArtifactOwner =
   | { kind: 'working-csv'; workingCsvId: WorkingCsvId }
-  | { kind: 'comparison'; comparisonId: ComparisonId };
+  | { kind: 'comparison'; comparisonId: ComparisonId; operationId: ComparisonOperationId };
 
 export type WorkspaceArtifactRole = 'current' | 'staging' | 'active' | 'retired';
 
@@ -14,7 +14,6 @@ export type WorkspaceArtifact = {
   tableName: string;
   owner: WorkspaceArtifactOwner;
   role: WorkspaceArtifactRole;
-  operationId?: ComparisonOperationId;
 };
 
 export class WorkspaceArtifactRegistry {
@@ -42,9 +41,12 @@ export class WorkspaceArtifactRegistry {
     return artifact ? cloneArtifact(artifact) : null;
   }
 
+  list(): WorkspaceArtifact[] {
+    return [...this.artifacts.values()].map(cloneArtifact);
+  }
+
   assertNoArtifactsOwnedBy(kind: WorkspaceArtifactOwner['kind']): void {
-    const remaining = [...this.artifacts.values()].filter((artifact) => artifact.owner.kind === kind);
-    if (remaining.length > 0) {
+    if (this.list().some((artifact) => artifact.owner.kind === kind)) {
       throw new Error(`Workspace artifact invariant violated: ${kind} artifacts remain.`);
     }
   }

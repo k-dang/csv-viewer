@@ -53,9 +53,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(
-    executor?: ComparisonExecutor,
-  ): Promise<CsvWorkspaceFixture> {
+  static async create(executor?: ComparisonExecutor): Promise<CsvWorkspaceFixture> {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-'));
     const prompts: ScriptedPrompts = {
       sourceChoices: [],
@@ -82,11 +80,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      workspace = new CsvWorkspaceImplementation(
-        host,
-        new DuckDbWorkspaceDatabase(),
-        executor,
-      );
+      workspace = new CsvWorkspaceImplementation(host, new DuckDbWorkspaceDatabase(), executor);
       return new CsvWorkspaceFixture(directory, workspace, host, prompts);
     } catch (error) {
       await workspace?.dispose().catch(() => undefined);
@@ -109,10 +103,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.host.registerSource(filePath);
   }
 
-  async registerSource(
-    fileName: string,
-    contents: string,
-  ): Promise<CsvSourceId> {
+  async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
     return this.sourceId(await this.writeSource(fileName, contents));
   }
 
@@ -121,31 +112,20 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   /** Opens an existing CSV Source and fails the test when the workspace rejects it. */
-  async open(
-    filePath: string,
-    options?: CsvDialectOptions,
-  ): Promise<WorkingCsvView> {
+  async open(filePath: string, options?: CsvDialectOptions): Promise<WorkingCsvView> {
     const result = await this.viewer.call({
       operation: 'csv.open-recent',
       sourceId: await this.sourceId(filePath),
       options,
     });
     if (result.status !== 'opened') {
-      throw new Error(
-        result.status === 'failed'
-          ? result.message
-          : `CSV Source was ${result.status}.`,
-      );
+      throw new Error(result.status === 'failed' ? result.message : `CSV Source was ${result.status}.`);
     }
     return result.workingCsv;
   }
 
   /** Writes a CSV Source and opens it as a Working CSV. */
-  async openSource(
-    fileName: string,
-    contents: string,
-    options?: CsvDialectOptions,
-  ): Promise<WorkingCsvView> {
+  async openSource(fileName: string, contents: string, options?: CsvDialectOptions): Promise<WorkingCsvView> {
     return this.open(await this.writeSource(fileName, contents), options);
   }
 
@@ -163,9 +143,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.observer.latestComparison(comparisonId);
   }
 
-  confirmClose(
-    confirmedImpact?: WorkspaceCloseImpact,
-  ): Promise<ConfirmWorkspaceCloseOutcome> {
+  confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
     return this.workspace.confirmClose(confirmedImpact);
   }
 
@@ -173,9 +151,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace.dispose();
   }
 
-  awaitComparisonOutcome(
-    operationId: ComparisonOperationId,
-  ): Promise<ComparisonAttemptOutcomeView> {
+  awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
     return this.observer.awaitComparisonOutcome(operationId);
   }
 

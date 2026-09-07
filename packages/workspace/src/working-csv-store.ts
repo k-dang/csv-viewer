@@ -83,7 +83,6 @@ export class WorkingCsvStore {
   private mutationQueues = new Map<WorkingCsvId, Promise<void>>();
   private activeWorkspaceWorkCount = 0;
   private workspaceWorkWaiters: Array<() => void> = [];
-  private retiredSourceTables = new Set<string>();
   private comparisonExecutor: ComparisonExecutor | null = null;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
@@ -238,7 +237,6 @@ export class WorkingCsvStore {
         existing.history.revisionSequence,
       );
       this.artifactRegistry.transition(existing.tableName, 'retired');
-      this.retiredSourceTables.add(existing.tableName);
       this.artifactRegistry.transition(state.tableName, 'current');
       this.workingCsvs.set(workingCsvId, state);
       this.commitDataChange(state);
@@ -281,7 +279,7 @@ export class WorkingCsvStore {
       if (this.sourceLeaseCounts.size > 0) {
         throw new Error('Working CSV source lease invariant violated during disposal.');
       }
-      for (const tableName of [...this.retiredSourceTables]) {
+      for (const { tableName } of this.retiredSourceTables()) {
         await this.dropRetiredSourceTable(tableName);
       }
 
@@ -643,10 +641,7 @@ export class WorkingCsvStore {
         await currentLease?.release();
       }
     });
-    const settled = mutation.then(
-      () => undefined,
-      () => undefined,
-    );
+    const settled = mutation.then(() => undefined, () => undefined);
     this.mutationQueues.set(workingCsvId, settled);
     try {
       return await mutation;
@@ -667,7 +662,7 @@ export class WorkingCsvStore {
     }
     this.sourceLeaseCounts.delete(tableName);
     try {
-      if (this.retiredSourceTables.has(tableName)) {
+      if (this.artifactRegistry.get(tableName)?.role === 'retired') {
         await this.dropRetiredSourceTable(tableName).catch((error) => {
           console.error('Unable to drop a retired Working CSV table.', error);
         });
@@ -690,7 +685,6 @@ export class WorkingCsvStore {
 
   private async retireSourceTable(tableName: string): Promise<void> {
     this.artifactRegistry.transition(tableName, 'retired');
-    this.retiredSourceTables.add(tableName);
     if (!this.sourceLeaseCounts.has(tableName)) await this.dropRetiredSourceTable(tableName);
   }
 
@@ -698,22 +692,26 @@ export class WorkingCsvStore {
     if (this.artifactRegistry.get(tableName)?.role === 'retired') {
       this.artifactRegistry.transition(tableName, 'current');
     }
-    this.retiredSourceTables.delete(tableName);
+  }
+
+  /** Comparison artifacts are retired by the executor, never through this path. */
+  private retiredSourceTables(): { tableName: string; workingCsvId: WorkingCsvId }[] {
+    return this.artifactRegistry.list().flatMap((artifact) =>
+      artifact.role === 'retired' && artifact.owner.kind === 'working-csv'
+        ? [{ tableName: artifact.tableName, workingCsvId: artifact.owner.workingCsvId }]
+        : [],
+    );
   }
 
   private async dropRetiredSourceTablesOwnedBy(workingCsvId: WorkingCsvId): Promise<void> {
-    for (const tableName of [...this.retiredSourceTables]) {
-      const owner = this.artifactRegistry.get(tableName)?.owner;
-      if (owner?.kind === 'working-csv' && owner.workingCsvId === workingCsvId) {
-        await this.dropRetiredSourceTable(tableName);
-      }
+    for (const retired of this.retiredSourceTables()) {
+      if (retired.workingCsvId === workingCsvId) await this.dropRetiredSourceTable(retired.tableName);
     }
   }
 
   private async dropRetiredSourceTable(tableName: string): Promise<void> {
     await dropWorkingCsvTable(this.table(tableName));
     this.artifactRegistry.remove(tableName);
-    this.retiredSourceTables.delete(tableName);
   }
 
   private requireWorkingCsv(workingCsvId: WorkingCsvId): WorkingCsvState {

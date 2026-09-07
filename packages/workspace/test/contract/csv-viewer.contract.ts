@@ -4,9 +4,7 @@ import type {
   WorkspaceContractFixture,
 } from './workspace-contract';
 
-export function defineCsvViewerRequestContract(
-  factory: WorkspaceContractFactory,
-): void {
+export function defineCsvViewerRequestContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} CsvViewer request seam`, () => {
     let fixture: WorkspaceContractFixture;
 

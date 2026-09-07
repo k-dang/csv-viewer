@@ -32,10 +32,14 @@ describe('WorkspaceArtifactRegistry', () => {
     });
     registry.register({
       tableName: 'csv_comparison_operation',
-      owner: { kind: 'comparison', comparisonId: 'comparison-1' },
+      owner: { kind: 'comparison', comparisonId: 'comparison-1', operationId: 'operation-1' },
       role: 'active',
-      operationId: 'operation-1',
     });
+
+    expect(registry.list().map((artifact) => artifact.tableName)).toEqual([
+      'csv_session_physical',
+      'csv_comparison_operation',
+    ]);
 
     expect(() => registry.assertNoArtifactsOwnedBy('comparison')).toThrow(
       'comparison artifacts remain',

@@ -101,15 +101,10 @@ describe('Desktop CsvViewer Reopen CSV seam', () => {
       offset: 0,
       limit: 10,
     });
-    const originalWithEngineSource = fixture.host.withEngineSource.bind(
-      fixture.host,
-    );
+    const originalWithEngineSource = fixture.host.withEngineSource.bind(fixture.host);
     const sourceRead = Promise.withResolvers<void>();
     const sourceReadRelease = Promise.withResolvers<void>();
-    fixture.host.withEngineSource = async <T>(
-      sourceId: string,
-      use: (reference: string) => Promise<T>,
-    ) => {
+    fixture.host.withEngineSource = async <T>(sourceId: string, use: (reference: string) => Promise<T>) => {
       sourceRead.resolve();
       await sourceReadRelease.promise;
       return originalWithEngineSource(sourceId, use);
