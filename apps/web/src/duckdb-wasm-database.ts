@@ -96,8 +96,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   private opening: Promise<DuckDbWasmConnection> | null = null;
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
-  private fatalCleanup: Promise<void> | null = null;
-  private fatalCleanupFailure: Error | null = null;
+  private fatalCleanup: Promise<Error | null> | null = null;
   private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private readonly handleWorkerError = (event: ErrorEvent) => {
     this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
@@ -187,8 +186,8 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   async close(): Promise<Error[]> {
     const failures: Error[] = [];
     if (this.fatalCleanup) {
-      await this.fatalCleanup;
-      if (this.fatalCleanupFailure) failures.push(this.fatalCleanupFailure);
+      const failure = await this.fatalCleanup;
+      if (failure) failures.push(failure);
       return failures;
     }
     const opening = this.opening;
@@ -276,9 +275,9 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     this.database = null;
     this.opening = null;
     this.stopObservingWorker();
-    this.fatalCleanup = (database ? database.terminate() : Promise.resolve()).catch((error) => {
-      this.fatalCleanupFailure = toError(error);
-    });
+    this.fatalCleanup = database
+      ? database.terminate().then(() => null, toError)
+      : Promise.resolve(null);
     for (const listener of this.fatalErrorListeners) listener(this.fatalError);
   }
 

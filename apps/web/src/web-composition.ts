@@ -20,13 +20,10 @@ export async function startWebCsvViewer(
   database: DuckDbWasmWorkspaceDatabase,
   pickFile: WebCsvFilePicker,
 ): Promise<WebCsvViewerStartup> {
-  let rejectOnFatalError: ((error: Error) => void) | undefined;
-  const fatalError = new Promise<never>((_resolve, reject) => {
-    rejectOnFatalError = reject;
-  });
-  const stopWatchingStartup = database.onFatalError((error) => rejectOnFatalError?.(error));
+  const fatalError = Promise.withResolvers<never>();
+  const stopWatchingStartup = database.onFatalError(fatalError.reject);
   try {
-    await Promise.race([verifyRequiredWasmFeatures(database), fatalError]);
+    await Promise.race([verifyRequiredWasmFeatures(database), fatalError.promise]);
     stopWatchingStartup();
     const workspace = createCsvViewer(new WebWorkspaceHost(database, pickFile), database);
     return {
