@@ -7,7 +7,11 @@ import type {
 } from '@csv-viewer/workspace/csv-viewer';
 import { CsvViewerProvider } from '../csv-viewer';
 
-const testCsvViewerCapabilities: CsvViewerCapabilities = { recentCsvSources: true };
+const testCsvViewerCapabilities: CsvViewerCapabilities = {
+  recentCsvSources: true,
+  exportCsvSuccessMessage: 'Export complete',
+  warnOnPageUnload: false,
+};
 
 type RequestFor<Operation extends keyof CsvViewerOperationMap> = Extract<CsvViewerRequest, { operation: Operation }>;
 

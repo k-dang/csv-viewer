@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
-import { startWebCsvViewer } from './web-composition';
+import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
+import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composition';
 
 // The CsvViewer contract itself runs against this same Wasm engine from the integration suite,
 // so these cases only cover what the web composition root adds:
@@ -15,6 +16,30 @@ afterEach(async () => {
 });
 
 describe('web CsvViewer composition', () => {
+  it('disposes the in-memory workspace once when the page ends', async () => {
+    const page = new EventTarget();
+    const dispose = vi.fn(async () => undefined);
+    disposeWorkspaceWhenPageHides({ dispose }, page);
+
+    page.dispatchEvent(new Event('pagehide'));
+    page.dispatchEvent(new Event('pagehide'));
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+  });
+
+  it('reloads instead of restoring a disposed workspace from the back-forward cache', async () => {
+    const page = new EventTarget();
+    const dispose = vi.fn(async () => undefined);
+    const reload = vi.fn();
+    disposeWorkspaceWhenPageHides({ dispose }, page, reload);
+
+    page.dispatchEvent(pageTransitionEvent('pagehide', true));
+    page.dispatchEvent(pageTransitionEvent('pageshow', true));
+    page.dispatchEvent(pageTransitionEvent('pageshow', true));
+
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it('does not offer CSV Source selection when the pinned Worker cannot start', async () => {
     const pickFile = vi.fn<() => Promise<File | null>>();
     const consoleError = vi
@@ -48,7 +73,11 @@ describe('web CsvViewer composition', () => {
       throw new Error('Web startup check failed.');
     viewer = started.viewer;
 
-    expect(viewer.capabilities).toEqual({ recentCsvSources: false });
+    expect(viewer.capabilities).toEqual({
+      recentCsvSources: false,
+      exportCsvSuccessMessage: 'Download started',
+      warnOnPageUnload: true,
+    });
     const open = {
       operation: 'csv.open',
       options: { delimiter: ';', header: true },
@@ -83,4 +112,67 @@ describe('web CsvViewer composition', () => {
 
     await expect(viewer.call(open)).resolves.toEqual({ status: 'cancelled' });
   }, 20_000);
+
+  it('turns a fatal Worker failure into one terminal workspace event', async () => {
+    const database = new FatalTestDatabase();
+    const started = await startWebCsvViewer(database, async () => null);
+    if (started.status !== 'ready') throw new Error('Web startup check failed.');
+    viewer = started.viewer;
+    const events: CsvViewerEvent[] = [];
+    viewer.onEvent((event) => events.push(event));
+
+    database.failWorker();
+    database.failWorker();
+
+    expect(events).toEqual([
+      {
+        type: 'fatal-error',
+        message: 'The local data engine stopped unexpectedly.',
+      },
+    ]);
+    await expect(viewer.call({ operation: 'csv.get-recent-sources' })).rejects.toThrow(
+      'Reload CSV Viewer to start a new workspace.',
+    );
+  });
 });
+
+function pageTransitionEvent(type: 'pagehide' | 'pageshow', persisted: boolean): Event {
+  const event = new Event(type);
+  Object.defineProperty(event, 'persisted', { value: persisted });
+  return event;
+}
+
+class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
+  private fatalListener: ((error: Error) => void) | undefined;
+
+  constructor() {
+    super({
+      mainModule: 'duckdb.wasm',
+      mainWorker: 'duckdb.worker.js',
+      createWorker: () => Promise.reject(new Error('The test does not start a Worker.')),
+    });
+  }
+
+  override withRegisteredFile<T>(
+    _name: string,
+    _contents: Uint8Array,
+    use: (reference: string) => Promise<T>,
+  ): Promise<T> {
+    return use('/startup-check.csv');
+  }
+
+  override readObjects(): Promise<Array<Record<string, string>>> {
+    return Promise.resolve([{ ready: 'true' }]);
+  }
+
+  override onFatalError(listener: (error: Error) => void): () => void {
+    this.fatalListener = listener;
+    return () => {
+      this.fatalListener = undefined;
+    };
+  }
+
+  failWorker(): void {
+    this.fatalListener?.(new Error('Worker crashed.'));
+  }
+}

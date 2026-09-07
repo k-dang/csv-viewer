@@ -130,4 +130,90 @@ describe('App CsvViewer intents', () => {
 
     expect(screen.getByRole('alert').textContent).toBe('Comparison request failed.');
   });
+
+  it('warns before page unload only while a Working CSV has Unexported Changes', async () => {
+    const workingCsv = workingCsvFixture({
+      editState: {
+        workingCsvId: 'working-csv-1',
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      },
+    });
+    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+    const viewer = createTestCsvViewer({
+      capabilities: { warnOnPageUnload: true },
+      handlers: {
+        ...tabHandlers(workingCsv),
+        'csv.open': async () => ({ status: 'opened', workingCsv }),
+        'csv.export': async () => ({
+          status: 'exported',
+          editState: {
+            ...workingCsv.editState,
+            hasUnexportedChanges: false,
+          },
+        }),
+      },
+      onEvent: (listener) => {
+        receiveEvent = listener;
+        return () => {};
+      },
+    });
+
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App />
+      </CsvViewerProvider>,
+    );
+
+    const cleanUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(cleanUnload);
+    expect(cleanUnload.defaultPrevented).toBe(false);
+
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    const changedUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(changedUnload);
+    expect(changedUnload.defaultPrevented).toBe(true);
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Export CSV' }).click();
+    });
+    expect(screen.getByRole('status').textContent).toBe('Export complete');
+    const exportedUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(exportedUnload);
+    expect(exportedUnload.defaultPrevented).toBe(false);
+  });
+
+  it('replaces the workspace with one reload action after a fatal data engine failure', async () => {
+    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+    const viewer = createTestCsvViewer({
+      handlers: {
+        'csv.get-recent-sources': async () => [],
+      },
+      onEvent: (listener) => {
+        receiveEvent = listener;
+        return () => {};
+      },
+    });
+
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App />
+      </CsvViewerProvider>,
+    );
+    if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
+
+    await act(async () =>
+      receiveEvent?.({
+        type: 'fatal-error',
+        message: 'The local data engine stopped unexpectedly.',
+      }),
+    );
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The local data engine stopped unexpectedly.',
+    );
+    expect(screen.getByRole('button', { name: 'Reload CSV Viewer' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Open CSV' })).toBeNull();
+  });
 });

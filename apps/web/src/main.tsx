@@ -4,7 +4,7 @@ import { App } from '@csv-viewer/ui/App';
 import { CsvViewerProvider } from '@csv-viewer/ui/csv-viewer';
 import '@csv-viewer/ui/styles.css';
 import { pickPortableCsvSource } from './portable-csv-picker';
-import { startWebCsvViewer } from './web-composition';
+import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composition';
 import { createWebDuckDb } from './web-duckdb';
 import { WebStartupState } from './web-startup-state';
 
@@ -19,6 +19,7 @@ void startWebCsvViewer(createWebDuckDb(), pickPortableCsvSource).then((started) 
     root.render(<WebStartupState status="unsupported" />);
     return;
   }
+  disposeWorkspaceWhenPageHides(started.viewer);
   root.render(
     <StrictMode>
       <CsvViewerProvider viewer={started.viewer}>
