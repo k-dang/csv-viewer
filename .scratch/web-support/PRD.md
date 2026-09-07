@@ -75,7 +75,7 @@ Two properties of the single-threaded asynchronous DuckDB-Wasm build are load-be
 35. As a CSV Viewer user, I want edits to make an existing Aligned Comparison Outdated on web, so that comparison freshness remains accurate.
 36. As a CSV Viewer user, I want comparison refresh, swap, cancellation, and close behavior to remain observably consistent across runtimes, without requiring identical cancellation latency.
 37. As a web user, I want CSV Viewer to reject a CSV Source that exceeds the supported per-source limit before ingestion, so that my browser tab does not fail unpredictably.
-38. As a web user, I want CSV Viewer to reject a new open, export, or comparison operation that would exceed the workspace budget, so that existing Tabs and work remain intact.
+38. As a web user, I want CSV Viewer to reject opening a CSV Source that would exceed the workspace budget, so that existing Tabs and work remain intact.
 39. As a web user, I want a capacity rejection to explain the applicable limit, so that I understand why the operation cannot run.
 40. As a web user, I want a capacity rejection to direct me to the desktop application, so that I have a path for larger work.
 41. As a web user, I want one predictable capacity envelope across supported browsers, so that the limit does not change unexpectedly by browser or device.
@@ -98,7 +98,7 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 
 ## Implementation Decisions
 
-- Preserve one product across desktop and web. Domain behavior does not branch by runtime; only explicit capabilities and the benchmark-derived capacity envelope may differ.
+- Preserve one product across desktop and web. Domain behavior does not branch by runtime; only explicit capabilities and the web capacity limits may differ.
 - Resolve the load-bearing DuckDB-Wasm unknowns in a throwaway spike before designing any seam around them: whether a common DuckDB core version exists across `@duckdb/node-api` and `@duckdb/duckdb-wasm`, whether `send()` and `cancelSent()` support the existing `ComparisonExecutor` outcome, and whether owner-connection reads stay responsive while a comparison runs on the single-threaded Worker. The spike is deleted after its findings are recorded.
 - Implement the desktop-first refactor before adding web. Keep the desktop application green while introducing the shared seams and correcting existing export behavior.
 - Rename the product operation from Save As to Export CSV across shared types, renderer labels, desktop menus, prompts, documentation, and tests.
@@ -129,10 +129,10 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 - Run a startup capability check before enabling file selection. Check the actual features needed by the pinned Worker/Wasm build rather than relying only on browser identity.
 - Use portable input-based file selection in web. Open exactly one CSV Source per picker action. Reuse the existing CSV, TSV, and text acceptance rules.
 - Use browser download delivery for Export CSV. Successful output generation and handoff to the browser count as success and clear Unexported Changes; communicate this as "Download started."
-- Enforce the web capacity envelope in admitted input bytes, and say so honestly. Browser engine memory is not observable from the page: `performance.measureUserAgentSpecificMemory()` is Chromium-only and requires cross-origin isolation, which this release forbids. The envelope is therefore one per-source byte limit plus one workspace budget over the summed byte size of admitted CSV Sources - a conservative proxy for engine memory, not a measurement of it. Derived tables, edit history, comparison artifacts, and export buffers are covered by setting the proxy limit well below the observed failure point rather than by accounting for them individually. User-facing rejection copy states the limit in source-file terms ("CSV Viewer Web supports up to N MB of open CSV files") and never claims to be measuring memory.
-- Enforce one conservative envelope across all supported browsers, derived from the weakest one. The stated tradeoff is that users on browsers with higher engine ceilings are held to the lowest common limit; a predictable limit is worth more than a per-browser one, and per-browser adaptation is explicitly out of scope.
-- Derive numeric capacity limits through repeatable benchmarks on representative low-end supported desktop hardware and the weakest supported browser. Do not guess limits in implementation. Benchmarks record completion time and observed failure point; they record engine memory only where native profiling tooling can observe it out of band, never through in-page measurement.
-- Reject an operation before allocating its expensive work when it would exceed the capacity envelope. Preserve all existing Tabs and return a domain capacity outcome that includes the applicable limit and desktop fallback.
+- Limit each web CSV Source to 100 MB (100,000,000 bytes) and the combined original sizes of open CSV Sources to 200 MB (200,000,000 bytes). MB is decimal, and values exactly at either limit are admitted. These are provisional product limits, not benchmark-derived safe capacities or memory measurements. They do not guarantee that every workload below the limits succeeds.
+- Apply the same fixed limits across all supported browsers and devices. Inject limits for testing; do not adapt them to browser, device, or available memory.
+- Check the selected file's size and resulting workspace total before ingestion or buffer registration. Reject an opening that would exceed either limit, preserve existing Tabs, and return a domain capacity outcome naming the applicable limit and desktop fallback. Closing a CSV Tab releases its source-byte budget; failed or cancelled opens retain no budget. Concurrent opens must not bypass the total limit.
+- Export CSV and Aligned Comparison have no separate capacity admission checks because they add no CSV Sources. Edits, history, comparison artifacts, and export buffers do not change the source-byte total. User-facing rejection copy states "CSV Viewer Web supports files up to 100 MB" or "CSV Viewer Web supports up to 200 MB of open CSV files" and directs users to desktop for larger files or workspaces.
 - Preserve the existing workspace lifetime model. Desktop application exit and web page refresh/close end the workspace; open Tabs, edit history, and comparisons are not restored.
 - Install a web navigation guard only while at least one Working CSV has Unexported Changes. Browser-provided confirmation copy is acceptable where custom text is unavailable.
 - Self-host the pinned DuckDB-Wasm Worker, Wasm modules, and any approved engine assets. Disable remote CSV URLs, runtime CDNs, dynamic extension installation, and extension autoload fetching.
@@ -158,8 +158,8 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 - Run shared browser behavior automatically against Chromium, Firefox, and WebKit. Smoke-test current stable Chrome, Edge, Firefox, and Safari before release.
 - Add a deterministic build test that verifies all pinned Worker, Wasm, and approved extension assets are included locally and no runtime engine asset points to a CDN.
 - Add security-oriented tests or build assertions for remote-source rejection, disabled dynamic extension fetching, and the required Content Security Policy contract.
-- Add capacity benchmark fixtures covering large, wide, long-cell, edited, multi-Tab, export, and Aligned Comparison workloads. Record completion time and the observed failure point on representative low-end supported hardware.
-- Set the public per-source limit and workspace budget only after benchmark evidence is reviewed. Add regression fixtures immediately below the limits and rejection tests immediately above them.
+- Verify foreground responsiveness independently of capacity sizing: browse and search during Aligned Comparison, use an existing Tab while another CSV Source opens, browse during Export CSV, and switch Tabs while Column Value Counts calculate. Verify correct foreground results and background completion or cancellation without partial publication. Ticket 11 owns these browser checks; capacity benchmarks are not a release requirement.
+- Test capacity boundaries below, exactly at, and above each limit using small injected limits. Cover budget release on close, failed or cancelled opens, preservation of existing state after rejection, and concurrent opens respecting the workspace total.
 - Use existing CSV data behavior tests as prior art for parsing, queries, editing, export serialization, large-file row windows, and error normalization.
 - Use existing workspace tests as prior art for Unexported Changes, close impact, and dependent Comparison Tab behavior.
 - Parameterize and extend the existing `csv-workspace.comparison-verification.test.ts`, `csv-workspace.test.ts`, `csv-comparison-service.test.ts`, `duckdb-comparison-executor.test.ts`, and `workspace-artifact-registry.test.ts` coverage rather than creating a parallel comparison contract. Preserve their literal expected results and lifecycle assertions while moving setup behind a workspace factory that can run against either database adapter.
@@ -191,7 +191,7 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 - Automatic analytics, performance telemetry, or crash reporting.
 - A user-facing diagnostic or support-report feature.
 - Choosing a production hosting provider, public domain, or release URL.
-- Choosing numeric capacity limits before benchmarks are complete.
+- Capacity benchmarking and tuning the provisional limits for the initial web release.
 - Redesigning existing CSV querying, editing, statistics, or Aligned Comparison semantics.
 - Adding new CSV formats, structural column editing, typed cell validation, or new comparison modes.
 
@@ -209,6 +209,6 @@ The internal database interface originally had its own ticket ahead of the brows
 
 The exact internal TypeScript interface shapes remain implementation work, but their ownership and placement are settled: `CsvViewer` is the product seam, CsvWorkspace is the shared domain area running in the Electron main process on desktop and in the page on web, the existing ComparisonExecutor remains an internal domain module, and native/Wasm database execution plus host file behavior are internal adapters. Because desktop reaches the workspace over IPC, every shared interface must remain asynchronous and structured-clone-safe.
 
-The exact capacity numbers remain deliberately unresolved. Benchmarks are part of implementation and release readiness; the outcome must be one conservative envelope shared by all supported browsers, expressed in admitted source bytes.
+The initial web limits are 100 MB per CSV Source and 200 MB across open CSV Sources, using decimal MB. These provisional policy values apply across supported browsers. Capacity benchmarking is deferred and does not block release; browser responsiveness verification remains required.
 
 The web feature is not complete when a page renders or a CSV opens. It is complete only when the shared domain contract, web adapter behavior, browser matrix, capacity enforcement, static deployment requirements, and full Aligned Comparison workflow all pass.

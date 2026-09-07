@@ -2,7 +2,7 @@
 
 **What to build:** The release gate: a verified static artifact with enforced security posture, and the shared web behavior proven across the supported browser engines.
 
-**Blocked by:** 08 - Web Export CSV + lifecycle, 09 - Capacity envelope, 11 - Browser test runner.
+**Blocked by:** 08 - Web Export CSV + lifecycle, 09 - Web file and workspace size limits, 11 - Browser test runner.
 
 **Status:** ready-for-agent
 
