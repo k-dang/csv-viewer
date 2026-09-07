@@ -136,6 +136,7 @@ export function CsvGrid({
   const [queryState, setQueryState] = useState<QueryState>('idle');
   const [editState, setEditState] = useState<CsvEditState>(workingCsv.editState);
   const [editError, setEditError] = useState<string | null>(null);
+  const [exportConfirmation, setExportConfirmation] = useState<string | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const searchRef = useRef(search);
@@ -179,6 +180,10 @@ export function CsvGrid({
   }, [editState.hasUnexportedChanges, onUnexportedChangesChange]);
 
   useEffect(() => {
+    if (editState.hasUnexportedChanges) setExportConfirmation(null);
+  }, [editState.hasUnexportedChanges]);
+
+  useEffect(() => {
     if (exportRequestSequence <= handledExportRequestSequenceRef.current) return;
     handledExportRequestSequenceRef.current = exportRequestSequence;
     void exportCsv();
@@ -192,6 +197,7 @@ export function CsvGrid({
     setHasActiveQuery(false);
     hasActiveQueryRef.current = false;
     setEditError(null);
+    setExportConfirmation(null);
     setSelectedRowIds([]);
     setStatsPanelOpen(false);
     setStatsColumn(workingCsv.columns[0]?.name ?? '');
@@ -403,6 +409,7 @@ export function CsvGrid({
   async function exportCsv() {
     try {
       setEditError(null);
+      setExportConfirmation(null);
       const result = await viewer.call({
         operation: 'csv.export',
         workingCsvId: workingCsv.workingCsvId,
@@ -411,6 +418,7 @@ export function CsvGrid({
       if (result.status === 'cancelled') return;
 
       setEditState(result.editState);
+      setExportConfirmation(viewer.capabilities.exportCsvSuccessMessage);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to export CSV.';
       setEditError(message);
@@ -495,6 +503,11 @@ export function CsvGrid({
                 ) : null}
               </div>
               {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
+              {exportConfirmation ? (
+                <p className="mt-1 text-sm font-medium text-emerald-700" role="status">
+                  {exportConfirmation}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">

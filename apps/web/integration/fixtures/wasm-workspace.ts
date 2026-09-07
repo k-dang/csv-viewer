@@ -45,7 +45,11 @@ type NodeWebWorker = InstanceType<typeof WebWorker> & {
 };
 
 class WasmContractHost implements CsvWorkspaceHost {
-  readonly capabilities = { recentCsvSources: false } as const;
+  readonly capabilities = {
+    recentCsvSources: false,
+    exportCsvSuccessMessage: 'Export complete',
+    warnOnPageUnload: false,
+  } as const;
   private readonly sourcesByName = new Map<string, MemorySource>();
   private readonly sourcesById = new Map<CsvSourceId, MemorySource>();
   private readonly exportNames: string[] = [];

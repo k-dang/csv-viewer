@@ -432,6 +432,10 @@ export function isCsvViewerIntent(value: string): value is CsvViewerIntent {
 export type CsvViewerCapabilities = {
   /** Recent CSV Sources can be listed and reopened. False when source identity does not outlive the session. */
   recentCsvSources: boolean;
+  /** Copy shown after the runtime has accepted an Export CSV for delivery. */
+  exportCsvSuccessMessage: string;
+  /** Browser navigation should be guarded while Working CSVs have Unexported Changes. */
+  warnOnPageUnload: boolean;
 };
 
 export type CsvViewerOperationMap = {
@@ -535,7 +539,8 @@ export type CsvViewerResult<Request extends CsvViewerRequest> = Request extends 
 
 export type CsvViewerEvent =
   | { type: 'comparison'; event: ComparisonEvent }
-  | { type: 'intent'; intent: CsvViewerIntent };
+  | { type: 'intent'; intent: CsvViewerIntent }
+  | { type: 'fatal-error'; message: string };
 
 export interface CsvViewer {
   readonly capabilities: CsvViewerCapabilities;

@@ -16,7 +16,11 @@ export type WebCsvFilePicker = () => Promise<File | null>;
 
 /** Keeps browser-selected CSV Sources in memory for the lifetime of one page. */
 export class WebWorkspaceHost implements CsvWorkspaceHost {
-  readonly capabilities = { recentCsvSources: false } as const;
+  readonly capabilities = {
+    recentCsvSources: false,
+    exportCsvSuccessMessage: 'Download started',
+    warnOnPageUnload: true,
+  } as const;
   private readonly sources = new Map<CsvSourceId, File>();
 
   constructor(
@@ -55,8 +59,24 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     );
   }
 
-  deliverExport(_request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
-    return Promise.resolve({ status: 'cancelled' });
+  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
+    const url = URL.createObjectURL(
+      new Blob([request.contents], { type: 'text/csv;charset=utf-8' }),
+    );
+    const download = document.createElement('a');
+    download.href = url;
+    download.download = request.suggestedName;
+    download.hidden = true;
+    document.body.append(download);
+
+    try {
+      download.click();
+      return Promise.resolve({ status: 'delivered' });
+    } finally {
+      download.remove();
+      // Let the browser consume the click before invalidating the Blob URL.
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
   }
 
   recentSources(): Promise<RecentCsvSource[]> {

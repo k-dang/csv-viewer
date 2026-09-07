@@ -133,4 +133,29 @@ describe('CsvGrid', () => {
     expect(onUnexportedChangesChange).toHaveBeenLastCalledWith(false);
     expect(onUnexportedChangesChange).not.toHaveBeenCalledWith(true);
   });
+
+  it('presents the runtime-specific confirmation after Export CSV succeeds', async () => {
+    const workingCsv = editedWorkingCsvFixture();
+    const viewer = createTestCsvViewer({
+      capabilities: { exportCsvSuccessMessage: 'Download started' },
+      handlers: {
+        'csv.get-edit-state': async () => workingCsv.editState,
+        'csv.export': async () => ({
+          status: 'exported',
+          editState: {
+            ...workingCsv.editState,
+            hasUnexportedChanges: false,
+          },
+        }),
+      },
+    });
+
+    render(withCsvViewer(<CsvGrid workingCsv={workingCsv} themeMode="light" DataGrid={DataGrid} />, viewer));
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Export CSV' }).click();
+    });
+
+    expect(screen.getByRole('status').textContent).toBe('Download started');
+  });
 });

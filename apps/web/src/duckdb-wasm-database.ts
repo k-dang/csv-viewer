@@ -94,6 +94,13 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
   private opening: Promise<DuckDbWasmConnection> | null = null;
+  private worker: DuckDbWasmWorker | null = null;
+  private fatalError: Error | null = null;
+  private fatalCleanup: Promise<Error | null> | null = null;
+  private readonly fatalErrorListeners = new Set<(error: Error) => void>();
+  private readonly handleWorkerError = (event: ErrorEvent) => {
+    this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
+  };
 
   constructor(private readonly options: DuckDbWasmDatabaseOptions) {
     assertLocalAsset(options.mainModule);
@@ -106,6 +113,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
    * but the last would leak past `close`.
    */
   async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
+    this.throwIfFatal();
     if (this.connection) return this.connection;
     if (!this.opening) {
       this.opening = this.openOwnerConnection().finally(() => {
@@ -126,6 +134,13 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
 
   isOpen(): boolean {
     return this.connection !== null;
+  }
+
+  /** Reports an unrecoverable Worker failure once for the lifetime of this database. */
+  onFatalError(listener: (error: Error) => void): () => void {
+    this.fatalErrorListeners.add(listener);
+    if (this.fatalError) listener(this.fatalError);
+    return () => this.fatalErrorListeners.delete(listener);
   }
 
   async run(sql: string, values?: QueryValues): Promise<void> {
@@ -170,6 +185,11 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   /** Closes every Wasm resource, collecting rather than throwing teardown failures. */
   async close(): Promise<Error[]> {
     const failures: Error[] = [];
+    if (this.fatalCleanup) {
+      const failure = await this.fatalCleanup;
+      if (failure) failures.push(failure);
+      return failures;
+    }
     const opening = this.opening;
     if (opening) {
       await opening.catch((error) => failures.push(toError(error)));
@@ -193,13 +213,27 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
   protected async createEngine(): Promise<AsyncDuckDB> {
     const worker = await this.options.createWorker(this.options.mainWorker);
+    this.worker = worker;
+    worker.addEventListener('error', this.handleWorkerError);
     const database = new AsyncDuckDB(new VoidLogger(), worker);
-    await database.instantiate(this.options.mainModule);
-    return database;
+    // Keep the engine reachable while it instantiates. A Worker error clears DuckDB-Wasm's
+    // pending request without rejecting it, so the fatal path must be able to terminate this
+    // otherwise stranded engine.
+    this.database = database;
+    try {
+      await database.instantiate(this.options.mainModule);
+      return database;
+    } catch (error) {
+      if (this.database === database) this.database = null;
+      this.stopObservingWorker();
+      await database.terminate().catch(() => undefined);
+      throw error;
+    }
   }
 
   /** Disposes the engine. Overridden where the caller owns it and resets it instead. */
   protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
+    this.stopObservingWorker();
     await database.terminate();
   }
 
@@ -231,6 +265,33 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
         throw error;
       }
     });
+  }
+
+  private failFatally(cause: unknown): void {
+    if (this.fatalError) return;
+    this.fatalError = toError(cause);
+    const database = this.database;
+    this.connection = null;
+    this.database = null;
+    this.opening = null;
+    this.stopObservingWorker();
+    this.fatalCleanup = database
+      ? database.terminate().then(() => null, toError)
+      : Promise.resolve(null);
+    for (const listener of this.fatalErrorListeners) listener(this.fatalError);
+  }
+
+  private throwIfFatal(): void {
+    if (this.fatalError) {
+      throw new Error('The data engine has stopped. Reload CSV Viewer to start a new workspace.', {
+        cause: this.fatalError,
+      });
+    }
+  }
+
+  private stopObservingWorker(): void {
+    this.worker?.removeEventListener('error', this.handleWorkerError);
+    this.worker = null;
   }
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
 import { cn } from '@/lib/utils';
@@ -53,6 +53,7 @@ export function App() {
   } | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [fatalError, setFatalError] = useState<string | null>(null);
   const [delimiter, setDelimiter] = useState('');
   const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
@@ -107,8 +108,10 @@ export function App() {
       viewer.onEvent((event) => {
         if (event.type === 'comparison') {
           dispatchWorkspace({ type: 'comparison-event', event: event.event });
-        } else {
+        } else if (event.type === 'intent') {
           intentHandlersRef.current[event.intent]();
+        } else {
+          setFatalError(event.message);
         }
       }),
     [viewer],
@@ -124,6 +127,20 @@ export function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (!viewer.capabilities.warnOnPageUnload || workingCsvIdsWithUnexportedChanges.size === 0) {
+      return;
+    }
+
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [viewer.capabilities.warnOnPageUnload, workingCsvIdsWithUnexportedChanges]);
 
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
@@ -296,6 +313,35 @@ export function App() {
 
   const isDarkMode = themeMode === 'dark';
   const hasTabs = openTabs.length > 0;
+
+  if (fatalError !== null) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+        <section
+          className="grid w-full max-w-xl gap-5 rounded-xl border bg-card p-7 shadow-sm"
+          role="alert"
+        >
+          <div
+            className="grid size-11 place-items-center rounded-lg border border-destructive/20 bg-destructive/10 text-destructive"
+            aria-hidden="true"
+          >
+            <AlertTriangle />
+          </div>
+          <div className="grid gap-2">
+            <p className="text-xs font-bold uppercase text-muted-foreground">CSV Viewer Web</p>
+            <h1 className="text-2xl font-semibold">The workspace stopped</h1>
+            <p className="leading-relaxed text-muted-foreground">{fatalError}</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Reload to start a new in-memory workspace. Select your CSV Sources again after reload.
+            </p>
+          </div>
+          <Button type="button" className="w-fit" onClick={() => window.location.reload()}>
+            Reload CSV Viewer
+          </Button>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
