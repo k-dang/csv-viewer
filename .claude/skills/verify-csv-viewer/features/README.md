@@ -12,7 +12,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 Per target:
 
 - **desktop.** Seeded Recent CSV Sources are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`. Native Open/Export dialogs are out of band: open CSVs from Recent CSV Sources on the empty window, and never click `Open CSV` or `Export CSV`.
-- **web.** No Recent CSV Sources and no native dialogs. Open every CSV with `upload --role button --name "Open CSV" --file <fixture>`, and let `Export CSV` download into the run's `downloads/` directory.
+- **web.** Runs the real dev server plus an installed Chrome, Edge or Chromium. No Recent CSV Sources and no native dialogs. Open every CSV with `upload --role button --name "Open CSV" --file <fixture>`, and let `Export CSV` download into the run's `downloads/` directory. `doctor` must also report `viteAlive: true`.
 
 Choose web whenever the claim is about shared UI behavior. Opening a second CSV, the whole comparison feature, and the Export CSV round trip are provable there and nowhere else.
 

@@ -47,7 +47,8 @@ Web has no Recent CSV Sources (`recentCsvSources: false`) and no native dialog. 
 - `open-second`, `open-already-open`, and `open-cycle` are reachable here, because a second `upload` needs no dialog. They are the reason to run this feature on web at all.
 - CSV Sources are `File` objects held for the page's lifetime, described as `This browser session` rather than a path. Nothing is written to disk, so the "fixture bytes unchanged" check still applies but proves less.
 - `Reopen` re-reads the in-memory `File`, so it discards edits exactly like desktop. A dirty Reopen raises `window.confirm` here rather than a native box, which still wedges the run.
-- There is no application menu, so `Ctrl+O`, `Ctrl+R`, and `Ctrl+W` do not exist. `Ctrl+Tab` cycling is renderer-level and works on both.
+- There is no application menu, so `Ctrl+O`, `Ctrl+R`, and `Ctrl+W` do not exist. `Ctrl+Tab` cycling is renderer-level and works on both, though the browser may claim it first.
+- The page is served by the dev server, so a reload picks up source edits. Nothing else about opening a CSV differs from a production bundle.
 
 ## Gotchas
 

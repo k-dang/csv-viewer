@@ -22,7 +22,7 @@ CSV Viewer Web checks the browser before it lets anyone pick a CSV, keeps every 
 
 Preconditions:
 
-- `launch --web` has finished and `doctor` reports `target: "web"` and `status: "ok"`.
+- `launch --web` has finished and `doctor` reports `target: "web"`, `status: "ok"`, and `viteAlive: true`.
 
 - **Startup resolved.** `web-startup-ready` is proven by launch itself. `doctor` reporting `inspect.hasHealth: true` means the `h1` is `CSV Viewer` rather than a startup-gate heading, which only happens once DuckDB-Wasm has answered its feature check. Snapshot and screenshot `evidence/web-lifecycle/started.aria.txt` and `started.png` showing `CSV Viewer`, `No CSV open`, and `Select your CSV Sources again after reload.`
 - **Session-scoped sources.** Open a fixture with `upload --role button --name "Open CSV" --nth 0 --file fixtures/phase-2-sample.csv`, then open `Compare…` and read the candidate subtitle. It is `This browser session`, not a path. That is the observable form of `web-session-scope`.
@@ -35,8 +35,9 @@ This whole feature is web-only. On desktop the equivalent surfaces do not exist:
 ## Gotchas
 
 - `web-startup-checking` resolves in well under a second on a warm build, and `launch` does not return until it has. There is no reliable way to catch the intermediate card from outside the process.
-- `web-startup-unsupported` needs a browser missing the WebAssembly features the engine requires. The web target runs Electron's bundled Chromium, which passes. Proving the unsupported path needs a real old browser and a human.
+- `web-startup-unsupported` needs a browser missing the WebAssembly features the engine requires. Any current Chrome, Edge or Chromium passes, so this needs a genuinely old browser and a human. Point `CSV_VIEWER_VERIFY_BROWSER` at one if you have it.
 - `web-fatal` needs the DuckDB Worker to die. Nothing in the UI kills it, and reaching it through CDP eval would not be the user path. Leave it unverified rather than faking it.
 - `web-unload-guard` is a `beforeunload` dialog. The helper never sends `Page.handleJavaScriptDialog`, so triggering it wedges the run, and the reload it guards would destroy the evidence anyway.
 - Do not confuse the fatal screen with the unsupported screen. Both are centered cards under the eyebrow `CSV Viewer Web`; the headings differ (`The workspace stopped` versus `This browser cannot start CSV Viewer Web`), and only the fatal one has a `Reload CSV Viewer` button.
-- Reloading the page for any reason drops every open CSV. There is no Recent list to recover from, so a reload mid-run means starting the whole recipe again.
+- Reloading the page for any reason drops every open CSV. There is no Recent list to recover from, so a reload mid-run means starting the whole recipe again. The dev server has HMR, so editing product source mid-run reloads the page and destroys the run the same way.
+- This target is the dev server, not the production bundle. It cannot prove that built asset emission works, which is the one failure mode the `?url` WASM imports are prone to. That claim needs `pnpm run build:web` and a human.

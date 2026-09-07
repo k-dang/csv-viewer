@@ -10,7 +10,6 @@ const skillDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const repoRoot = path.resolve(skillDir, '../../..');
 const desktopAppRoot = path.join(repoRoot, 'apps/desktop');
 const webAppRoot = path.join(repoRoot, 'apps/web');
-const webBrowserDir = path.join(skillDir, 'bin/web-browser');
 const runsDir = path.join(skillDir, 'runs');
 const currentRunPath = path.join(runsDir, 'current.json');
 const defaultCdpPort = 19322;
@@ -93,7 +92,7 @@ async function requireCurrentRun() {
   if (!run) fail('No verification run is recorded. Launch with `launch` first.');
   if (!isPidAlive(run.pid)) {
     fail(
-      `Recorded Electron pid ${run.pid} is not running. Call cleanup, then launch a new instance.`,
+      `Recorded pid ${run.pid} is not running. Call cleanup, then launch a new instance.`,
     );
   }
   return run;
@@ -154,16 +153,108 @@ async function ensureBuilt(rebuild) {
   }
 }
 
-async function ensureWebBuilt(rebuild) {
-  const webIndex = path.join(webAppRoot, 'dist-web/index.html');
+/**
+ * Finds a Chromium to drive. Honours CSV_VIEWER_VERIFY_BROWSER first so a machine with an unusual
+ * install, or a CI image, can point at its own binary instead of patching this list.
+ */
+async function findBrowser() {
+  const override = process.env.CSV_VIEWER_VERIFY_BROWSER;
+  if (override) {
+    if (!(await pathExists(override))) fail(`CSV_VIEWER_VERIFY_BROWSER points at a missing file: ${override}`);
+    return override;
+  }
+  const windowsRoots = [
+    process.env.PROGRAMFILES ?? 'C:/Program Files',
+    process.env['PROGRAMFILES(X86)'] ?? 'C:/Program Files (x86)',
+    process.env.LOCALAPPDATA,
+  ].filter(Boolean);
+  const candidates =
+    process.platform === 'win32'
+      ? windowsRoots.flatMap((root) => [
+          path.join(root, 'Google/Chrome/Application/chrome.exe'),
+          path.join(root, 'Microsoft/Edge/Application/msedge.exe'),
+        ])
+      : process.platform === 'darwin'
+        ? [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+          ]
+        : [
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/microsoft-edge',
+          ];
+  for (const candidate of candidates) {
+    if (candidate && (await pathExists(candidate))) return candidate;
+  }
+  fail(
+    'No Chrome, Edge or Chromium was found for the web target. Install one, or set CSV_VIEWER_VERIFY_BROWSER to its path.',
+  );
+}
+
+/**
+ * Pre-seeds the throwaway profile so Export CSV lands in the run directory instead of raising a
+ * Save As dialog. Chrome reads this before its first paint, so it needs no live CDP connection.
+ */
+async function seedBrowserDownloadPreferences(userDataDir, downloadDir) {
+  const profileDir = path.join(userDataDir, 'Default');
+  await fs.mkdir(profileDir, { recursive: true });
+  await fs.mkdir(downloadDir, { recursive: true });
+  const preferences = {
+    download: { default_directory: downloadDir, prompt_for_download: false, directory_upgrade: true },
+    savefile: { default_directory: downloadDir },
+    profile: { default_content_setting_values: { automatic_downloads: 1 } },
+  };
+  await fs.writeFile(path.join(profileDir, 'Preferences'), JSON.stringify(preferences), 'utf8');
+}
+
+/** Starts the web dev server the same way `pnpm run dev:web` does, on a port private to this run. */
+async function startWebDevServer(port, logFd) {
+  // No '--' separator: pnpm forwards it to vite as a literal argument, vite then ignores the
+  // port flags and binds 5173, which is the shared port this skill must never touch.
+  const args = ['--filter', '@csv-viewer/web', 'dev', '--port', String(port), '--strictPort'];
+  const executable = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : 'pnpm';
+  const processArgs = process.platform === 'win32' ? ['/d', '/s', '/c', ['pnpm', ...args].join(' ')] : args;
+  const child = spawn(executable, processArgs, {
+    cwd: repoRoot,
+    stdio: ['ignore', logFd, logFd],
+    detached: true,
+    windowsHide: true,
+  });
+  child.unref();
+  try {
+    await waitForHttp(`http://127.0.0.1:${port}/index.html`, launchTimeoutMs);
+  } catch (error) {
+    await killPid(child.pid);
+    throw error;
+  }
+  return child.pid;
+}
+
+async function waitForHttp(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return true;
+      lastError = new Error(`${url} -> ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(250);
+  }
+  throw lastError ?? new Error(`Timed out fetching ${url}`);
+}
+
+async function ensureWebDeps() {
   if (!(await pathExists(path.join(repoRoot, 'node_modules')))) {
     await runProcess('pnpm', ['install']);
   }
-  if (rebuild || !(await pathExists(webIndex))) {
-    await runProcess('pnpm', ['run', 'build:web']);
-  }
-  if (!(await pathExists(webIndex))) {
-    fail('Web build did not produce apps/web/dist-web/index.html');
+  if (!(await pathExists(path.join(webAppRoot, 'index.html')))) {
+    fail('Missing apps/web/index.html');
   }
 }
 
@@ -212,21 +303,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isAppPage(target) {
+function isAppPage(target, webUrl) {
   if (!target || target.type !== 'page') return false;
-  if (String(target.url ?? '').startsWith('devtools://')) return false;
-  const title = String(target.title ?? '');
   const url = String(target.url ?? '');
+  if (url.startsWith('devtools://') || url.startsWith('chrome://')) return false;
+  const title = String(target.title ?? '');
+  // On web the run owns an exact origin, so prefer that over guessing at titles: a fresh browser
+  // profile can hold a new-tab page whose title briefly matches nothing useful.
+  if (webUrl) return url.startsWith(new URL(webUrl).origin);
   return title === 'CSV Viewer' || url.includes('dist-renderer') || url.includes('index.html');
 }
 
-async function waitForAppPage(cdpPort, timeoutMs) {
+async function waitForAppPage(cdpPort, timeoutMs, webUrl) {
   const deadline = Date.now() + timeoutMs;
   let lastTargets = [];
   while (Date.now() < deadline) {
     try {
       lastTargets = await waitForJson(`http://127.0.0.1:${cdpPort}/json/list`, 1000);
-      const page = lastTargets.find(isAppPage);
+      const page = lastTargets.find((target) => isAppPage(target, webUrl));
       if (page?.webSocketDebuggerUrl) return page;
     } catch {
       // CDP is not up yet.
@@ -319,7 +413,7 @@ class CdpSession {
 }
 
 async function withCdp(run, fn) {
-  const page = await waitForAppPage(run.cdpPort, 10_000);
+  const page = await waitForAppPage(run.cdpPort, 10_000, run.webUrl);
   const session = new CdpSession(page.webSocketDebuggerUrl);
   await session.open();
   await session.send('Runtime.enable');
@@ -546,27 +640,37 @@ async function runLaunch(options) {
     );
   }
   const web = Boolean(options.web);
-  if (web) await ensureWebBuilt(Boolean(options.rebuild));
-  else await ensureBuilt(Boolean(options.rebuild));
   const runId = `csv-viewer-${web ? 'web-' : ''}${Date.now().toString(36)}`;
   const runDir = path.join(runsDir, runId);
   const userDataDir = path.join(runDir, 'user-data');
   const downloadDir = path.join(runDir, 'downloads');
   await fs.mkdir(runDir, { recursive: true });
-  // Web declares recentCsvSources: false, so seeding a Recent list there would be a lie.
-  const recentFiles = web ? [] : await seedRecentFiles(userDataDir);
   const cdpPort = await findFreePort(defaultCdpPort);
-  const webPort = web ? await findFreePort(defaultWebPort) : null;
-  const logPath = path.join(runDir, 'electron.log');
+  const logPath = path.join(runDir, web ? 'web.log' : 'electron.log');
   const log = await fs.open(logPath, 'w');
+  const run = web
+    ? await launchWeb({ runId, runDir, userDataDir, downloadDir, cdpPort, logPath, log })
+    : await launchDesktop({ runId, runDir, userDataDir, cdpPort, logPath, log, rebuild: Boolean(options.rebuild) });
+  await log.close();
+  await fs.mkdir(runsDir, { recursive: true });
+  await fs.writeFile(currentRunPath, `${JSON.stringify(run, null, 2)}
+`, 'utf8');
+  try {
+    const inspect = await waitForReady(run, launchTimeoutMs);
+    printJson({ status: 'ready', ...run, inspect });
+  } catch (error) {
+    await killPid(run.pid);
+    await killPid(run.vitePid);
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function launchDesktop({ runId, runDir, userDataDir, cdpPort, logPath, log, rebuild }) {
+  await ensureBuilt(rebuild);
+  const recentFiles = await seedRecentFiles(userDataDir);
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.VITE_DEV_SERVER_URL;
-  if (web) {
-    env.CSV_VIEWER_WEB_ROOT = path.join(webAppRoot, 'dist-web');
-    env.CSV_VIEWER_WEB_PORT = String(webPort);
-    env.CSV_VIEWER_DOWNLOAD_DIR = downloadDir;
-  }
   const child = spawn(
     process.execPath,
     [
@@ -574,26 +678,20 @@ async function runLaunch(options) {
       `--remote-debugging-port=${cdpPort}`,
       '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
-      web ? webBrowserDir : desktopAppRoot,
+      desktopAppRoot,
     ],
-    {
-      cwd: repoRoot,
-      env,
-      stdio: ['ignore', log.fd, log.fd],
-      windowsHide: false,
-      detached: true,
-    },
+    { cwd: repoRoot, env, stdio: ['ignore', log.fd, log.fd], windowsHide: false, detached: true },
   );
   child.unref();
-  await log.close();
-  const run = {
+  return {
     id: runId,
-    target: web ? 'web' : 'desktop',
+    target: 'desktop',
     pid: child.pid,
+    vitePid: null,
     cdpPort,
-    webPort,
-    webUrl: web ? `http://127.0.0.1:${webPort}/index.html` : null,
-    downloadDir: web ? downloadDir : null,
+    webPort: null,
+    webUrl: null,
+    downloadDir: null,
     userDataDir,
     runDir,
     logPath,
@@ -601,27 +699,64 @@ async function runLaunch(options) {
     startedAt: new Date().toISOString(),
     recentFiles: recentFiles.map((file) => file.name),
   };
-  await fs.mkdir(runsDir, { recursive: true });
-  await fs.writeFile(currentRunPath, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
-  child.on('exit', async () => {
-    const current = await readCurrentRun();
-    if (current?.pid === child.pid) {
-      // Keep the record so doctor can report a dead pid instead of silently attaching elsewhere.
-    }
-  });
-  try {
-    const inspect = await waitForReady(run, launchTimeoutMs);
-    printJson({ status: 'ready', ...run, inspect });
-  } catch (error) {
-    await killPid(run.pid);
-    fail(error instanceof Error ? error.message : String(error));
-  }
+}
+
+/**
+ * Web runs the way a developer runs it: the real dev server, and a real browser pointed at it.
+ * Nothing here is a stand-in, so a failure is the app's failure rather than the harness's.
+ */
+async function launchWeb({ runId, runDir, userDataDir, downloadDir, cdpPort, logPath, log }) {
+  await ensureWebDeps();
+  const browser = await findBrowser();
+  const webPort = await findFreePort(defaultWebPort);
+  const vitePid = await startWebDevServer(webPort, log.fd);
+  const webUrl = `http://127.0.0.1:${webPort}/index.html`;
+  await seedBrowserDownloadPreferences(userDataDir, downloadDir);
+  const child = spawn(
+    browser,
+    [
+      `--remote-debugging-port=${cdpPort}`,
+      '--remote-allow-origins=*',
+      `--user-data-dir=${userDataDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-features=Translate,MediaRouter',
+      // An unfocused window otherwise throttles rAF, so AG Grid never paints its rows and
+      // text/wait see an empty grid the screenshot clearly shows. Runs are unfocused by definition.
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-background-timer-throttling',
+      '--window-size=1440,900',
+      '--new-window',
+      webUrl,
+    ],
+    { cwd: repoRoot, stdio: ['ignore', log.fd, log.fd], windowsHide: false, detached: true },
+  );
+  child.unref();
+  return {
+    id: runId,
+    target: 'web',
+    pid: child.pid,
+    vitePid,
+    cdpPort,
+    webPort,
+    webUrl,
+    browser,
+    downloadDir,
+    userDataDir,
+    runDir,
+    logPath,
+    repoRoot,
+    startedAt: new Date().toISOString(),
+    recentFiles: [],
+  };
 }
 
 async function runDoctor() {
   const run = await readCurrentRun();
   if (!run) fail('No verification run is recorded.');
   const alive = isPidAlive(run.pid);
+  const viteAlive = run.vitePid ? isPidAlive(run.vitePid) : null;
   let cdp = null;
   let inspect = null;
   let error = null;
@@ -632,15 +767,18 @@ async function runDoctor() {
     error = caught instanceof Error ? caught.message : String(caught);
   }
   const report = {
-    status: alive && inspect?.ready ? 'ok' : 'unhealthy',
+    status: alive && inspect?.ready && viteAlive !== false ? 'ok' : 'unhealthy',
     target: run.target ?? 'desktop',
     pid: run.pid,
     alive,
+    vitePid: run.vitePid ?? null,
+    viteAlive,
+    browser: run.browser ?? null,
     cdpPort: run.cdpPort,
     webUrl: run.webUrl ?? null,
     downloadDir: run.downloadDir ?? null,
     userDataDir: run.userDataDir,
-    browser: cdp?.Browser ?? null,
+    cdpBrowser: cdp?.Browser ?? null,
     inspect,
     error,
   };
@@ -668,15 +806,18 @@ async function runCleanup() {
     return;
   }
   await killPid(run.pid);
+  await killPid(run.vitePid);
   const deadline = Date.now() + 8000;
-  while (isPidAlive(run.pid) && Date.now() < deadline) await sleep(200);
+  while ((isPidAlive(run.pid) || isPidAlive(run.vitePid)) && Date.now() < deadline) await sleep(200);
   if (isPidAlive(run.pid)) fail(`Failed to stop pid ${run.pid}`);
+  if (isPidAlive(run.vitePid)) fail(`Failed to stop dev server pid ${run.vitePid}`);
   await sleep(500);
   await removeWithRetry(run.runDir, 10_000);
   await fs.rm(currentRunPath, { force: true });
   printJson({
     status: 'cleaned',
     pid: run.pid,
+    vitePid: run.vitePid ?? null,
     removedRunDir: run.runDir,
     evidenceKeptAt: path.join(skillDir, 'evidence'),
   });
