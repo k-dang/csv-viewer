@@ -13,3 +13,5 @@ This is infrastructure, not a checklist item. Today Vitest in Node is the only r
 - [ ] Node-run contract tests stay in Node. Do not move the DuckDB-Wasm workspace contract into the browser runner; it already runs headlessly through `workspaceContractFactories`.
 - [ ] The browser suite runs in CI on a schedule or pre-release rather than per commit if a per-commit run is not sustainable. Decide from a measured run time, and record the measurement.
 - [ ] Document how to run the browser suite locally, including engine installation.
+
+- [ ] Verify foreground responsiveness on the Wasm engine: browse and search an existing Tab during a large Aligned Comparison; use an existing Tab while another CSV Source opens; browse during a large Export CSV; and switch Tabs while Column Value Counts calculate. Each check must exercise the overlap, prove the foreground result is correct, and verify background completion or cancellation without publishing partial state. These are behavior checks, not capacity benchmarks or measurements of failure points.

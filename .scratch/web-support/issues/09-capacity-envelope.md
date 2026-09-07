@@ -1,20 +1,19 @@
-# 09 - Capacity envelope and web responsiveness benchmarks
+# 09 - Web file and workspace size limits
 
-**What to build:** One conservative capacity envelope shared by all supported browsers, enforced before expensive work begins. Machinery comes first with injected test limits, followed by reviewed benchmark-derived numbers.
+**What to build:** Fixed web limits of 100 MB per CSV Source and 200 MB across open CSV Sources, checked before ingestion. MB is decimal: 100,000,000 and 200,000,000 bytes respectively.
 
-**The envelope counts admitted source bytes, not memory.** Browser engine memory is not observable from the page: `performance.measureUserAgentSpecificMemory()` is Chromium-only and requires cross-origin isolation, which this release forbids. The limit is a conservative proxy for engine memory, set well below the observed failure point so that derived tables, edit history, comparison artifacts, and export buffers are covered by the margin rather than accounted for individually. Nothing in the implementation or the user-facing copy may claim to measure memory.
+These are provisional product limits. They count original source-file bytes and do not measure memory or guarantee that all workloads below the limits succeed. Capacity benchmarking is deferred. Browser responsiveness verification belongs to ticket 11.
 
 **Blocked by:** 08 - Web Export CSV + lifecycle.
 
 **Status:** ready-for-agent
 
-- [ ] The envelope is defined purely in input-byte terms: one per-source byte limit checked against the selected file's size before ingestion, and one whole-workspace budget over the summed byte size of admitted CSV Sources.
-- [ ] Export and comparison operations are admitted or rejected against that same source-byte budget with a documented margin, not against an estimate of their own allocation. The margin's derivation from benchmark evidence is recorded.
-- [ ] An open, export, or comparison operation that would exceed the envelope is rejected before allocating its expensive work; all existing Tabs and state are preserved.
+- [ ] Check the selected file's size against 100,000,000 bytes and the resulting sum of admitted CSV Source sizes against 200,000,000 bytes before ingestion or buffer registration. Values exactly at either limit are admitted.
+- [ ] Reject an opening that exceeds either limit before allocating expensive work. Preserve all existing Tabs and state.
+- [ ] Closing a CSV Tab releases its source-byte budget. Failed or cancelled opens retain no budget, and concurrent opens cannot bypass the workspace total.
+- [ ] Export CSV and Aligned Comparison have no separate capacity admission checks. Edits, history, comparison artifacts, and export buffers do not change the source-byte total.
 - [ ] A capacity rejection is a domain outcome naming the applicable limit and directing the user to the desktop application.
-- [ ] The capacity outcome is added to the shared result unions in `packages/workspace/src/contracts/csv-viewer.ts`. `OpenCsvResult`'s existing `failed` arm carries only a message and cannot name a limit, so this is a contract change that desktop also carries over IPC; both runtimes must handle the new arm.
-- [ ] User-facing rejection copy states the limit in source-file terms - "CSV Viewer Web supports up to N MB of open CSV files" - and never claims to be measuring memory or predicting a crash.
-- [ ] Limits are injected constants, not adaptive heuristics: no per-browser, per-device, or available-memory variation, and no best-effort attempts above the envelope. One envelope derived from the weakest supported browser applies everywhere; the tradeoff that stronger browsers are held to it is accepted and stated.
-- [ ] Benchmark fixtures cover large, wide, long-cell, edited, multi-Tab, export, and Aligned Comparison workloads on representative low-end supported hardware and the weakest supported browser, recording completion time and the observed failure point. Engine memory is recorded only where out-of-band native profiling tooling can observe it; no in-page memory measurement is added.
-- [ ] Measure foreground responsiveness on the Wasm engine during each relevant overlap: browse and search an existing Tab during a large Aligned Comparison; use an existing Tab while another CSV Source opens; browse during a large Export CSV; and switch Tabs while Column Value Counts are calculating. Each run proves the foreground result is correct and the background operation completes or cancels without publishing partial state.
-- [ ] The published per-source limit and workspace budget are set only from reviewed benchmark evidence, with regression fixtures immediately below each limit and rejection tests immediately above.
+- [ ] Add the capacity outcome to `OpenCsvResult` in `packages/workspace/src/contracts/csv-viewer.ts`. Its existing `failed` arm carries only a message and cannot name a limit. Both runtimes handle the new shared result arm, including desktop IPC transport; the size limits apply only to web.
+- [ ] Rejection copy states "CSV Viewer Web supports files up to 100 MB" or "CSV Viewer Web supports up to 200 MB of open CSV files", followed by a desktop fallback. It never claims to measure memory or predict a crash.
+- [ ] Use the same fixed limits across supported browsers and devices. Limits are injected for testing, with no adaptive heuristics or best-effort attempts above them.
+- [ ] Use small injected limits to test admission below and exactly at each boundary, rejection immediately above, preservation of existing state, budget release on close, failed or cancelled opens, and concurrent opens respecting the total. No capacity benchmark fixtures are required.
