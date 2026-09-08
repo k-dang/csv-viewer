@@ -2,7 +2,7 @@
 
 **What to build:** The repository's first browser-based test runner, and the shared web behavior suite running on it across Chromium, Firefox, and WebKit.
 
-This is infrastructure, not a checklist item. Today Vitest in Node is the only runner (`vitest.config.ts`), so nothing in the repository executes against a real browser engine. Ticket 10 depends on this existing and should not absorb standing it up.
+Today Vitest in Node is the only runner (`vitest.config.ts`), so nothing in the repository executes against a real browser engine. This ticket owns browser compatibility testing independently of static deployment.
 
 **Blocked by:** 08 - Web Export CSV + lifecycle.
 
