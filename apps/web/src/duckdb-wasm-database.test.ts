@@ -46,6 +46,17 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
         "SELECT current_setting('enable_external_access') AS external_access, current_setting('autoinstall_known_extensions') AS autoinstall, current_setting('autoload_known_extensions') AS autoload",
       ),
     ).resolves.toEqual([{ external_access: false, autoinstall: false, autoload: false }]);
+    for (const sql of [
+      "SELECT * FROM read_csv_auto('https://example.invalid/source.csv')",
+      'LOAD spatial',
+      'SET enable_external_access = true',
+      'SET autoinstall_known_extensions = true',
+      'SET autoload_known_extensions = true',
+    ]) {
+      const outcome = await database.run(sql).then(() => 'allowed', () => 'rejected');
+      expect(outcome, sql).toBe('rejected');
+    }
+    await expect(database.readObjects('SELECT 42 AS answer')).resolves.toEqual([{ answer: 42 }]);
   });
 
   it('rejects runtime CDN module URLs', () => {

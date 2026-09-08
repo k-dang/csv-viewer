@@ -97,7 +97,17 @@ The Stats Panel reports Column Value Counts for one selected column beside the g
 
 Before shipping changes, run `pnpm run test` and `pnpm run build`. The build includes the full TypeScript typecheck, and CI runs the same test and build gates for every pull request and push to `main`.
 
-Feature validation belongs in deterministic tests at the data-service, workspace, IPC-facing, and grid-data-source boundaries. Release readiness does not depend on a separate manual validation checklist.
+Feature validation belongs in deterministic tests at the data-service, workspace, IPC-facing, and grid-data-source boundaries.
+
+## Web deployment
+
+Import the repository into Vercel and leave the Root Directory at the repository
+root. [vercel.json](vercel.json) sets the install and web build commands, publishes
+`apps/web/dist-web`, and applies the security and cache headers using
+[Vercel's project configuration](https://vercel.com/docs/project-configuration/vercel-json).
+
+For a local build, run `pnpm install --frozen-lockfile` and `pnpm run build:web`.
+Keep Vercel Web Analytics and Speed Insights disabled. CSV data stays on the user's device.
 
 ## Packaging Notes
 

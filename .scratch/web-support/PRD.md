@@ -155,9 +155,8 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 - Export-state tests prove that successful export clears Unexported Changes without removing undo/redo, undoing away from the export creates Unexported Changes, and returning to the exported revision clears them. Include the case that distinguishes revision identity from stack depth: export, undo, then make a different edit that restores the original stack depth, and assert Unexported Changes is set.
 - Desktop adapter tests prove canonical CSV Source identity, Recent CSV Source behavior, destination selection, source-overwrite prevention, IPC translation, and application-menu intent translation.
 - Web adapter tests prove one-file input, runtime-scoped source identity, absence of Recent CSV Sources, download handoff, "Download started" presentation, navigation warning, startup capability rejection, capacity rejection, resource cleanup, and fatal Worker behavior.
-- Run shared browser behavior automatically against Chromium, Firefox, and WebKit. Smoke-test current stable Chrome, Edge, Firefox, and Safari before release.
-- Add a deterministic build test that verifies all pinned Worker, Wasm, and approved extension assets are included locally and no runtime engine asset points to a CDN.
-- Add security-oriented tests or build assertions for remote-source rejection, disabled dynamic extension fetching, and the required Content Security Policy contract.
+- Ticket 11 owns automated browser compatibility checks against Chromium, Firefox, and WebKit.
+- Keep adapter tests for remote-source rejection and disabled dynamic extension fetching.
 - Verify foreground responsiveness independently of capacity sizing: browse and search during Aligned Comparison, use an existing Tab while another CSV Source opens, browse during Export CSV, and switch Tabs while Column Value Counts calculate. Verify correct foreground results and background completion or cancellation without partial publication. Ticket 11 owns these browser checks; capacity benchmarks are not a release requirement.
 - Test capacity boundaries below, exactly at, and above each limit using small injected limits. Cover budget release on close, failed or cancelled opens, preservation of existing state after rejection, and concurrent opens respecting the workspace total.
 - Use existing CSV data behavior tests as prior art for parsing, queries, editing, export serialization, large-file row windows, and error normalization.
@@ -211,4 +210,4 @@ The exact internal TypeScript interface shapes remain implementation work, but t
 
 The initial web limits are 100 MB per CSV Source and 200 MB across open CSV Sources, using decimal MB. These provisional policy values apply across supported browsers. Capacity benchmarking is deferred and does not block release; browser responsiveness verification remains required.
 
-The web feature is not complete when a page renders or a CSV opens. It is complete only when the shared domain contract, web adapter behavior, browser matrix, capacity enforcement, static deployment requirements, and full Aligned Comparison workflow all pass.
+Shared domain contracts and web adapter tests cover CSV behavior, capacity enforcement, and Aligned Comparison. Ticket 10 covers the static build and hosting instructions; ticket 11 owns browser compatibility testing independently.
