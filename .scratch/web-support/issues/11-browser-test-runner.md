@@ -1,17 +1,19 @@
-# 11 - Browser test runner for shared web behavior
+# 11 - Simple browser E2E verification
 
-**What to build:** The repository's first browser-based test runner, and the shared web behavior suite running on it across Chromium, Firefox, and WebKit.
-
-Today Vitest in Node is the only runner (`vitest.config.ts`), so nothing in the repository executes against a real browser engine. This ticket owns browser compatibility testing independently of static deployment.
+**What to build:** One Playwright test that verifies the web application's open, edit, and export workflow in Chromium.
 
 **Blocked by:** 08 - Web Export CSV + lifecycle.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Start from Vitest's browser mode with the Playwright provider so the existing runner, aliases, and `packages/workspace` contract helpers are reused rather than duplicated under a second framework. Adopt standalone Playwright only if the shared suite cannot run under browser mode, and record why.
-- [ ] Shared web behavior runs automatically against Chromium, Firefox, and WebKit. "Shared web behavior" means the web adapter surface that only a real engine can exercise: Worker startup and the capability check, file input selection, download delivery, the navigation guard, and fatal Worker handling.
-- [ ] Node-run contract tests stay in Node. Do not move the DuckDB-Wasm workspace contract into the browser runner; it already runs headlessly through `workspaceContractFactories`.
-- [ ] The browser suite runs in CI on a schedule or pre-release rather than per commit if a per-commit run is not sustainable. Decide from a measured run time, and record the measurement.
-- [ ] Document how to run the browser suite locally, including engine installation.
+- [x] Use Playwright directly with one config that starts the web app automatically.
+- [x] Run one Chromium test that opens a CSV, edits a cell, downloads an export, and checks its contents.
+- [x] Use one command, `pnpm test:browser`, locally and in the existing CI job.
+- [x] Keep existing native and headless Wasm tests in Node.
+- [x] Document engine installation and local execution in the root README.
 
-- [ ] Verify foreground responsiveness on the Wasm engine: browse and search an existing Tab during a large Aligned Comparison; use an existing Tab while another CSV Source opens; browse during a large Export CSV; and switch Tabs while Column Value Counts calculate. Each check must exercise the overlap, prove the foreground result is correct, and verify background completion or cancellation without publishing partial state. These are behavior checks, not capacity benchmarks or measurements of failure points.
+The test uses the normal application and real data engine. Playwright handles browser startup, server startup, file selection, downloads, and failure screenshots without custom fixtures or commands.
+
+The previously verified export correction remains: export reads use the existing pending-query API on a separate operation connection that closes after use.
+
+Validation: the E2E test passed, including exact exported CSV contents, in 10.3 seconds including startup.

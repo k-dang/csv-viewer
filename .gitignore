@@ -11,3 +11,4 @@ fixtures/validation/
 .claude/skills/verify-csv-viewer/runs/
 .claude/skills/verify-csv-viewer/evidence/
 *.tsbuildinfo
+test-results/

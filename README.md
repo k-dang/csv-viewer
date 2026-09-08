@@ -52,6 +52,7 @@ pnpm run build:desktop
 pnpm run build:web
 pnpm run typecheck
 pnpm run test
+pnpm run test:browser
 pnpm run build
 pnpm run package
 ```
@@ -62,6 +63,7 @@ pnpm run package
 - `build:web` creates `apps/web/dist-web/`, including the self-hosted Worker and Wasm module.
 - `typecheck` checks both applications and both shared packages.
 - `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and grid request behavior.
+- `test:browser` starts the web app and runs one Playwright test in Chromium: open a CSV, edit a cell, and verify the downloaded export. Install Chromium once with `pnpm exec playwright install chromium`, or add `--with-deps` on Linux. Use `pnpm test:browser --headed` to watch the test. CI runs the same test and retains failure screenshots.
 - `build` runs typecheck and lint, then builds both applications.
 - `package` builds the app and creates platform installers under `release/`.
 
