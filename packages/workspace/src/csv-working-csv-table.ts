@@ -121,13 +121,19 @@ export async function insertEmptyRow(
 
 /**
  * Returns engine rows as read. Cells are normalized during serialization rather than here, so
- * exporting never holds a second full copy of the Working CSV in memory.
+ * exporting never holds a second full copy of the Working CSV in memory. Use a separate operation
+ * connection and the pending-query path so foreground row queries can run during a large export.
  */
 export async function readExportRows(
   table: CsvTable,
   columns: CsvColumn[],
 ): Promise<EngineRow[]> {
-  return table.database.readObjects(buildExportRowsSql(table.tableName, columns));
+  const connection = await table.database.connectWorker();
+  try {
+    return await connection.readObjectsCancellable(buildExportRowsSql(table.tableName, columns));
+  } finally {
+    await connection.close();
+  }
 }
 
 /**

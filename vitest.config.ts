@@ -14,6 +14,7 @@ export default defineConfig({
       '**/dist-web/**',
       '**/node_modules/**',
       'release/**',
+      'e2e/**',
     ],
     setupFiles: ['./vitest.setup.ts'],
     // Matches the CI runner's core count; more workers stop paying for themselves past it.

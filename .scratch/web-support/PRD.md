@@ -155,9 +155,8 @@ Maintainer and deployer requirements are not restated as user stories; they are 
 - Export-state tests prove that successful export clears Unexported Changes without removing undo/redo, undoing away from the export creates Unexported Changes, and returning to the exported revision clears them. Include the case that distinguishes revision identity from stack depth: export, undo, then make a different edit that restores the original stack depth, and assert Unexported Changes is set.
 - Desktop adapter tests prove canonical CSV Source identity, Recent CSV Source behavior, destination selection, source-overwrite prevention, IPC translation, and application-menu intent translation.
 - Web adapter tests prove one-file input, runtime-scoped source identity, absence of Recent CSV Sources, download handoff, "Download started" presentation, navigation warning, startup capability rejection, capacity rejection, resource cleanup, and fatal Worker behavior.
-- Ticket 11 owns automated browser compatibility checks against Chromium, Firefox, and WebKit.
+- Ticket 11 uses Playwright directly with one Chromium E2E test that opens a CSV, edits a cell, and verifies downloaded export contents. One config starts the web app automatically for local development and CI.
 - Keep adapter tests for remote-source rejection and disabled dynamic extension fetching.
-- Verify foreground responsiveness independently of capacity sizing: browse and search during Aligned Comparison, use an existing Tab while another CSV Source opens, browse during Export CSV, and switch Tabs while Column Value Counts calculate. Verify correct foreground results and background completion or cancellation without partial publication. Ticket 11 owns these browser checks; capacity benchmarks are not a release requirement.
 - Test capacity boundaries below, exactly at, and above each limit using small injected limits. Cover budget release on close, failed or cancelled opens, preservation of existing state after rejection, and concurrent opens respecting the workspace total.
 - Use existing CSV data behavior tests as prior art for parsing, queries, editing, export serialization, large-file row windows, and error normalization.
 - Use existing workspace tests as prior art for Unexported Changes, close impact, and dependent Comparison Tab behavior.
@@ -208,6 +207,6 @@ The internal database interface originally had its own ticket ahead of the brows
 
 The exact internal TypeScript interface shapes remain implementation work, but their ownership and placement are settled: `CsvViewer` is the product seam, CsvWorkspace is the shared domain area running in the Electron main process on desktop and in the page on web, the existing ComparisonExecutor remains an internal domain module, and native/Wasm database execution plus host file behavior are internal adapters. Because desktop reaches the workspace over IPC, every shared interface must remain asynchronous and structured-clone-safe.
 
-The initial web limits are 100 MB per CSV Source and 200 MB across open CSV Sources, using decimal MB. These provisional policy values apply across supported browsers. Capacity benchmarking is deferred and does not block release; browser responsiveness verification remains required.
+The initial web limits are 100 MB per CSV Source and 200 MB across open CSV Sources, using decimal MB. These provisional policy values apply across supported browsers. Capacity benchmarking is deferred and does not block release.
 
-Shared domain contracts and web adapter tests cover CSV behavior, capacity enforcement, and Aligned Comparison. Ticket 10 covers the static build and hosting instructions; ticket 11 owns browser compatibility testing independently.
+Shared domain contracts and web adapter tests cover CSV behavior, capacity enforcement, and Aligned Comparison. Ticket 10 covers the static build and hosting instructions; ticket 11 owns Chromium E2E verification independently.
