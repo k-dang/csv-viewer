@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
+import { CsvTab } from './csv-tab';
 import { comparisonFixture, workingCsvFixture } from './test-helpers/csv-views';
+import { createTestCsvViewer } from './test-helpers/csv-viewer';
 import {
   initialRendererWorkspace,
   projectOpenTabs,
@@ -8,27 +10,31 @@ import {
 } from './workspace-tabs';
 
 const csv = (workingCsvId: string) => workingCsvFixture({ workingCsvId });
+const csvTab = (workingCsvId: string) => new CsvTab(createTestCsvViewer(), csv(workingCsvId));
 const comparison = (version = 1) =>
   comparisonFixture({ version, baseline: csv('a'), candidate: csv('b') });
 
 describe('rendererWorkspaceReducer', () => {
   it('opens, orders, selects, and closes heterogeneous tabs atomically', () => {
-    let state = rendererWorkspaceReducer(initialRendererWorkspace, {
-      type: 'open-csv',
-      workingCsv: csv('a'),
-    });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
+    const a = csvTab('a');
+    let state = rendererWorkspaceReducer(initialRendererWorkspace, { type: 'open-csv', tab: a });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: csvTab('b') });
     state = rendererWorkspaceReducer(state, { type: 'open-comparison', comparison: comparison() });
 
     expect(state.tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:b', 'comparison:comparison-1']);
     expect(state.activeTabId).toBe('comparison:comparison-1');
+
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: a });
+    expect(state.tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:b', 'comparison:comparison-1']);
+    expect(state.activeTabId).toBe('csv:a');
+    expect(projectOpenTabs(state)[0]).toEqual({ kind: 'csv', id: 'csv:a', tab: a });
 
     state = rendererWorkspaceReducer(state, {
       type: 'comparison-event',
       event: { kind: 'closed', comparisonId: 'comparison-1' },
     });
     expect(state.tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:b']);
-    expect(state.activeTabId).toBe('csv:b');
+    expect(state.activeTabId).toBe('csv:a');
     expect(state.comparisons.has('comparison-1')).toBe(false);
   });
 
@@ -55,12 +61,9 @@ describe('rendererWorkspaceReducer', () => {
   });
 
   it('cycles through tabs in both directions with wraparound', () => {
-    let state = rendererWorkspaceReducer(initialRendererWorkspace, {
-      type: 'open-csv',
-      workingCsv: csv('a'),
-    });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('c') });
+    let state = rendererWorkspaceReducer(initialRendererWorkspace, { type: 'open-csv', tab: csvTab('a') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: csvTab('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: csvTab('c') });
 
     state = rendererWorkspaceReducer(state, { type: 'cycle', direction: 1 });
     expect(state.activeTabId).toBe('csv:a');
@@ -69,16 +72,14 @@ describe('rendererWorkspaceReducer', () => {
   });
 
   it('selects the next tab, then the previous tab, when the active CSV closes', () => {
-    let state = rendererWorkspaceReducer(initialRendererWorkspace, {
-      type: 'open-csv',
-      workingCsv: csv('a'),
-    });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('b') });
-    state = rendererWorkspaceReducer(state, { type: 'open-csv', workingCsv: csv('c') });
+    let state = rendererWorkspaceReducer(initialRendererWorkspace, { type: 'open-csv', tab: csvTab('a') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: csvTab('b') });
+    state = rendererWorkspaceReducer(state, { type: 'open-csv', tab: csvTab('c') });
     state = rendererWorkspaceReducer(state, { type: 'select', tabId: 'csv:b' });
 
     state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'b' });
     expect(state.activeTabId).toBe('csv:c');
+    expect(state.tabs.some((tab) => tab.id === 'csv:b')).toBe(false);
     state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'c' });
     expect(state.activeTabId).toBe('csv:a');
     state = rendererWorkspaceReducer(state, { type: 'close-csv', workingCsvId: 'a' });

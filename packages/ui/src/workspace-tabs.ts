@@ -4,10 +4,10 @@ import type {
   ComparisonId,
   ComparisonRowsMode,
   ComparisonView,
-  WorkingCsvView,
   WorkingCsvId,
 } from '@csv-viewer/workspace/csv-viewer';
 import type { OpenRendererTab } from './components/tab-strip';
+import type { CsvTab } from './csv-tab';
 
 export type ComparisonTabPresentation = {
   draftKey: string[];
@@ -16,7 +16,7 @@ export type ComparisonTabPresentation = {
 };
 
 export type RendererTab =
-  | { kind: 'csv'; id: string; csv: WorkingCsvView }
+  | { kind: 'csv'; id: string; tab: CsvTab }
   | {
       kind: 'comparison';
       id: string;
@@ -25,13 +25,14 @@ export type RendererTab =
     };
 
 export type RendererWorkspaceState = {
+  /** CSV Tabs ride along on their tab entry; App creates and disposes them, never the reducer. */
   tabs: RendererTab[];
   comparisons: ReadonlyMap<ComparisonId, ComparisonView>;
   activeTabId: string | null;
 };
 
 export type RendererWorkspaceAction =
-  | { type: 'open-csv'; workingCsv: WorkingCsvView }
+  | { type: 'open-csv'; tab: CsvTab }
   | { type: 'close-csv'; workingCsvId: WorkingCsvId }
   | { type: 'open-comparison'; comparison: ComparisonView }
   | { type: 'comparison-event'; event: ComparisonEvent }
@@ -58,16 +59,11 @@ export function rendererWorkspaceReducer(
 ): RendererWorkspaceState {
   switch (action.type) {
     case 'open-csv': {
-      const id = csvTabId(action.workingCsv.workingCsvId);
-      const existingIndex = state.tabs.findIndex(
-        (tab) =>
-          tab.kind === 'csv' &&
-          (tab.csv.workingCsvId === action.workingCsv.workingCsvId ||
-            tab.csv.source.sourceId === action.workingCsv.source.sourceId),
-      );
-      const tabs = [...state.tabs];
-      if (existingIndex === -1) tabs.push({ kind: 'csv', id, csv: action.workingCsv });
-      else tabs[existingIndex] = { kind: 'csv', id, csv: action.workingCsv };
+      const id = csvTabId(action.tab.workingCsvId);
+      const entry = { kind: 'csv' as const, id, tab: action.tab };
+      const tabs = state.tabs.some((tab) => tab.id === id)
+        ? state.tabs.map((tab) => (tab.id === id ? entry : tab))
+        : [...state.tabs, entry];
       return { ...state, tabs, activeTabId: id };
     }
     case 'close-csv':
@@ -136,7 +132,7 @@ export function projectOpenTabs(state: RendererWorkspaceState): OpenRendererTab[
   const openTabs: OpenRendererTab[] = [];
   for (const tab of state.tabs) {
     if (tab.kind === 'csv') {
-      openTabs.push({ kind: 'csv', id: tab.id, csv: tab.csv });
+      openTabs.push(tab);
       continue;
     }
     const comparison = state.comparisons.get(tab.comparisonId);

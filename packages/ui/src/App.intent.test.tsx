@@ -10,7 +10,6 @@ import { createTestCsvViewer } from './test-helpers/csv-viewer';
 /** Calls a rendered CSV Tab makes on its own, leaving each test to stub what it asserts on. */
 const tabHandlers = (workingCsv: WorkingCsvView) => ({
   'csv.get-recent-sources': async () => [],
-  'csv.get-edit-state': async () => workingCsv.editState,
   'csv.get-rows': async () => ({
     workingCsvId: workingCsv.workingCsvId,
     offset: 0,

@@ -62,7 +62,7 @@ pnpm run package
 - `build:desktop` creates the renderer plus standalone `main.cjs` and `preload.cjs` Electron bundles.
 - `build:web` creates `apps/web/dist-web/`, including the self-hosted Worker and Wasm module.
 - `typecheck` checks both applications and both shared packages.
-- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and grid request behavior.
+- `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and CSV Tab behavior.
 - `test:browser` starts the web app and runs one Playwright test in Chromium: open a CSV, edit a cell, and verify the downloaded export. Install Chromium once with `pnpm exec playwright install chromium`, or add `--with-deps` on Linux. Use `pnpm test:browser --headed` to watch the test. CI runs the same test and retains failure screenshots.
 - `build` runs typecheck and lint, then builds both applications.
 - `package` builds the app and creates platform installers under `release/`.
@@ -99,7 +99,7 @@ The Stats Panel reports Column Value Counts for one selected column beside the g
 
 Before shipping changes, run `pnpm run test` and `pnpm run build`. The build includes the full TypeScript typecheck, and CI runs the same test and build gates for every pull request and push to `main`.
 
-Feature validation belongs in deterministic tests at the data-service, workspace, IPC-facing, and grid-data-source boundaries.
+Feature validation belongs in deterministic tests at the data-service, workspace, IPC-facing, and CSV Tab boundaries. Release readiness does not depend on a separate manual validation checklist.
 
 ## Web deployment
 

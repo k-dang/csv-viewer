@@ -1,24 +1,24 @@
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { ArrowLeftRight, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { ComparisonView, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvTab } from '../csv-tab';
 
 export type OpenRendererTab =
-  | { kind: 'csv'; id: string; csv: WorkingCsvView }
+  | { kind: 'csv'; id: string; tab: CsvTab }
   | { kind: 'comparison'; id: string; comparison: ComparisonView };
 
 export function TabStrip({
   tabs,
   activeTabId,
-  workingCsvIdsWithUnexportedChanges,
   onSelectTab,
   onCloseTab,
 }: {
   tabs: OpenRendererTab[];
   activeTabId: string | null;
-  workingCsvIdsWithUnexportedChanges: ReadonlySet<string>;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tab: OpenRendererTab) => void;
 }) {
@@ -35,64 +35,110 @@ export function TabStrip({
         }}
       >
         {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          const isCsv = tab.kind === 'csv';
-          const label = isCsv
-            ? tab.csv.source.name
-            : `${tab.comparison.baseline.source.name} ⇄ ${tab.comparison.candidate.source.name}`;
-          const hasUnexportedChanges = isCsv && workingCsvIdsWithUnexportedChanges.has(tab.csv.workingCsvId);
-          const isOutdated = !isCsv && tab.comparison.applied?.freshness.kind === 'outdated';
-
+          if (tab.kind === 'csv') {
+            return (
+              <CsvTabItem key={tab.id} tab={tab} isActive={tab.id === activeTabId} onClose={() => onCloseTab(tab)} />
+            );
+          }
+          const label = `${tab.comparison.baseline.source.name} ⇄ ${tab.comparison.candidate.source.name}`;
           return (
-            <div
+            <TabItem
               key={tab.id}
-              title={isCsv ? tab.csv.source.location : label}
-              className={cn(
-                'group flex max-w-56 shrink-0 flex-none items-center rounded-t-md border border-b-0',
-                isActive
-                  ? 'bg-background text-foreground'
-                  : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <TabsTrigger
-                value={tab.id}
-                className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none"
-              >
-                {!isCsv ? <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" /> : null}
-                <span className="truncate">{label}</span>
-                {hasUnexportedChanges ? (
-                  <Badge
-                    role="img"
-                    variant="secondary"
-                    className="size-1.5 shrink-0 rounded-full p-0"
-                    aria-label="Unexported Changes"
-                  />
-                ) : null}
-                {isOutdated ? (
+              id={tab.id}
+              label={label}
+              title={label}
+              isActive={tab.id === activeTabId}
+              onClose={() => onCloseTab(tab)}
+              icon={<ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />}
+              badge={
+                tab.comparison.applied?.freshness.kind === 'outdated' ? (
                   <Badge
                     role="img"
                     className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0"
                     aria-label="Outdated comparison"
                   />
-                ) : null}
-              </TabsTrigger>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Close ${label}`}
-                className={cn(
-                  'mr-1 shrink-0',
-                  isActive ? '' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
-                )}
-                onClick={() => onCloseTab(tab)}
-              >
-                <X className="size-3.5" />
-              </Button>
-            </div>
+                ) : null
+              }
+            />
           );
         })}
       </TabsList>
     </Tabs>
+  );
+}
+
+/** Subscribes to its own CSV Tab, so an edit re-renders one label rather than the whole strip. */
+function CsvTabItem({
+  tab,
+  isActive,
+  onClose,
+}: {
+  tab: Extract<OpenRendererTab, { kind: 'csv' }>;
+  isActive: boolean;
+  onClose: () => void;
+}) {
+  const state = useSyncExternalStore(tab.tab.subscribe, tab.tab.snapshot);
+  return (
+    <TabItem
+      id={tab.id}
+      label={state.workingCsv.source.name}
+      title={state.workingCsv.source.location}
+      isActive={isActive}
+      onClose={onClose}
+      badge={
+        state.editState.hasUnexportedChanges ? (
+          <Badge role="img" variant="secondary" className="size-1.5 shrink-0 rounded-full p-0" aria-label="Unexported Changes" />
+        ) : null
+      }
+    />
+  );
+}
+
+function TabItem({
+  id,
+  label,
+  title,
+  isActive,
+  icon,
+  badge,
+  onClose,
+}: {
+  id: string;
+  label: string;
+  title: string;
+  isActive: boolean;
+  icon?: ReactNode;
+  badge: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      title={title}
+      className={cn(
+        'group flex max-w-56 shrink-0 flex-none items-center rounded-t-md border border-b-0',
+        isActive
+          ? 'bg-background text-foreground'
+          : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      <TabsTrigger
+        value={id}
+        className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none"
+      >
+        {icon}
+        <span className="truncate">{label}</span>
+        {badge}
+      </TabsTrigger>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={`Close ${label}`}
+        className={cn('mr-1 shrink-0', isActive ? '' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100')}
+        onClick={onClose}
+      >
+        <X className="size-3.5" />
+      </Button>
+    </div>
   );
 }
