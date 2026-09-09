@@ -76,6 +76,7 @@
     },
     "linux": {
       "icon": "icon.png",
+      "executableName": "csv-viewer",
       "target": "AppImage",
       "artifactName": "CSV.Viewer-${version}-${arch}.${ext}",
       "category": "Utility"
