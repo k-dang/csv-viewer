@@ -1,6 +1,6 @@
 {
   "name": "@csv-viewer/desktop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "CSV Viewer desktop application",
   "productName": "CSV Viewer",
   "private": true,

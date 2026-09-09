@@ -1,6 +1,6 @@
 {
   "name": "csv-viewer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A local-first desktop and web CSV viewer built with React, AG Grid, and DuckDB.",
   "private": true,
   "packageManager": "pnpm@10.34.2",
