@@ -21,7 +21,7 @@ import type {
   WorkingCsvId,
   WorkspaceCloseImpact,
   ConfirmWorkspaceCloseOutcome,
-} from './contracts/csv-viewer';
+} from './csv-viewer';
 
 type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
 

@@ -4,7 +4,7 @@ import type {
   ComparisonView,
   ComparisonWindow,
   WorkingCsvView,
-} from '../../src/contracts/csv-viewer';
+} from '../../src/csv-viewer';
 import type {
   WorkspaceContractFactory,
   WorkspaceContractFixture,

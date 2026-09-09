@@ -1,4 +1,4 @@
-import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './contracts/csv-viewer';
+import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './csv-viewer';
 
 export type CsvSourceDescription = {
   sourceId: CsvSourceId;

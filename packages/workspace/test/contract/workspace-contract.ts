@@ -14,7 +14,7 @@ import {
   type WorkingCsvView,
   type WorkspaceCloseImpact,
   type ConfirmWorkspaceCloseOutcome,
-} from '../../src/contracts/csv-viewer';
+} from '../../src/csv-viewer';
 
 import type { ComparisonExecutor } from '../../src/comparison-executor';
 

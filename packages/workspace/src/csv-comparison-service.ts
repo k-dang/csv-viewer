@@ -20,7 +20,7 @@ import type {
   WorkingCsvId,
   OpenComparisonResult,
   OpenComparisonRequest,
-} from './contracts/csv-viewer';
+} from './csv-viewer';
 import { orderComparisonValueColumns } from './comparison-presentation';
 import { toError } from './errors';
 import { isValidRowWindow } from './csv-query';

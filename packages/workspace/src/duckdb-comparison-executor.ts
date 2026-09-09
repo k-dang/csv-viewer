@@ -5,8 +5,8 @@ import type {
   CsvColumn,
   SourceKeyDiagnostics,
   WorkingCsvId,
-} from './contracts/csv-viewer';
-import { csvInternalRowIdField } from './contracts/csv-viewer';
+} from './csv-viewer';
+import { csvInternalRowIdField } from './csv-viewer';
 import { toError } from './errors';
 import type {
   ComparisonExecutor,

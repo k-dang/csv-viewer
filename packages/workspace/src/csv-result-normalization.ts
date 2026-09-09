@@ -1,5 +1,5 @@
-import type { CsvCellValue, CsvRow } from './contracts/csv-viewer';
-import { csvInternalRowIdField } from './contracts/csv-viewer';
+import type { CsvCellValue, CsvRow } from './csv-viewer';
+import { csvInternalRowIdField } from './csv-viewer';
 
 export type EngineCellValue =
   | null

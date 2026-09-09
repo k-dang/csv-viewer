@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField } from '../../src/contracts/csv-viewer';
+import { csvInternalRowIdField } from '../../src/csv-viewer';
 import {
   expectVisibleRows,
   rowIds,
