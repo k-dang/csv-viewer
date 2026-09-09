@@ -7,7 +7,7 @@ Compare opens a Comparison Tab against a second open Working CSV, asks for a Com
 - `compare-open` opens the candidate picker from Compare… when two CSV tabs exist.
 - `compare-choose` creates a Comparison Tab titled with both file names.
 - `compare-apply` computes results for a valid key such as `id`.
-- `compare-invalid` surfaces key diagnostics for a non-unique or blank key.
+- `compare-invalid` surfaces key diagnostics for a key column whose values are blank or non-unique.
 - `compare-swap` swaps Baseline and Candidate labels without requiring a new picker.
 - `compare-cancel` closes the picker with Cancel, Escape, Close Candidate picker, or the dimmed overlay.
 
@@ -27,22 +27,35 @@ Preconditions:
 - Both fixtures are open as CSV tabs. Active tab is `phase-2-sample.csv`.
 - `Compare…` is enabled. The ellipsis is `…` (U+2026), not `...`.
 
-Unattended runs do not reach those preconditions. Recent files exist only on the empty window. After the first fixture is open, the second file requires `Open CSV` (native OS dialog). Report the whole feature as unreachable without a human finishing that dialog. Do not mark it verified from unit tests or from a disabled `Compare…` button.
+On **desktop** those preconditions are unreachable unattended. Recent CSV Sources exist only on the empty window and unmount as soon as one tab is open. The File menu has no Open Recent, there is no drag-and-drop or command-line file handling, and re-picking the same fixture replaces its tab instead of adding one. The second file therefore requires `Open CSV` (native OS dialog). Record the attempted route: with one tab open, `click --role button --name "Compare…"` returns `"disabled": true`, the picker does not open, and `text` shows no `RECENT CSV SOURCES`.
+
+On **web** they are reachable. Two `upload` calls open both fixtures with no dialog, and `Compare…` enables. Verify this feature there. Never mark it verified from unit tests or from a disabled `Compare…` button.
 
 If two CSV tabs are already open (human finished the dialog):
 
 - **Open picker.** Run `click --role button --name "Compare…"`. Wait for `Choose a Candidate` and `Baseline · phase-2-sample.csv`. Candidate `phase-2-sample-edited.csv` shows `Comparison-Compatible`.
 - **Cancel once.** Run `click --role button --name "Cancel"`. The dialog is gone. CSV tabs remain.
-- **Choose candidate.** Open the picker again, then `click --role button --name "phase-2-sample-edited.csv"`. Wait for heading `Choose a Comparison Key`. Tab label contains `phase-2-sample.csv ⇄ phase-2-sample-edited.csv`.
-- **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait until badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged ` appear, plus `Applied key: id`. For these fixtures Ada's name differs, so `Changed` is at least 1.
-- **Swap.** Run `click --role button --name "Swap sides"`. Baseline and Candidate file names trade places. Badges refresh in place. Swap does not show `Outdated Comparison`; that banner appears only after a source Working CSV changes.
+- **Choose candidate.** Open the picker again, then click the candidate by its subtitle: `click --role button --name "This browser session"` on web, or the source path on desktop. The bare file name also matches the tab and its close button. Wait for heading `Choose a Comparison Key`. Tab label contains `phase-2-sample.csv ⇄ phase-2-sample-edited.csv`.
+- **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait for `Applied key: id` and the badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `. For these fixtures expect `Changed 1`, `Baseline-only 0`, `Candidate-only 0`, `Unchanged 4`: the only difference is row `id` 4, whose `total_spend` is `1.5` in the baseline and `1.0` in the candidate.
+- **Swap.** Run `click --role button --name "Swap sides"`. Baseline and Candidate trade places and the tab title flips to `phase-2-sample-edited.csv ⇄ phase-2-sample.csv`. Badges refresh in place with no re-apply. Swap does not show `Outdated Comparison`; that banner appears only after a source Working CSV changes.
 - **Proof.** Snapshot and screenshot `evidence/compare-csvs/applied.aria.txt` and `applied.png` after Apply key, showing `CSV Viewer`, both file names, `Applied key: id`, and the four count badges.
+
+## Web differences
+
+**Run this feature on web.** It is unreachable on desktop and fully driveable here, because a second CSV needs only `upload`, not a native dialog.
+
+- Open both fixtures with two `upload` calls, then `Compare…` is enabled.
+- Pick the candidate by its subtitle, `This browser session`, not by its file name: the bare name also matches the tab and its close button, and `--nth 0` lands on the tab.
+- Everything after that is shared UI and matches the recipe above.
 
 ## Gotchas
 
-- `Compare…` is hidden on the empty window and disabled with a single CSV tab. Unattended Recent-files open cannot produce the second tab.
+- `Compare…` is rendered only while a CSV tab is active. It is absent on the empty window, disabled with a single CSV tab, and absent again once the Comparison Tab is active. Click back to a CSV tab before reopening the picker.
+- Do not pass `--exact` to the key checkbox. Its accessible name includes the input `value`, so it reads `id on` and an exact match finds nothing.
+- After `Swap sides` the tab title changes too. A wait on the pre-swap title hangs.
+- The fixtures differ in exactly one cell. Do not expect Ada's row to differ; it is byte-identical in both files.
+- An empty key draft leaves `Apply key` disabled, so `compare-invalid` needs a key column with blank or duplicated values, not an empty selection.
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.
 - Closing a CSV that a comparison depends on asks for confirmation and closes the Comparison Tab. Finish the comparison proof before closing sources.
-- Do not treat automated unit tests in `csv-workspace.comparison-verification.test.ts` as a substitute for this UI path.
-
+- Do not treat the comparison unit tests (`packages/workspace/src/csv-comparison-service.test.ts`, `packages/workspace/src/comparison-projection.test.ts`) as a substitute for this UI path.
