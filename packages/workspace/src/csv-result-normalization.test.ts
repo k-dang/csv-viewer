@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { csvInternalRowIdField } from './contracts/csv-viewer';
+import { csvInternalRowIdField } from './csv-viewer';
 import { normalizeRow, type EngineRow } from './csv-result-normalization';
 
 describe('normalizeRow', () => {

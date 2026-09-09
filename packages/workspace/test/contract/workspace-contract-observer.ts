@@ -4,7 +4,7 @@ import type {
   ComparisonOperationId,
   ComparisonView,
   CsvViewer,
-} from '../../src/contracts/csv-viewer';
+} from '../../src/csv-viewer';
 
 /** Shared event-side observations used by every engine's workspace contract fixture. */
 export class WorkspaceContractObserver {

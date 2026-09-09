@@ -1,4 +1,4 @@
-import type { CsvColumn } from './contracts/csv-viewer';
+import type { CsvColumn } from './csv-viewer';
 import { normalizeCellValue, type EngineRow } from './csv-result-normalization';
 
 /**

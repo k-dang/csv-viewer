@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { csvInternalRowIdField } from '../../../packages/workspace/src/contracts/csv-viewer';
+import { csvInternalRowIdField } from '../../../packages/workspace/src/csv-viewer';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 
 describe('Desktop CsvViewer Reopen CSV seam', () => {

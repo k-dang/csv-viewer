@@ -8,5 +8,5 @@
     },
     "types": ["vite/client"]
   },
-  "include": ["src/renderer.tsx", "src/electron-csv-viewer.ts", "vite.config.ts"]
+  "include": ["src/renderer", "vite.config.ts"]
 }

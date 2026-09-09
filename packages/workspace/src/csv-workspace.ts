@@ -2,7 +2,7 @@ import type {
   ConfirmWorkspaceCloseOutcome,
   CsvViewer,
   WorkspaceCloseImpact,
-} from './contracts/csv-viewer';
+} from './csv-viewer';
 import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
 import type { WorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';

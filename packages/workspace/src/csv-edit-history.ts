@@ -1,4 +1,4 @@
-import type { CsvCellValue } from './contracts/csv-viewer';
+import type { CsvCellValue } from './csv-viewer';
 
 export type CsvEditDraft =
   | {

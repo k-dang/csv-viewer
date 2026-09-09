@@ -4,7 +4,7 @@ import type {
   ComparisonKeyDiagnostics,
   ComparisonSide,
   WorkingCsvView,
-} from './contracts/csv-viewer';
+} from './csv-viewer';
 
 /**
  * The rules that decide whether two Working CSVs can be compared and whether a draft Comparison

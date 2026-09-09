@@ -1,5 +1,5 @@
 import { toError } from './errors';
-import { supportedCsvFileExtensions } from './contracts/csv-viewer';
+import { supportedCsvFileExtensions } from './csv-viewer';
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
@@ -16,7 +16,7 @@ import type {
   CsvSourceId,
   WorkingCsvId,
   WorkingCsvView,
-} from './contracts/csv-viewer';
+} from './csv-viewer';
 import type { ComparisonExecutor } from './comparison-executor';
 import type { WorkspaceDatabase } from './database';
 import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';

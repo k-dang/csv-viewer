@@ -3,7 +3,7 @@ import type {
   ComparisonOperationId,
   ComparisonSummary,
   SourceKeyDiagnostics,
-} from '../../src/contracts/csv-viewer';
+} from '../../src/csv-viewer';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,

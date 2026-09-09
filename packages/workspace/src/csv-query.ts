@@ -4,8 +4,8 @@ import type {
   CsvDialectOptions,
   CsvFilterDescriptor,
   CsvSortDescriptor,
-} from './contracts/csv-viewer';
-import { csvInternalRowIdField } from './contracts/csv-viewer';
+} from './csv-viewer';
+import { csvInternalRowIdField } from './csv-viewer';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 
 export type QueryValues = Array<string | number | boolean | null>;
