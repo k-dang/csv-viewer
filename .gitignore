@@ -12,3 +12,4 @@ fixtures/validation/
 .claude/skills/verify-csv-viewer/evidence/
 *.tsbuildinfo
 test-results/
+.vercel

@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "pnpm install --frozen-lockfile",
+  "installCommand": "pnpm install --frozen-lockfile --filter @csv-viewer/web...",
   "buildCommand": "pnpm run build:web",
   "outputDirectory": "apps/web/dist-web",
   "headers": [
