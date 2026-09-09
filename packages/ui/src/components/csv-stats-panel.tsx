@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { BarChart3, Loader2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,65 +7,14 @@ import { FieldError } from '@/components/ui/field';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { CsvColumnValueCounts, CsvFilterDescriptor, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvColumnValueCounts } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvTab } from '../csv-tab';
 import { formatCellValue, formatNumber } from './csv-format';
-import { useCsvViewer } from '../csv-viewer';
 
-type StatsState =
-  | { status: 'loading' }
-  | { status: 'ready'; counts: CsvColumnValueCounts }
-  | { status: 'failed'; message: string };
-
-export function CsvStatsPanel({
-  workingCsv,
-  selectedColumn,
-  filters,
-  search,
-  refreshKey,
-  onColumnChange,
-  onClose,
-}: {
-  workingCsv: WorkingCsvView;
-  selectedColumn: string;
-  filters: CsvFilterDescriptor[];
-  search: string;
-  refreshKey: number;
-  onColumnChange: (column: string) => void;
-  onClose: () => void;
-}) {
-  const viewer = useCsvViewer();
-  const [statsState, setStatsState] = useState<StatsState>({ status: 'loading' });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    setStatsState({ status: 'loading' });
-    viewer
-      .call({
-        operation: 'csv.get-column-value-counts',
-        workingCsvId: workingCsv.workingCsvId,
-        column: selectedColumn,
-        filters,
-        search,
-      })
-      .then((counts) => {
-        if (!cancelled) {
-          setStatsState({ status: 'ready', counts });
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          setStatsState({
-            status: 'failed',
-            message: cause instanceof Error ? cause.message : 'Unable to calculate column value counts.',
-          });
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [viewer, workingCsv.workingCsvId, selectedColumn, filters, search, refreshKey]);
+/** A view over the CSV Tab's Live Stats. The Tab decides when Column Value Counts refresh. */
+export function CsvStatsPanel({ tab }: { tab: CsvTab }) {
+  const { workingCsv, stats } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const result = stats.result ?? { status: 'loading' };
 
   return (
     <aside
@@ -82,7 +31,7 @@ export function CsvStatsPanel({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={onClose}
+            onClick={() => tab.toggleStats()}
             title="Close stats panel"
             aria-label="Close stats panel"
           >
@@ -94,9 +43,9 @@ export function CsvStatsPanel({
           Stats Column
         </Label>
         <Select
-          value={selectedColumn}
+          value={stats.column}
           onValueChange={(value) => {
-            if (value !== null) onColumnChange(value);
+            if (value !== null) tab.setStatsColumn(value);
           }}
         >
           <SelectTrigger id="stats-column" className="w-full min-w-0 bg-card">
@@ -114,20 +63,20 @@ export function CsvStatsPanel({
 
       <ScrollArea className="min-h-0">
         <div className="px-4 py-3">
-          {statsState.status === 'loading' ? (
+          {result.status === 'loading' ? (
             <div className="flex min-h-[160px] items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               Calculating counts
             </div>
           ) : null}
 
-          {statsState.status === 'failed' ? (
+          {result.status === 'failed' ? (
             <FieldError className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 font-medium">
-              {statsState.message}
+              {result.message}
             </FieldError>
           ) : null}
 
-          {statsState.status === 'ready' ? <ColumnValueCountsList counts={statsState.counts} /> : null}
+          {result.status === 'ready' ? <ColumnValueCountsList counts={result.counts} /> : null}
         </div>
       </ScrollArea>
     </aside>

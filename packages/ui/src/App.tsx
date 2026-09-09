@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '@/components/csv-dialect';
 import { ComparisonCandidateDialog } from '@/components/comparison-candidate-dialog';
 import { ComparisonTab } from '@/components/comparison-tab';
-import { CsvMetadataView } from '@/components/csv-metadata-view';
+import { CsvGrid } from '@/components/csv-grid';
 import { DialectControls } from '@/components/dialect-controls';
 import { EmptyCsvState } from '@/components/empty-csv-state';
 import { TabStrip, type OpenRendererTab } from '@/components/tab-strip';
@@ -26,6 +26,7 @@ import {
   type ComparisonTabPresentation,
   type RendererTab,
 } from './workspace-tabs';
+import { CsvTab } from './csv-tab';
 import { useCsvViewer } from './csv-viewer';
 
 type ThemeMode = 'light' | 'dark';
@@ -44,9 +45,6 @@ function getInitialTheme(): ThemeMode {
 export function App() {
   const viewer = useCsvViewer();
   const [workspaceState, dispatchWorkspace] = useReducer(rendererWorkspaceReducer, initialRendererWorkspace);
-  const [workingCsvIdsWithUnexportedChanges, setWorkingCsvIdsWithUnexportedChanges] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   const [candidatePicker, setCandidatePicker] = useState<{
     baseline: WorkingCsvView;
     candidates: ComparisonCandidate[];
@@ -58,20 +56,22 @@ export function App() {
   const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
   const [dialectError, setDialectError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
-  const [exportRequest, setExportRequest] = useState<{
-    workingCsvId: string;
-    sequence: number;
-  } | null>(null);
 
   const openTabs = useMemo<OpenRendererTab[]>(() => projectOpenTabs(workspaceState), [workspaceState]);
-  const csvTabs = workspaceState.tabs.filter((tab): tab is Extract<RendererTab, { kind: 'csv' }> => tab.kind === 'csv');
+  const csvTabs = openTabs.filter((tab): tab is Extract<OpenRendererTab, { kind: 'csv' }> => tab.kind === 'csv');
   const comparisonTabs = workspaceState.tabs.filter(
     (tab): tab is Extract<RendererTab, { kind: 'comparison' }> => tab.kind === 'comparison',
   );
   const activeTabId = workspaceState.activeTabId;
 
   const activeTab = openTabs.find((tab) => tab.id === activeTabId) ?? null;
-  const activeCsv = activeTab?.kind === 'csv' ? activeTab.csv : null;
+  const activeCsvTab = activeTab?.kind === 'csv' ? activeTab.tab : null;
+
+  // Open results arrive after an await, so they look up CSV Tabs through the latest state.
+  const csvTabsRef = useRef(csvTabs);
+  useEffect(() => {
+    csvTabsRef.current = csvTabs;
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', themeMode === 'dark');
@@ -83,13 +83,7 @@ export function App() {
   const intentHandlers = {
     'open-csv': () => void openCsv(),
     'reopen-csv': () => void reopenActiveTab(),
-    'export-csv': () => {
-      if (!activeCsv) return;
-      setExportRequest((current) => ({
-        workingCsvId: activeCsv.workingCsvId,
-        sequence: (current?.sequence ?? 0) + 1,
-      }));
-    },
+    'export-csv': () => void activeCsvTab?.export(),
     'close-tab': () => {
       if (activeTab) void closeTab(activeTab);
     },
@@ -128,34 +122,38 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Registered once; it reads the CSV Tabs when it fires, so no unexported-changes state is mirrored here.
   useEffect(() => {
-    if (!viewer.capabilities.warnOnPageUnload || workingCsvIdsWithUnexportedChanges.size === 0) {
-      return;
-    }
+    if (!viewer.capabilities.warnOnPageUnload) return;
 
     function warnBeforeUnload(event: BeforeUnloadEvent) {
+      if (!csvTabsRef.current.some((tab) => tab.tab.snapshot().editState.hasUnexportedChanges)) return;
       event.preventDefault();
       event.returnValue = '';
     }
 
     window.addEventListener('beforeunload', warnBeforeUnload);
     return () => window.removeEventListener('beforeunload', warnBeforeUnload);
-  }, [viewer.capabilities.warnOnPageUnload, workingCsvIdsWithUnexportedChanges]);
+  }, [viewer.capabilities.warnOnPageUnload]);
 
+  /**
+   * A Working CSV that is already open keeps its CSV Tab: a Reopen replaces the Tab's data, and
+   * a second open of the same CSV Source only focuses it.
+   */
   function applyOpenResult(result: OpenCsvResult) {
     if (result.status === 'cancelled') return;
     if (result.status === 'failed' || result.status === 'capacity-exceeded') {
       setOpenError(result.message);
       return;
     }
-    const workingCsv = result.workingCsv;
-    dispatchWorkspace({ type: 'open-csv', workingCsv });
-    setWorkingCsvIdsWithUnexportedChanges((current) => {
-      if (!current.has(workingCsv.workingCsvId) || result.status === 'already-open') return current;
-      const next = new Set(current);
-      next.delete(workingCsv.workingCsvId);
-      return next;
-    });
+    const { workingCsv } = result;
+    const existing = csvTabsRef.current.find((tab) => tab.tab.workingCsvId === workingCsv.workingCsvId)?.tab;
+    if (!existing) {
+      dispatchWorkspace({ type: 'open-csv', tab: new CsvTab(viewer, workingCsv) });
+    } else {
+      if (result.status === 'opened') existing.replaceWorkingCsv(workingCsv);
+      dispatchWorkspace({ type: 'open-csv', tab: existing });
+    }
     setOpenError(null);
   }
 
@@ -188,21 +186,21 @@ export function App() {
   }
 
   async function reopenActiveTab() {
-    if (!activeCsv) return;
+    if (!activeCsvTab) return;
     await runOpen(
-      (options) => ({ operation: 'csv.reopen', workingCsvId: activeCsv.workingCsvId, options }),
+      (options) => ({ operation: 'csv.reopen', workingCsvId: activeCsvTab.workingCsvId, options }),
       'Unable to reopen CSV.',
     );
   }
 
   async function showCandidatePicker() {
-    if (!activeCsv) return;
+    if (!activeCsvTab) return;
     try {
       setCandidatePicker({
-        baseline: activeCsv,
+        baseline: activeCsvTab.snapshot().workingCsv,
         candidates: await viewer.call({
           operation: 'comparison.get-candidates',
-          baselineId: activeCsv.workingCsvId,
+          baselineId: activeCsvTab.workingCsvId,
         }),
       });
     } catch (error: unknown) {
@@ -240,10 +238,8 @@ export function App() {
         if (result.status === 'failed') setOpenError(result.failure.message);
         return;
       }
-      let result = await viewer.call({
-        operation: 'csv.close',
-        workingCsvId: tab.csv.workingCsvId,
-      });
+      const { workingCsvId } = tab.tab;
+      let result = await viewer.call({ operation: 'csv.close', workingCsvId });
       while (result.status === 'confirmation-required') {
         const dependentNames = result.impact.dependentComparisons.map(
           (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
@@ -256,12 +252,8 @@ export function App() {
         ]
           .filter(Boolean)
           .join('\n\n');
-        if (!window.confirm(`Close ${tab.csv.source.name}?\n\n${impact}`)) return;
-        result = await viewer.call({
-          operation: 'csv.close',
-          workingCsvId: tab.csv.workingCsvId,
-          confirmedImpact: result.impact,
-        });
+        if (!window.confirm(`Close ${tab.tab.snapshot().workingCsv.source.name}?\n\n${impact}`)) return;
+        result = await viewer.call({ operation: 'csv.close', workingCsvId, confirmedImpact: result.impact });
       }
       if (result.status === 'failed') {
         setOpenError(result.failure.message);
@@ -274,31 +266,11 @@ export function App() {
           event: { kind: 'closed', comparisonId },
         });
       }
-      forgetWorkingCsv(tab.csv.workingCsvId);
+      tab.tab.dispose();
+      dispatchWorkspace({ type: 'close-csv', workingCsvId });
     } catch (error: unknown) {
       setOpenError(error instanceof Error ? error.message : 'Unable to close the Tab.');
     }
-  }
-
-  /** Drops the Tab and its export bookkeeping once the workspace no longer holds the Working CSV. */
-  function forgetWorkingCsv(workingCsvId: string) {
-    dispatchWorkspace({ type: 'close-csv', workingCsvId });
-    setWorkingCsvIdsWithUnexportedChanges((current) => {
-      if (!current.has(workingCsvId)) return current;
-      const next = new Set(current);
-      next.delete(workingCsvId);
-      return next;
-    });
-  }
-
-  function handleUnexportedChangesChange(workingCsvId: string, hasUnexportedChanges: boolean) {
-    setWorkingCsvIdsWithUnexportedChanges((current) => {
-      if (current.has(workingCsvId) === hasUnexportedChanges) return current;
-      const next = new Set(current);
-      if (hasUnexportedChanges) next.add(workingCsvId);
-      else next.delete(workingCsvId);
-      return next;
-    });
   }
 
   function updateComparisonPresentation(comparisonId: string, presentation: ComparisonTabPresentation) {
@@ -369,7 +341,7 @@ export function App() {
             {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}
             {isOpening ? 'Opening...' : 'Open CSV'}
           </Button>
-          {activeCsv ? (
+          {activeCsvTab ? (
             <Button
               type="button"
               variant="outline"
@@ -380,7 +352,7 @@ export function App() {
               Compare…
             </Button>
           ) : null}
-          {activeCsv ? (
+          {activeCsvTab ? (
             <Button type="button" variant="outline" onClick={reopenActiveTab} disabled={isOpening}>
               <RefreshCw />
               Reopen
@@ -405,7 +377,6 @@ export function App() {
             <TabStrip
               tabs={openTabs}
               activeTabId={activeTabId}
-              workingCsvIdsWithUnexportedChanges={workingCsvIdsWithUnexportedChanges}
               onSelectTab={(tabId) => dispatchWorkspace({ type: 'select', tabId })}
               onCloseTab={(tab) => void closeTab(tab)}
             />
@@ -417,24 +388,25 @@ export function App() {
           </div>
           <div className="grid min-h-0 min-w-0">
             {csvTabs.map((tab) => {
-              const workingCsv = tab.csv;
+              const isActive = tab.id === activeTabId;
+              const activeDialectError = isActive ? dialectError : null;
               return (
-                <div
-                  key={workingCsv.workingCsvId}
-                  className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
+                <section
+                  key={tab.id}
+                  className={cn(
+                    'col-start-1 row-start-1 grid min-h-0 min-w-0 gap-3 p-3 md:p-4',
+                    activeDialectError ? 'grid-rows-[auto_1fr]' : 'grid-rows-[1fr]',
+                    !isActive && 'hidden',
+                  )}
+                  aria-labelledby="metadata-title"
                 >
-                  <CsvMetadataView
-                    workingCsv={workingCsv}
-                    dialectError={tab.id === activeTabId ? dialectError : null}
-                    themeMode={themeMode}
-                    exportRequestSequence={
-                      exportRequest?.workingCsvId === workingCsv.workingCsvId ? exportRequest.sequence : 0
-                    }
-                    onUnexportedChangesChange={(hasUnexportedChanges) =>
-                      handleUnexportedChangesChange(workingCsv.workingCsvId, hasUnexportedChanges)
-                    }
-                  />
-                </div>
+                  {activeDialectError ? (
+                    <FieldError className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 font-semibold">
+                      {activeDialectError}
+                    </FieldError>
+                  ) : null}
+                  <CsvGrid tab={tab.tab} themeMode={themeMode} />
+                </section>
               );
             })}
             {comparisonTabs.map((tab) => {

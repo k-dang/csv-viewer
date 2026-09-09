@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType } from 'react';
 import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
@@ -18,6 +18,7 @@ import {
   type ColDef,
   type GridApi,
   type GridReadyEvent,
+  type IDatasource,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
 import {
@@ -37,19 +38,13 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type {
-  CsvEditState,
-  CsvFilterDescriptor,
-  CsvRow,
-  WorkingCsvView,
-} from '@csv-viewer/workspace/csv-viewer';
+import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
-import { createCsvGridDataSource, toCsvFilterDescriptors, type AgFilterModel } from './csv-grid-data-source';
+import type { CsvTab } from '../csv-tab';
+import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
-import { QueryStatusBadge, type QueryState } from './query-status-badge';
+import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
-import { resolveStatsColumnOnOpen } from './csv-stats-state';
-import { useCsvViewer } from '../csv-viewer';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -113,42 +108,23 @@ const csvGridDarkTheme = themeQuartz.withParams({
 const filterDebounceMs = 1500;
 
 export type CsvGridProps = {
-  workingCsv: WorkingCsvView;
+  tab: CsvTab;
   themeMode: 'light' | 'dark';
-  exportRequestSequence?: number;
-  onUnexportedChangesChange?: (hasUnexportedChanges: boolean) => void;
   DataGrid?: ComponentType<AgGridReactProps<CsvRow>>;
 };
 
-export function CsvGrid({
-  workingCsv,
-  themeMode,
-  exportRequestSequence = 0,
-  onUnexportedChangesChange,
-  DataGrid = AgGridReact,
-}: CsvGridProps) {
-  const viewer = useCsvViewer();
+/**
+ * The row grid and toolbar of one CSV Tab. Every fact shown here is read from the Tab, and every
+ * action is a Tab command; this view only translates AG Grid models and keeps the grid's own
+ * caches and selection in step with the Tab.
+ */
+export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps) {
+  const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { workingCsv, editState, editError, exportConfirmation, query, hasActiveQuery, selectedRowIds, stats } =
+    state;
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
-  const [filteredRowCount, setFilteredRowCount] = useState(workingCsv.rowCount);
-  const [displayedTotalRowCount, setDisplayedTotalRowCount] = useState(workingCsv.rowCount);
-  const [hasActiveQuery, setHasActiveQuery] = useState(false);
-  const hasActiveQueryRef = useRef(false);
-  const [queryState, setQueryState] = useState<QueryState>('idle');
-  const [editState, setEditState] = useState<CsvEditState>(workingCsv.editState);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [exportConfirmation, setExportConfirmation] = useState<string | null>(null);
-  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
-  const [search, setSearch] = useState('');
-  const searchRef = useRef(search);
-  const [statsPanelOpen, setStatsPanelOpen] = useState(false);
-  const [statsColumn, setStatsColumn] = useState(workingCsv.columns[0]?.name ?? '');
-  const [focusedColumn, setFocusedColumn] = useState<string | null>(null);
-  const [statsFilters, setStatsFilters] = useState<CsvFilterDescriptor[]>([]);
-  const [statsRefreshKey, setStatsRefreshKey] = useState(0);
-  const requestStateRef = useRef({ latestRequestId: 0 });
-  const workingCsvIdRef = useRef(workingCsv.workingCsvId);
   const revertingCellRef = useRef(false);
-  const handledExportRequestSequenceRef = useRef(0);
+
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
       workingCsv.columns.map((column) => ({
@@ -171,262 +147,69 @@ export function CsvGrid({
     [workingCsv.columns],
   );
 
-  useEffect(() => {
-    searchRef.current = search;
-  }, [search]);
+  // The grid's models are handed to the Tab right before each fetch, so the Tab's query is always
+  // the one the visible rows were loaded with, and the Stats Panel follows the same query.
+  const datasource = useMemo<IDatasource>(
+    () => ({
+      getRows: (params) => {
+        // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
+        tab.setGridQuery(toCsvSortDescriptors(params.sortModel), toCsvFilterDescriptors(params.filterModel as AgFilterModel));
+        tab
+          .rows(params.startRow, Math.max(0, params.endRow - params.startRow))
+          .then((window) => {
+            if (window) params.successCallback(window.rows, window.filteredRowCount);
+          })
+          .catch(() => params.failCallback());
+      },
+    }),
+    [tab],
+  );
 
+  // Edits, history steps, search changes, and Reopen CSV all change what the loaded blocks hold.
   useEffect(() => {
-    onUnexportedChangesChange?.(editState.hasUnexportedChanges);
-  }, [editState.hasUnexportedChanges, onUnexportedChangesChange]);
+    gridApiRef.current?.refreshInfiniteCache();
+  }, [state.revision, query.search]);
 
+  // Reopen CSV starts the Tab's query over; the grid's own sort and filter state follows.
   useEffect(() => {
-    if (editState.hasUnexportedChanges) setExportConfirmation(null);
-  }, [editState.hasUnexportedChanges]);
-
-  useEffect(() => {
-    if (exportRequestSequence <= handledExportRequestSequenceRef.current) return;
-    handledExportRequestSequenceRef.current = exportRequestSequence;
-    void exportCsv();
-  }, [exportRequestSequence]);
-
-  useEffect(() => {
-    workingCsvIdRef.current = workingCsv.workingCsvId;
-    setEditState(workingCsv.editState);
-    setFilteredRowCount(workingCsv.rowCount);
-    setDisplayedTotalRowCount(workingCsv.rowCount);
-    setHasActiveQuery(false);
-    hasActiveQueryRef.current = false;
-    setEditError(null);
-    setExportConfirmation(null);
-    setSelectedRowIds([]);
-    setStatsPanelOpen(false);
-    setStatsColumn(workingCsv.columns[0]?.name ?? '');
-    setFocusedColumn(null);
-    setStatsFilters([]);
-    setStatsRefreshKey((current) => current + 1);
-    void refreshEditState();
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.applyColumnState({ defaultState: { sort: null } });
+    api.setFilterModel(null);
   }, [workingCsv]);
+
+  // The Tab clears its selection after every mutation; the grid drops its highlighted rows too.
+  useEffect(() => {
+    if (selectedRowIds.length === 0) gridApiRef.current?.deselectAll();
+  }, [selectedRowIds]);
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
-    const datasource = createCsvGridDataSource(
-      workingCsv,
-      viewer,
-      handleFilteredRowCount,
-      searchRef.current,
-      requestStateRef.current,
-      setQueryState,
-    );
-    event.api.setGridOption('datasource', datasource);
   }
-
-  useEffect(() => {
-    const api = gridApiRef.current;
-
-    if (!api) {
-      return;
-    }
-
-    updateActiveQueryState(hasGridSortOrFilters(api) || search.trim().length > 0);
-    setStatsFilters(getCsvFilters(api));
-    setStatsRefreshKey((current) => current + 1);
-    const datasource = createCsvGridDataSource(
-      workingCsv,
-      viewer,
-      handleFilteredRowCount,
-      search,
-      requestStateRef.current,
-      setQueryState,
-    );
-    api.setGridOption('datasource', datasource);
-  }, [viewer, search, workingCsv]);
 
   function clearQuery() {
     const api = gridApiRef.current;
-
-    setSearch('');
-
-    if (!api) {
-      return;
-    }
-
-    api.applyColumnState({
-      defaultState: { sort: null },
-    });
+    tab.clearQuery();
+    if (!api) return;
+    api.applyColumnState({ defaultState: { sort: null } });
     api.setFilterModel(null);
-    setStatsFilters([]);
-    setStatsRefreshKey((current) => current + 1);
-    setFilteredRowCount(displayedTotalRowCount);
-    updateActiveQueryState(false);
-    const datasource = createCsvGridDataSource(
-      workingCsv,
-      viewer,
-      handleFilteredRowCount,
-      '',
-      requestStateRef.current,
-      setQueryState,
-    );
-    api.setGridOption('datasource', datasource);
-  }
-
-  function refreshQuery(event: { api: GridApi<CsvRow> }) {
-    updateActiveQueryState(hasGridSortOrFilters(event.api) || searchRef.current.trim().length > 0);
-    setStatsFilters(getCsvFilters(event.api));
-    setStatsRefreshKey((current) => current + 1);
-    event.api.refreshInfiniteCache();
-  }
-
-  function updateActiveQueryState(nextHasActiveQuery: boolean) {
-    hasActiveQueryRef.current = nextHasActiveQuery;
-    setHasActiveQuery(nextHasActiveQuery);
-  }
-
-  function handleFilteredRowCount(rowCount: number) {
-    setFilteredRowCount(rowCount);
-
-    if (!hasActiveQueryRef.current) {
-      setDisplayedTotalRowCount(rowCount);
-    }
   }
 
   async function onCellValueChanged(event: CellValueChangedEvent<CsvRow>) {
-    if (revertingCellRef.current) {
-      return;
-    }
-
+    if (revertingCellRef.current) return;
     const rowId = event.data?.[csvInternalRowIdField];
     const column = event.colDef.field;
+    if (!rowId || !column) return;
 
-    if (!rowId || !column) {
-      return;
-    }
-
-    try {
-      setEditError(null);
-      const result = await viewer.call({
-        operation: 'csv.edit-cell',
-        workingCsvId: workingCsv.workingCsvId,
-        rowId,
-        column,
-        value: String(event.newValue ?? ''),
-      });
-      setEditState(result);
-      event.api.refreshInfiniteCache();
-      setStatsRefreshKey((current) => current + 1);
-      setSelectedRowIds([]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to edit cell.';
-      setEditError(message);
-      revertingCellRef.current = true;
-      event.node.setDataValue(column, event.oldValue);
-      revertingCellRef.current = false;
-    }
-  }
-
-  /** Responses that arrive after the grid moved to another Working CSV describe the old one. */
-  async function refreshEditState() {
-    const { workingCsvId } = workingCsv;
-    try {
-      const editState = await viewer.call({ operation: 'csv.get-edit-state', workingCsvId });
-      if (workingCsvIdRef.current !== workingCsvId) return;
-      setEditState(editState);
-    } catch (error) {
-      if (workingCsvIdRef.current !== workingCsvId) return;
-      const message = error instanceof Error ? error.message : 'Unable to read edit state.';
-      setEditError(message);
-    }
-  }
-
-  async function runHistoryAction(action: 'undo' | 'redo') {
-    const api = gridApiRef.current;
-
-    try {
-      setEditError(null);
-      const nextEditState =
-        action === 'undo'
-          ? await viewer.call({ operation: 'csv.undo', workingCsvId: workingCsv.workingCsvId })
-          : await viewer.call({ operation: 'csv.redo', workingCsvId: workingCsv.workingCsvId });
-      setEditState(nextEditState);
-      api?.refreshInfiniteCache();
-      setStatsRefreshKey((current) => current + 1);
-      setSelectedRowIds([]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Unable to ${action} edit.`;
-      setEditError(message);
-    }
-  }
-
-  async function deleteSelectedRows() {
-    const api = gridApiRef.current;
-
-    if (selectedRowIds.length === 0) {
-      return;
-    }
-
-    try {
-      setEditError(null);
-      setEditState(
-        await viewer.call({
-          operation: 'csv.delete-rows',
-          workingCsvId: workingCsv.workingCsvId,
-          rowIds: selectedRowIds,
-        }),
-      );
-      api?.deselectAll();
-      setSelectedRowIds([]);
-      api?.refreshInfiniteCache();
-      setStatsRefreshKey((current) => current + 1);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to delete selected rows.';
-      setEditError(message);
-    }
-  }
-
-  async function insertRow(placement: 'above' | 'below' | 'append') {
-    const api = gridApiRef.current;
-
-    try {
-      setEditError(null);
-      setEditState(
-        await viewer.call({
-          operation: 'csv.insert-row',
-          workingCsvId: workingCsv.workingCsvId,
-          placement,
-          rowIds: selectedRowIds,
-          hasActiveQuery,
-        }),
-      );
-      api?.deselectAll();
-      setSelectedRowIds([]);
-      api?.refreshInfiniteCache();
-      setStatsRefreshKey((current) => current + 1);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to insert row.';
-      setEditError(message);
-    }
-  }
-
-  async function exportCsv() {
-    try {
-      setEditError(null);
-      setExportConfirmation(null);
-      const result = await viewer.call({
-        operation: 'csv.export',
-        workingCsvId: workingCsv.workingCsvId,
-      });
-
-      if (result.status === 'cancelled') return;
-
-      setEditState(result.editState);
-      setExportConfirmation(viewer.capabilities.exportCsvSuccessMessage);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to export CSV.';
-      setEditError(message);
-    }
+    const accepted = await tab.editCell(rowId, column, String(event.newValue ?? ''));
+    if (accepted) return;
+    revertingCellRef.current = true;
+    event.node.setDataValue(column, event.oldValue);
+    revertingCellRef.current = false;
   }
 
   function onSelectionChanged(event: SelectionChangedEvent<CsvRow>) {
-    setSelectedRowIds(
+    tab.setSelection(
       event.api
         .getSelectedRows()
         .map((row) => row[csvInternalRowIdField])
@@ -436,32 +219,10 @@ export function CsvGrid({
 
   function onCellFocused(event: CellFocusedEvent<CsvRow>) {
     const column = event.column instanceof Object ? event.column.getColId() : event.column ?? undefined;
-
-    if (column) {
-      setFocusedColumn(column);
-    }
+    if (column) tab.setFocusedColumn(column);
   }
 
-  function toggleStatsPanel() {
-    setStatsPanelOpen((open) => {
-      const nextOpen = !open;
-
-      if (nextOpen) {
-        setStatsColumn((currentColumn) => {
-          return resolveStatsColumnOnOpen({
-            columns: workingCsv.columns,
-            currentColumn,
-            focusedColumn,
-          });
-        });
-      }
-
-      return nextOpen;
-    });
-  }
-
-  const hasSearch = search.trim().length > 0;
-  const canClearQuery = hasActiveQuery || hasSearch || filteredRowCount !== workingCsv.rowCount;
+  const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
   const canInsertRelative = !hasActiveQuery && selectedRowIds.length === 1;
   const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
 
@@ -486,7 +247,7 @@ export function CsvGrid({
               </h2>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                 <span>
-                  {formatNumber(filteredRowCount)} visible of {formatNumber(displayedTotalRowCount)} rows
+                  {formatNumber(state.filteredRowCount)} visible of {formatNumber(state.totalRowCount)} rows
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <Table2 className="size-3.5" aria-hidden="true" />
@@ -511,13 +272,13 @@ export function CsvGrid({
             </div>
           </div>
           <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-            <QueryStatusBadge state={queryState} />
+            <QueryStatusBadge state={state.queryStatus} />
             <div className="flex shrink-0 items-center gap-1">
               <Button
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void insertRow('above')}
+                onClick={() => void tab.insertRow('above')}
                 disabled={!canInsertRelative}
                 title="Insert row above"
                 aria-label="Insert row above"
@@ -528,7 +289,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void insertRow('below')}
+                onClick={() => void tab.insertRow('below')}
                 disabled={!canInsertRelative}
                 title="Insert row below"
                 aria-label="Insert row below"
@@ -539,7 +300,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void insertRow('append')}
+                onClick={() => void tab.insertRow('append')}
                 disabled={!canAppendRow}
                 title="Append row"
                 aria-label="Append row"
@@ -550,7 +311,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void deleteSelectedRows()}
+                onClick={() => void tab.deleteSelectedRows()}
                 disabled={selectedRowIds.length === 0}
                 title="Delete selected rows"
                 aria-label="Delete selected rows"
@@ -561,7 +322,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void exportCsv()}
+                onClick={() => void tab.export()}
                 title="Export CSV"
                 aria-label="Export CSV"
               >
@@ -571,7 +332,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void runHistoryAction('undo')}
+                onClick={() => void tab.undo()}
                 disabled={!editState.canUndo}
                 title="Undo edit"
                 aria-label="Undo edit"
@@ -582,7 +343,7 @@ export function CsvGrid({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => void runHistoryAction('redo')}
+                onClick={() => void tab.redo()}
                 disabled={!editState.canRedo}
                 title="Redo edit"
                 aria-label="Redo edit"
@@ -591,11 +352,11 @@ export function CsvGrid({
               </Button>
               <Button
                 type="button"
-                variant={statsPanelOpen ? 'default' : 'outline'}
+                variant={stats.open ? 'default' : 'outline'}
                 size="icon"
-                onClick={toggleStatsPanel}
-                title={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
-                aria-label={statsPanelOpen ? 'Close stats panel' : 'Open stats panel'}
+                onClick={() => tab.toggleStats()}
+                title={stats.open ? 'Close stats panel' : 'Open stats panel'}
+                aria-label={stats.open ? 'Close stats panel' : 'Open stats panel'}
               >
                 <BarChart3 />
               </Button>
@@ -612,8 +373,8 @@ export function CsvGrid({
                 id="global-search"
                 className="w-full min-w-0 bg-card pr-3 pl-9"
                 type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                value={query.search}
+                onChange={(event) => tab.setSearch(event.target.value)}
                 placeholder="Search all columns"
               />
             </div>
@@ -637,6 +398,7 @@ export function CsvGrid({
             }}
             getRowId={(params) => params.data[csvInternalRowIdField]}
             rowModelType="infinite"
+            datasource={datasource}
             cacheBlockSize={100}
             maxBlocksInCache={6}
             rowBuffer={8}
@@ -654,36 +416,13 @@ export function CsvGrid({
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}
             onCellFocused={onCellFocused}
-            onSortChanged={refreshQuery}
-            onFilterChanged={refreshQuery}
             overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
           />
         </div>
-        {statsPanelOpen && statsColumn ? (
-          <CsvStatsPanel
-            workingCsv={workingCsv}
-            selectedColumn={statsColumn}
-            filters={statsFilters}
-            search={search.trim()}
-            refreshKey={statsRefreshKey}
-            onColumnChange={setStatsColumn}
-            onClose={() => setStatsPanelOpen(false)}
-          />
-        ) : null}
+        {stats.open ? <CsvStatsPanel tab={tab} /> : null}
       </div>
     </div>
   );
-}
-
-function hasGridSortOrFilters(api: GridApi<CsvRow>): boolean {
-  const hasSort = api.getColumnState().some((column) => Boolean(column.sort));
-  const hasFilter = Object.keys(api.getFilterModel()).length > 0;
-  return hasSort || hasFilter;
-}
-
-function getCsvFilters(api: GridApi<CsvRow>): CsvFilterDescriptor[] {
-  // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
-  return toCsvFilterDescriptors(api.getFilterModel() as AgFilterModel);
 }
 
 function getColumnFilter(columnType: string): string {
