@@ -2,6 +2,8 @@
 
 A local desktop and web app for opening, inspecting, filtering, and cleaning CSV files without uploading them anywhere.
 
+**[Try it in your browser](https://csv-viewer.vercel.app)** - no install, no upload.
+
 <p align="center">
   <img src="images/app.png" alt="CSV Viewer showing a large CSV file with metadata, delimiter controls, filtering, and an editable data grid" width="900">
 </p>
@@ -103,13 +105,21 @@ Feature validation belongs in deterministic tests at the data-service, workspace
 
 ## Web deployment
 
-Import the repository into Vercel and leave the Root Directory at the repository
-root. [vercel.json](vercel.json) sets the install and web build commands, publishes
+The web runtime is deployed at [csv-viewer.vercel.app](https://csv-viewer.vercel.app).
+Vercel builds every push to `main` from the repository root.
+
+[vercel.json](vercel.json) sets the install and web build commands, publishes
 `apps/web/dist-web`, and applies the security and cache headers using
 [Vercel's project configuration](https://vercel.com/docs/project-configuration/vercel-json).
+The install command filters to `@csv-viewer/web...`, so only the web application and
+its workspace dependencies are installed. [.vercelignore](.vercelignore) keeps
+desktop-only and development trees out of the upload.
+
+The deployment serves static files only. There are no serverless functions, no
+backend, and no analytics: Vercel Web Analytics and Speed Insights stay disabled.
+CSV data never leaves the user's device.
 
 For a local build, run `pnpm install --frozen-lockfile` and `pnpm run build:web`.
-Keep Vercel Web Analytics and Speed Insights disabled. CSV data stays on the user's device.
 
 ## Packaging Notes
 

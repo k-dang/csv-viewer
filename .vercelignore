@@ -1,0 +1,21 @@
+# Mirrors .gitignore so CLI deploys upload the same fileset as git-based deploys.
+node_modules/
+**/dist-renderer/
+**/dist-electron/
+**/dist-web/
+release/
+.vite/
+*.log
+fixtures/
+test-results/
+*.tsbuildinfo
+
+# Dev-only trees the web build never reads. apps/desktop stays: pnpm-workspace
+# globs apps/* and --frozen-lockfile fails on a missing workspace project.
+e2e/
+images/
+assets/
+tools/
+.agents/
+.claude/
+.github/
