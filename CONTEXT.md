@@ -104,6 +104,10 @@ _Avoid_: Active column, target column
 One persistent workspace in the viewer: either a Working CSV or an Aligned Comparison. Opening a CSV Source always creates and focuses a CSV Tab; a CSV Source whose identity is known can be open in at most one CSV Tab, and opening it again focuses its existing CSV Tab. When identity cannot be established, a new selection is a new CSV Source.
 _Avoid_: Document, window, temporary view
 
+**CSV Tab**:
+A Tab that presents one Working CSV and retains its query, edit, and Stats Panel state while the user switches Tabs. Reopening changes the Working CSV data within the same CSV Tab.
+_Avoid_: File view, temporary CSV view
+
 **Working CSV**:
 The CSV data of one CSV Tab, including cell edits, inserted rows, and deleted rows. Each CSV Tab has its own Working CSV, independent of other Tabs. Column Value Counts are calculated from the Working CSV, not from its CSV Source.
 _Avoid_: Original CSV, source file
