@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent, OpenCsvResult, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import { App } from './App';
@@ -32,6 +33,31 @@ afterEach(() => {
 });
 
 describe('App CsvViewer intents', () => {
+  it('ignores a repeated Open intent while the first selection is pending', async () => {
+    const pending = Promise.withResolvers<OpenCsvResult>();
+    const open = vi.fn(() => pending.promise);
+    const listeners = new Set<(event: CsvViewerEvent) => void>();
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.open': open, 'csv.get-recent-sources': async () => [] },
+      onEvent: (listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    });
+    const rendered = render(<StrictMode><CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider></StrictMode>);
+    expect(listeners.size).toBe(1);
+    act(() => {
+      for (const listener of listeners) {
+        listener({ type: 'intent', intent: 'open-csv' });
+        listener({ type: 'intent', intent: 'open-csv' });
+      }
+    });
+    await act(async () => pending.resolve({ status: 'cancelled' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+    expect(listeners.size).toBe(0);
+  });
+
   it.each(['source-bytes', 'workspace-source-bytes'] as const)('shows the %s capacity outcome while keeping the existing Tab', async (limit) => {
     const workingCsv = workingCsvFixture();
     const message = limit === 'source-bytes'

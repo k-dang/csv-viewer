@@ -3,11 +3,11 @@ import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ComparisonPhase, ComparisonSummary, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
-import type { ComparisonTabPresentation } from '../workspace-tabs';
+import type { ComparisonTabPresentation } from '../renderer-workspace';
 import { ComparisonGrid } from './comparison-grid';
 import { useCsvViewer } from '../csv-viewer';
 
-export type { ComparisonTabPresentation } from '../workspace-tabs';
+export type { ComparisonTabPresentation } from '../renderer-workspace';
 
 export function ComparisonTab({
   comparison,
