@@ -997,14 +997,24 @@ async function runType(options) {
   });
 }
 
+// CDP modifier bits for `press --key Control+c` style chords.
+const keyModifierBits = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+
 async function runPress(options) {
   const run = await requireCurrentRun();
-  const key = String(options.key || '');
-  if (!key) fail('press requires --key');
+  const chord = String(options.key || '');
+  if (!chord) fail('press requires --key');
+  const parts = chord.split('+');
+  const key = parts.pop();
+  let modifiers = 0;
+  for (const part of parts) {
+    if (!(part in keyModifierBits)) fail(`Unknown key modifier: ${part}`);
+    modifiers |= keyModifierBits[part];
+  }
   await withCdp(run, async (session) => {
-    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key });
-    await session.send('Input.dispatchKeyEvent', { type: 'keyUp', key });
-    printJson({ status: 'ok', key });
+    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers });
+    await session.send('Input.dispatchKeyEvent', { type: 'keyUp', key, modifiers });
+    printJson({ status: 'ok', key: chord });
   });
 }
 

@@ -3,6 +3,7 @@ import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
   type CellFocusedEvent,
+  type CellKeyDownEvent,
   CellStyleModule,
   ColumnApiModule,
   DateFilterModule,
@@ -232,6 +233,12 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     if (column) tab.setFocusedColumn(column);
   }
 
+  function onCellKeyDown(event: CellKeyDownEvent<CsvRow>) {
+    if (!isCopyColumnShortcut(event.event, event.api.getEditingCells().length > 0)) return;
+    event.event?.preventDefault();
+    void tab.copyFocusedColumn();
+  }
+
   const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
   const canInsertRelative = !hasActiveQuery && selectedRowIds.length === 1;
   const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
@@ -431,6 +438,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}
             onCellFocused={onCellFocused}
+            onCellKeyDown={onCellKeyDown}
             overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
           />
         </div>
@@ -438,6 +446,16 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
       </div>
     </div>
   );
+}
+
+/**
+ * Ctrl+C or Cmd+C on a focused cell is Copy column. An open editor and text the user selected
+ * across cells keep the browser's own copy.
+ */
+export function isCopyColumnShortcut(event: Event | null | undefined, editing: boolean): boolean {
+  if (!(event instanceof KeyboardEvent)) return false;
+  if (event.key !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
+  return !editing && window.getSelection()?.isCollapsed !== false;
 }
 
 function getColumnFilter(columnType: string): string {

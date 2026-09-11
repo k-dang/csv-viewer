@@ -188,13 +188,13 @@ describe('CsvTab', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-values': getColumnValues } }), workingCsv);
 
-    await expect(tab.copyFocusedColumn()).resolves.toBeNull();
+    await tab.copyFocusedColumn();
     expect(getColumnValues).not.toHaveBeenCalled();
 
     tab.setFocusedColumn('age');
     tab.setSearch('ada');
     tab.setGridQuery([{ column: 'age', direction: 'desc' }], []);
-    await expect(tab.copyFocusedColumn()).resolves.toBe(3);
+    await tab.copyFocusedColumn();
 
     expect(getColumnValues).toHaveBeenCalledWith({
       operation: 'csv.get-column-values',
@@ -205,6 +205,11 @@ describe('CsvTab', () => {
       search: 'ada',
     });
     expect(writeText).toHaveBeenCalledWith('30\n\n41');
+    expect(tab.snapshot().copiedColumn).toEqual({ column: 'age', count: 3 });
+
+    // The notice describes one column under one query; either moving retires it.
+    tab.setFocusedColumn('name');
+    expect(tab.snapshot().copiedColumn).toBeNull();
     vi.unstubAllGlobals();
   });
 });

@@ -46,6 +46,8 @@ export type CsvTabState = {
   revision: number;
   selectedRowIds: string[];
   focusedColumn: string | null;
+  /** The last Copy column and how many values it took. Cleared when the column, query, or data moves. */
+  copiedColumn: { column: string; count: number } | null;
   stats: CsvTabStats;
 };
 
@@ -119,7 +121,7 @@ export class CsvTab {
 
   setFocusedColumn(column: string): void {
     if (column === this.state.focusedColumn) return;
-    this.set({ focusedColumn: column });
+    this.set({ focusedColumn: column, copiedColumn: null });
   }
 
   /** Opening defaults the Stats Column to the focused grid column, else the first CSV column. */
@@ -224,13 +226,12 @@ export class CsvTab {
 
   /**
    * Copies the focused column under the current query to the clipboard, one value per line, nulls
-   * as empty lines. Resolves the value count, or null when there is no focused column or the copy
-   * failed (the failure is shown like an edit error).
+   * as empty lines. No-op without a focused column; a failure is shown like an edit error.
    */
-  async copyFocusedColumn(): Promise<number | null> {
+  async copyFocusedColumn(): Promise<void> {
     const { focusedColumn, query, workingCsv } = this.state;
-    if (!focusedColumn) return null;
-    this.set({ editError: null });
+    if (!focusedColumn) return;
+    this.set({ editError: null, copiedColumn: null });
     try {
       const result = await this.viewer.call({
         operation: 'csv.get-column-values',
@@ -241,10 +242,12 @@ export class CsvTab {
         search: query.search.trim(),
       });
       await navigator.clipboard.writeText(result.values.map((value) => value ?? '').join('\n'));
-      return result.values.length;
+      // Focus may have moved during the copy; the notice belongs to the column that was copied.
+      if (this.state.focusedColumn === focusedColumn) {
+        this.set({ copiedColumn: { column: focusedColumn, count: result.values.length } });
+      }
     } catch (error) {
       this.fail(error, 'Unable to copy column.');
-      return null;
     }
   }
 
@@ -271,7 +274,13 @@ export class CsvTab {
       const editState = await operation();
       if (this.disposed) return true;
       this.queryVersion += 1;
-      this.set({ editState, revision: this.state.revision + 1, selectedRowIds: [], exportConfirmation: null });
+      this.set({
+        editState,
+        revision: this.state.revision + 1,
+        selectedRowIds: [],
+        exportConfirmation: null,
+        copiedColumn: null,
+      });
       this.refreshStats();
       return true;
     } catch (error) {
@@ -288,7 +297,7 @@ export class CsvTab {
   private setQuery(query: CsvTabQuery): void {
     this.queryVersion += 1;
     const hasActiveQuery = query.sort.length > 0 || query.filters.length > 0 || query.search.trim().length > 0;
-    this.set({ query, hasActiveQuery });
+    this.set({ query, hasActiveQuery, copiedColumn: null });
     this.refreshStats();
   }
 
@@ -346,6 +355,7 @@ function freshState(workingCsv: WorkingCsvView): CsvTabState {
     revision: 0,
     selectedRowIds: [],
     focusedColumn: null,
+    copiedColumn: null,
     stats: { open: false, column: workingCsv.columns[0]?.name ?? '', result: null },
   };
 }
