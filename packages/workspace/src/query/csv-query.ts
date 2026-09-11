@@ -175,7 +175,7 @@ export function buildRowsQuery({
   offset: number;
 }) {
   const scope = buildCountScopeWhere({ columns, filters, search });
-  const orderSql = buildOrderSql(sort, columns);
+  const orderSql = buildOrderSql(sort, new Set(columns.map((column) => column.name)));
   const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
   const rowProjectionSql = [
     quoteIdentifier(csvInternalRowIdField),
@@ -204,11 +204,12 @@ export function buildColumnValuesQuery({
   search: string;
   sort: CsvSortDescriptor[];
 }): CsvStatement {
-  assertKnownColumn(column, new Set(columns.map((knownColumn) => knownColumn.name)));
+  const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
+  assertKnownColumn(column, knownColumns);
   const scope = buildCountScopeWhere({ columns, filters, search });
 
   return {
-    sql: `SELECT ${quoteIdentifier(column)} AS column_value FROM ${quoteIdentifier(tableName)}${scope.whereSql}${buildOrderSql(sort, columns)}`,
+    sql: `SELECT ${quoteIdentifier(column)} AS column_value FROM ${quoteIdentifier(tableName)}${scope.whereSql}${buildOrderSql(sort, knownColumns)}`,
     values: scope.values,
   };
 }
@@ -278,8 +279,7 @@ function buildCountScopeWhere({
 }
 
 /** The grid's sort, else source order, so every query over the row window agrees on row order. */
-function buildOrderSql(sort: CsvSortDescriptor[], columns: CsvColumn[]): string {
-  const knownColumns = new Set(columns.map((column) => column.name));
+function buildOrderSql(sort: CsvSortDescriptor[], knownColumns: Set<string>): string {
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
   return orderClauses.length > 0
     ? ` ORDER BY ${orderClauses.join(', ')}`

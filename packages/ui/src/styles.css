@@ -63,8 +63,6 @@
   --spacing: 0.25rem;
   --comparison-baseline-accent: oklch(0.55 0.21 17);
   --comparison-candidate-accent: oklch(0.5 0.16 154);
-  /* Half the grid theme's selected-row tint, so a selected row still reads across the focused column. */
-  --csv-column-focus: rgba(15, 118, 110, 0.06);
 }
 
 .dark {
@@ -80,7 +78,6 @@
   --secondary-foreground: oklch(0.9850 0 0);
   --comparison-baseline-accent: oklch(0.72 0.18 17);
   --comparison-candidate-accent: oklch(0.72 0.16 154);
-  --csv-column-focus: rgba(94, 234, 212, 0.08);
   --muted: oklch(0.2690 0 0);
   --muted-foreground: oklch(0.7080 0 0);
   --accent: oklch(0.3710 0 0);

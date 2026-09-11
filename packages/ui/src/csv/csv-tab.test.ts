@@ -207,7 +207,7 @@ describe('CsvTab', () => {
     expect(writeText).toHaveBeenCalledWith('30\n\n41');
     expect(tab.snapshot().copiedColumn).toEqual({ column: 'age', count: 3 });
 
-    tab.setFocusedColumn('name');
+    tab.setSearch('grace');
     expect(tab.snapshot().copiedColumn).toBeNull();
     vi.unstubAllGlobals();
   });

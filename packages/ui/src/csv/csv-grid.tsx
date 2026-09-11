@@ -84,6 +84,9 @@ const csvGridLightTheme = themeQuartz.withParams({
   wrapperBorderRadius: 8,
 });
 
+/** Half of each theme's selectedRowBackgroundColor, so a selected row still reads across the focused column. */
+const csvColumnFocusColor = { light: 'rgba(15, 118, 110, 0.06)', dark: 'rgba(94, 234, 212, 0.08)' };
+
 const csvGridDarkTheme = themeQuartz.withParams({
   accentColor: '#5eead4',
   backgroundColor: '#171717',
@@ -233,8 +236,10 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     if (column) tab.setFocusedColumn(column);
   }
 
+  // An open editor and text the user selected across cells keep the browser's own Ctrl+C.
   function onCellKeyDown({ event, api }: CellKeyDownEvent<CsvRow>) {
-    if (!event || !isCopyColumnShortcut(event, api.getEditingCells().length > 0)) return;
+    if (!event || !isCopyColumnShortcut(event)) return;
+    if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;
     event.preventDefault();
     void tab.copyFocusedColumn();
   }
@@ -407,7 +412,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           {focusedColumn ? (
             // Tints the Column Bar's column without rebuilding columnDefs on every focus change.
-            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: var(--csv-column-focus); }`}</style>
+            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: ${csvColumnFocusColor[themeMode]}; }`}</style>
           ) : null}
           <DataGrid
             key={workingCsv.workingCsvId}
@@ -448,14 +453,10 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   );
 }
 
-/**
- * Ctrl+C or Cmd+C on a focused cell is Copy column. An open editor and text the user selected
- * across cells keep the browser's own copy.
- */
-export function isCopyColumnShortcut(event: Event, editing: boolean): boolean {
+/** Ctrl+C or Cmd+C with no other modifier. */
+export function isCopyColumnShortcut(event: Event): boolean {
   if (!(event instanceof KeyboardEvent)) return false;
-  if (event.key !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
-  return !editing && window.getSelection()?.isCollapsed !== false;
+  return event.key === 'c' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
 function getColumnFilter(columnType: string): string {

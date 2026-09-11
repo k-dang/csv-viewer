@@ -353,10 +353,8 @@ export class WorkingCsvStore {
     }
   }
 
-  async getColumnValues(request: CsvColumnValuesRequest): Promise<CsvColumnValues> {
-    const lease = this.acquireWorkingCsvLease(request.workingCsvId);
-    try {
-      const state = lease.state;
+  getColumnValues(request: CsvColumnValuesRequest): Promise<CsvColumnValues> {
+    return this.withWorkingCsvLease(request.workingCsvId, async (state) => {
       const query = buildColumnValuesQuery({
         tableName: state.tableName,
         columns: state.metadata.columns,
@@ -372,9 +370,7 @@ export class WorkingCsvStore {
         column: request.column,
         values: rows.map((row) => normalizeCellValue(row.column_value)),
       };
-    } finally {
-      await lease.release();
-    }
+    });
   }
 
   async getColumnValueCounts(request: CsvColumnValueCountsRequest): Promise<CsvColumnValueCounts> {

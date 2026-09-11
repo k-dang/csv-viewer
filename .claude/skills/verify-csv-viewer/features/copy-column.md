@@ -6,7 +6,7 @@ The Column Bar sits between the toolbar and the row grid. It names the focused c
 
 - `column-focus` names the column of the last clicked cell and tints that column in the grid.
 - `column-copy` copies the focused column under the current sort, filters, and global search, from the `Copy column` button or Ctrl+C (Cmd+C) on a focused cell.
-- `column-notice` confirms with `Copied N` and a check icon until the focused column, the query, or the data changes.
+- `column-notice` confirms with `Copied N` until the focused column, the query, or the data changes.
 
 ## How to get to it (user POV)
 
@@ -23,7 +23,7 @@ Preconditions:
 
 - **Idle.** The text `Select a cell to copy its column.` is visible and no `Copy column` button exists.
 - **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email 5 values`. The `email` column, header included, is tinted.
-- **Copy.** Run `click --role button --name "Copy column"`. Wait for `Copied 5`. The button icon is a check.
+- **Copy.** Run `click --role button --name "Copy column"`. Wait for `Copied 5`.
 - **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, `email 5 values`, `Copied 5`, and the tinted column.
 - **Shortcut.** Run `click --role gridcell --name "Ada Lovelace"` (the notice clears because the column changed), then `press --key "Control+c"`. Wait for `Copied 5`.
 - **Editing keeps its own copy.** Run `click --role gridcell --name "Grace Hopper" --double`, then `press --key "Control+c"`. `text` contains no `Copied`. Run `press --key Escape`.

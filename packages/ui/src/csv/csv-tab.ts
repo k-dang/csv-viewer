@@ -46,7 +46,7 @@ export type CsvTabState = {
   revision: number;
   selectedRowIds: string[];
   focusedColumn: string | null;
-  /** The last Copy column and how many values it took. Cleared when the column, query, or data moves. */
+  /** The last Copy column and how many values it took. Cleared when the query or the data moves. */
   copiedColumn: { column: string; count: number } | null;
   stats: CsvTabStats;
 };
@@ -121,7 +121,7 @@ export class CsvTab {
 
   setFocusedColumn(column: string): void {
     if (column === this.state.focusedColumn) return;
-    this.set({ focusedColumn: column, copiedColumn: null });
+    this.set({ focusedColumn: column });
   }
 
   /** Opening defaults the Stats Column to the focused grid column, else the first CSV column. */
@@ -242,10 +242,7 @@ export class CsvTab {
         search: query.search.trim(),
       });
       await navigator.clipboard.writeText(result.values.map((value) => value ?? '').join('\n'));
-      // Focus may have moved during the copy; the notice belongs to the column that was copied.
-      if (this.state.focusedColumn === focusedColumn) {
-        this.set({ copiedColumn: { column: focusedColumn, count: result.values.length } });
-      }
+      this.set({ copiedColumn: { column: focusedColumn, count: result.values.length } });
     } catch (error) {
       this.fail(error, 'Unable to copy column.');
     }
