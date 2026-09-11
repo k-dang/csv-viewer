@@ -31,10 +31,23 @@ Desktop opens CSV Sources through the Electron main process and queries them wit
 
 The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose the React product from `packages/ui/` with the runtime-neutral CSV module from `packages/workspace/`. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. Desktop supplies Electron and native DuckDB adapters. Web supplies browser and DuckDB-Wasm adapters.
 
+Shared source is grouped by responsibility:
+
+- `packages/ui/src/app/` owns application composition and renderer workspace lifecycle.
+- `packages/ui/src/csv/` contains CSV Tab state, the grid, dialect controls, and Stats Panel.
+- `packages/ui/src/comparison/` contains Comparison views and grid data access.
+- `packages/ui/src/components/ui/` contains shared visual primitives.
+- `packages/workspace/src/working-csv/` owns Working CSV storage, edit history, and export serialization.
+- `packages/workspace/src/comparison/` owns Comparison lifecycle, execution, key rules, and result projection.
+- `packages/workspace/src/query/` contains CSV query generation and result normalization.
+
+Workspace composition, the public product contract, and runtime adapter interfaces stay at `packages/workspace/src/`. Tests stay beside their feature code; package exports provide stable import paths for consumers.
+
 ### Workspace boundaries
 
 - Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.
 - `packages/ui` depends on the `CsvViewer` interface, not a runtime implementation. `packages/workspace` exposes explicit subpaths instead of a barrel export.
+- The persistent renderer workspace owns Tab lifecycle and viewer events for both applications. App displays its snapshot; each CSV Tab owns its query, edits, export, and Stats Panel state.
 - Focused unit tests stay beside the source they cover. Runtime-neutral contract definitions live in `packages/workspace/test/contract/`, and each application runs them from its own `integration/` directory with its runtime adapters.
 - Vite consumes the `packages/workspace` TypeScript source in the Electron main, renderer, and web bundles.
 - Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
@@ -65,7 +78,7 @@ pnpm run package
 - `build:web` creates `apps/web/dist-web/`, including the self-hosted Worker and Wasm module.
 - `typecheck` checks both applications and both shared packages.
 - `test` runs the Vitest suite covering the workspace seam, editing, Comparison, runtime adapters, and CSV Tab behavior.
-- `test:browser` starts the web app and runs one Playwright test in Chromium: open a CSV, edit a cell, and verify the downloaded export. Install Chromium once with `pnpm exec playwright install chromium`, or add `--with-deps` on Linux. Use `pnpm test:browser --headed` to watch the test. CI runs the same test and retains failure screenshots.
+- `test:browser` starts the web app and runs Chromium tests for open/edit/export, delayed Reopen delivery after close, and multi-Tab Comparison closure. Install Chromium once with `pnpm exec playwright install chromium`, or add `--with-deps` on Linux. Use `pnpm test:browser --headed` to watch the tests. CI runs the same suite and retains failure screenshots.
 - `build` runs typecheck and lint, then builds both applications.
 - `package` builds the app and creates platform installers under `release/`.
 

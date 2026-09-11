@@ -16,7 +16,7 @@ import type {
   WorkingCsvView,
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
-import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison-executor';
+import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';

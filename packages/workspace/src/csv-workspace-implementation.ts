@@ -1,7 +1,7 @@
-import type { ComparisonExecutor } from './comparison-executor';
+import type { ComparisonExecutor } from './comparison/comparison-executor';
 import type { WorkspaceDatabase } from './database';
-import { CsvComparisonService } from './csv-comparison-service';
-import { WorkingCsvStore } from './working-csv-store';
+import { CsvComparisonService } from './comparison/csv-comparison-service';
+import { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 import type {
   BeginComparisonResult,

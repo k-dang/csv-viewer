@@ -16,7 +16,7 @@ import {
   type ConfirmWorkspaceCloseOutcome,
 } from '../../src/csv-viewer';
 
-import type { ComparisonExecutor } from '../../src/comparison-executor';
+import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
 
 /**
  * User-observable setup around CsvViewer. Engine-specific source and export mechanics stay in the

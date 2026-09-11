@@ -4,6 +4,7 @@ node_modules/
 **/dist-web/
 release/
 .vite/
+.vercel/
 *.log
 fixtures/validation/
 .agents/skills/verify-csv-viewer/runs/

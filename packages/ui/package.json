@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./App": "./src/App.tsx",
-    "./csv-viewer": "./src/csv-viewer.tsx",
+    "./App": "./src/app/App.tsx",
+    "./csv-viewer": "./src/app/csv-viewer.tsx",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {
