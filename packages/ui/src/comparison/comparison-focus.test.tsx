@@ -55,6 +55,16 @@ it('focuses each invalid attempt, preserves expanded evidence, and leaves unrela
   expect(document.activeElement).toBe(apply);
   rendered.rerender(view({
     ...comparison,
+    version: 3,
+    lastAttempt: {
+      attemptId: 'attempt-1',
+      status: 'invalid-key',
+      diagnostics: structuredClone(diagnostics),
+    },
+  }));
+  expect(document.activeElement).toBe(apply);
+  rendered.rerender(view({
+    ...comparison,
     lastAttempt: { attemptId: 'attempt-2', status: 'invalid-key', diagnostics },
   }));
   expect(document.activeElement).toBe(alert);

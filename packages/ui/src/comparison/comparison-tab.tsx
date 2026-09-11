@@ -101,7 +101,7 @@ export function ComparisonTab({
 
   const focusDiagnostics = useCallback((node: HTMLDivElement | null) => {
     node?.focus();
-  }, [attempt?.attemptId, diagnostics]);
+  }, [attempt?.attemptId]);
 
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_1fr]" aria-label="CSV comparison">
