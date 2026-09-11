@@ -92,7 +92,6 @@ describe('CsvGrid', () => {
     expect(isCopyColumnShortcut(key({}), false)).toBe(false);
     expect(isCopyColumnShortcut(key({ ctrlKey: true, shiftKey: true }), false)).toBe(false);
     expect(isCopyColumnShortcut(key({ ctrlKey: true }), true)).toBe(false);
-    expect(isCopyColumnShortcut(null, false)).toBe(false);
 
     // Text the user selected across cells is what Ctrl+C copies.
     const text = document.body.appendChild(document.createTextNode('ada'));

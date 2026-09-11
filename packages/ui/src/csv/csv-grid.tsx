@@ -233,9 +233,9 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     if (column) tab.setFocusedColumn(column);
   }
 
-  function onCellKeyDown(event: CellKeyDownEvent<CsvRow>) {
-    if (!isCopyColumnShortcut(event.event, event.api.getEditingCells().length > 0)) return;
-    event.event?.preventDefault();
+  function onCellKeyDown({ event, api }: CellKeyDownEvent<CsvRow>) {
+    if (!event || !isCopyColumnShortcut(event, api.getEditingCells().length > 0)) return;
+    event.preventDefault();
     void tab.copyFocusedColumn();
   }
 
@@ -406,7 +406,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           {focusedColumn ? (
-            // The column the Column Bar acts on. Styled by selector so the grid's columnDefs stay put.
+            // Tints the Column Bar's column without rebuilding columnDefs on every focus change.
             <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: var(--csv-column-focus); }`}</style>
           ) : null}
           <DataGrid
@@ -452,7 +452,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
  * Ctrl+C or Cmd+C on a focused cell is Copy column. An open editor and text the user selected
  * across cells keep the browser's own copy.
  */
-export function isCopyColumnShortcut(event: Event | null | undefined, editing: boolean): boolean {
+export function isCopyColumnShortcut(event: Event, editing: boolean): boolean {
   if (!(event instanceof KeyboardEvent)) return false;
   if (event.key !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
   return !editing && window.getSelection()?.isCollapsed !== false;
