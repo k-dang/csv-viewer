@@ -45,6 +45,7 @@ import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
+import { CsvColumnBar } from './csv-column-bar';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -120,8 +121,17 @@ export type CsvGridProps = {
  */
 export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps) {
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const { workingCsv, editState, editError, exportConfirmation, query, hasActiveQuery, selectedRowIds, stats } =
-    state;
+  const {
+    workingCsv,
+    editState,
+    editError,
+    exportConfirmation,
+    query,
+    hasActiveQuery,
+    selectedRowIds,
+    focusedColumn,
+    stats,
+  } = state;
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const revertingCellRef = useRef(false);
 
@@ -384,9 +394,14 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             </Button>
           </div>
         </div>
+        <CsvColumnBar tab={tab} />
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
+          {focusedColumn ? (
+            // The column the Column Bar acts on. Styled by selector so the grid's columnDefs stay put.
+            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: var(--csv-column-focus); }`}</style>
+          ) : null}
           <DataGrid
             key={workingCsv.workingCsvId}
             theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}

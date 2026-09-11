@@ -222,6 +222,32 @@ export class CsvTab {
     );
   }
 
+  /**
+   * Copies the focused column under the current query to the clipboard, one value per line, nulls
+   * as empty lines. Resolves the value count, or null when there is no focused column or the copy
+   * failed (the failure is shown like an edit error).
+   */
+  async copyFocusedColumn(): Promise<number | null> {
+    const { focusedColumn, query, workingCsv } = this.state;
+    if (!focusedColumn) return null;
+    this.set({ editError: null });
+    try {
+      const result = await this.viewer.call({
+        operation: 'csv.get-column-values',
+        workingCsvId: workingCsv.workingCsvId,
+        column: focusedColumn,
+        sort: query.sort,
+        filters: query.filters,
+        search: query.search.trim(),
+      });
+      await navigator.clipboard.writeText(result.values.map((value) => value ?? '').join('\n'));
+      return result.values.length;
+    } catch (error) {
+      this.fail(error, 'Unable to copy column.');
+      return null;
+    }
+  }
+
   /** Export CSV changes no data, so the grid keeps its rows; only the edit state moves. */
   async export(): Promise<void> {
     this.set({ editError: null, exportConfirmation: null });

@@ -3,6 +3,8 @@ import { supportedCsvFileExtensions } from './csv-viewer';
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
+  CsvColumnValues,
+  CsvColumnValuesRequest,
   CsvColumnValueCounts,
   CsvColumnValueCountsRequest,
   CsvDeleteRowsRequest,
@@ -21,7 +23,13 @@ import type { ComparisonExecutor } from './comparison-executor';
 import type { WorkspaceDatabase } from './database';
 import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
-import { assertKnownColumn, buildColumnValueCountsQuery, buildRowsQuery, maxRowWindowLimit } from './csv-query';
+import {
+  assertKnownColumn,
+  buildColumnValueCountsQuery,
+  buildColumnValuesQuery,
+  buildRowsQuery,
+  maxRowWindowLimit,
+} from './csv-query';
 import { normalizeCellValue, normalizeCount, normalizeRow } from './csv-result-normalization';
 import {
   applyCellValue,
@@ -339,6 +347,30 @@ export class WorkingCsvStore {
         offset,
         filteredRowCount: normalizeCount(countRow.filtered_row_count),
         rows: rows.map(normalizeRow),
+      };
+    } finally {
+      await lease.release();
+    }
+  }
+
+  async getColumnValues(request: CsvColumnValuesRequest): Promise<CsvColumnValues> {
+    const lease = this.acquireWorkingCsvLease(request.workingCsvId);
+    try {
+      const state = lease.state;
+      const query = buildColumnValuesQuery({
+        tableName: state.tableName,
+        columns: state.metadata.columns,
+        column: request.column,
+        filters: request.filters ?? [],
+        search: request.search ?? '',
+        sort: request.sort ?? [],
+      });
+      const rows = await this.database.readObjects(query.sql, query.values);
+
+      return {
+        workingCsvId: state.metadata.workingCsvId,
+        column: request.column,
+        values: rows.map((row) => normalizeCellValue(row.column_value)),
       };
     } finally {
       await lease.release();

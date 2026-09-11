@@ -65,6 +65,8 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return this.host.recentSources();
       case 'csv.get-rows':
         return this.csvStore.getRows(request);
+      case 'csv.get-column-values':
+        return this.csvStore.getColumnValues(request);
       case 'csv.get-column-value-counts':
         return this.csvStore.getColumnValueCounts(request);
       case 'csv.edit-cell':
