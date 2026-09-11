@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { CsvTab } from '../csv-tab';
+import type { CsvTab } from './csv-tab';
 import { formatNumber } from './csv-format';
 
 const copiedNoticeMs = 2500;
