@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellStyleModule,
@@ -69,10 +69,6 @@ export function ComparisonGrid({
   themeMode: 'light' | 'dark';
 }) {
   const viewer = useCsvViewer();
-  const activeResultToken = useRef(applied.resultToken);
-  useEffect(() => {
-    activeResultToken.current = applied.resultToken;
-  }, [applied.resultToken]);
   const changedCounts = useMemo(
     () => new Map(applied.summary.changedColumns.map((column) => [column.name, column.changedRowCount])),
     [applied.summary.changedColumns],
@@ -136,7 +132,6 @@ export function ComparisonGrid({
           rows: rowsMode,
           columns: columnsMode,
         },
-        () => activeResultToken.current,
         toGridRow,
       ),
     [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode, viewer],

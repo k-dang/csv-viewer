@@ -76,10 +76,12 @@ function WorkspaceView({
   const activeTab = openTabs.find((tab) => tab.id === activeTabId);
   const activeCsvTab = activeTab?.kind === 'csv' ? activeTab.tab : null;
 
-  // Only form input crosses this ref. Menu and button commands share current workspace state.
-  useEffect(() => {
+  // Input events publish validation for both menu and button commands before the next render.
+  function updateDialect(nextDelimiter: string, nextHeaderMode: CsvHeaderMode) {
+    setDelimiter(nextDelimiter);
+    setHeaderMode(nextHeaderMode);
     openOptions.current = () => {
-      const options = buildDialectOptions(delimiter, headerMode);
+      const options = buildDialectOptions(nextDelimiter, nextHeaderMode);
       if (isDialectError(options)) {
         setDialectError(options);
         return null;
@@ -87,7 +89,7 @@ function WorkspaceView({
       setDialectError(null);
       return options;
     };
-  }, [delimiter, headerMode, openOptions]);
+  }
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', themeMode === 'dark');
@@ -180,8 +182,8 @@ function WorkspaceView({
           <DialectControls
             delimiter={delimiter}
             headerMode={headerMode}
-            onDelimiterChange={setDelimiter}
-            onHeaderModeChange={setHeaderMode}
+            onDelimiterChange={(value) => updateDialect(value, headerMode)}
+            onHeaderModeChange={(value) => updateDialect(delimiter, value)}
           />
           <Button type="button" onClick={() => void workspace.open()} disabled={isOpening}>
             {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}

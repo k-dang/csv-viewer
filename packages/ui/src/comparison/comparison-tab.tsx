@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type HTMLAttributes } from 'react';
+import { useCallback, useState, type HTMLAttributes } from 'react';
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,8 +24,6 @@ export function ComparisonTab({
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedAttemptId, setDismissedAttemptId] = useState<string | null>(null);
   const [hiddenDiagnosticsAttemptId, setHiddenDiagnosticsAttemptId] = useState<string | null>(null);
-  const firstKeyControlRef = useRef<HTMLInputElement>(null);
-  const diagnosticSummaryRef = useRef<HTMLDivElement>(null);
 
   function hideCurrentDiagnostics() {
     if (comparison.lastAttempt?.status === 'invalid-key') {
@@ -101,15 +99,9 @@ export function ComparisonTab({
   const operation = comparison.operation;
   const operationLabel = operation ? formatOperationLabel(operation.phase) : null;
 
-  useEffect(() => {
-    if (!comparison.applied && !comparison.operation && !comparison.lastAttempt) {
-      firstKeyControlRef.current?.focus();
-    }
-  }, [comparison.comparisonId]);
-
-  useEffect(() => {
-    if (diagnostics) diagnosticSummaryRef.current?.focus();
-  }, [attempt?.attemptId, diagnostics]);
+  const focusDiagnostics = useCallback((node: HTMLDivElement | null) => {
+    node?.focus();
+  }, [attempt?.attemptId]);
 
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_1fr]" aria-label="CSV comparison">
@@ -149,7 +141,7 @@ export function ComparisonTab({
             {comparison.availableKeyColumns.map((column, index) => (
               <label key={column} className="flex items-center gap-2 text-sm">
                 <input
-                  ref={index === 0 ? firstKeyControlRef : undefined}
+                  autoFocus={index === 0 && !comparison.applied && !comparison.operation && !comparison.lastAttempt}
                   type="checkbox"
                   checked={presentation.draftKey.includes(column)}
                   disabled={Boolean(comparison.operation)}
@@ -205,7 +197,7 @@ export function ComparisonTab({
             ) : null}
           </div>
           {diagnostics ? (
-            <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={diagnosticSummaryRef} />
+            <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={focusDiagnostics} />
           ) : null}
         </fieldset>
       </div>
@@ -445,7 +437,7 @@ function KeyDiagnostics({
 }: {
   comparison: ComparisonView;
   diagnostics: NonNullable<Extract<ComparisonView['lastAttempt'], { status: 'invalid-key' }>>['diagnostics'];
-  focusRef: React.RefObject<HTMLDivElement | null>;
+  focusRef: React.RefCallback<HTMLDivElement>;
 }) {
   const describe = (label: string, value: typeof diagnostics.baseline) =>
     `${label}: ${value.blankRowCount} blank-key rows, ${value.duplicateGroupCount} duplicate-key groups`;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent, OpenCsvResult, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
@@ -33,6 +33,29 @@ afterEach(() => {
 });
 
 describe('App', () => {
+  it('uses current dialect input and validation for both menu and button commands', async () => {
+    const open = vi.fn(async () => ({ status: 'cancelled' as const }));
+    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.open': open, 'csv.get-recent-sources': async () => [] },
+      onEvent: (listener) => { receiveEvent = listener; return () => {}; },
+    });
+    render(<CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider>);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: 'xx' } });
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.getByText('Delimiter must be one character, or blank for automatic detection.')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ';' } });
+    await act(async () => screen.getAllByRole('button', { name: 'Open CSV' })[0].click());
+    expect(open).toHaveBeenLastCalledWith({ operation: 'csv.open', options: { delimiter: ';' } });
+    expect(screen.queryByText('Delimiter must be one character, or blank for automatic detection.')).toBeNull();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ',' } });
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    expect(open).toHaveBeenLastCalledWith({ operation: 'csv.open', options: { delimiter: ',' } });
+  });
+
   it('ignores a repeated Open intent while the first selection is pending', async () => {
     const pending = Promise.withResolvers<OpenCsvResult>();
     const open = vi.fn(() => pending.promise);

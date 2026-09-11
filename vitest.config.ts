@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     exclude: [
+      '.agents/skills/verify-csv-viewer/runs/**',
       '**/dist-electron/**',
       '**/dist-renderer/**',
       '**/dist-web/**',
