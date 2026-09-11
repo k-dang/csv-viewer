@@ -9,7 +9,7 @@ import type {
   CreateComparisonSnapshotRequest,
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
-} from '../../src/comparison-executor';
+} from '../../src/comparison/comparison-executor';
 import type {
   WorkspaceContractFactory,
   WorkspaceContractFixture,

@@ -2,7 +2,7 @@ import { rm } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
-import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv-store';
+import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv/working-csv-store';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
 
 /**

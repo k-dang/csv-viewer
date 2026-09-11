@@ -1,5 +1,5 @@
-import type { QueryValues } from './csv-query';
-import type { EngineRow } from './csv-result-normalization';
+import type { QueryValues } from './query/csv-query';
+import type { EngineRow } from './query/csv-result-normalization';
 
 /** The database operations the shared workspace needs from either DuckDB runtime. */
 export interface WorkspaceDatabaseConnection {

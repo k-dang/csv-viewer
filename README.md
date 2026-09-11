@@ -31,6 +31,18 @@ Desktop opens CSV Sources through the Electron main process and queries them wit
 
 The runtime applications live in `apps/desktop/` and `apps/web/`. Both compose the React product from `packages/ui/` with the runtime-neutral CSV module from `packages/workspace/`. `CsvWorkspaceHost` handles file selection, source description, export delivery, and Recent CSV Sources. `WorkspaceDatabase` handles parameterized DuckDB queries, connections, and cancellation. Desktop supplies Electron and native DuckDB adapters. Web supplies browser and DuckDB-Wasm adapters.
 
+Shared source is grouped by responsibility:
+
+- `packages/ui/src/app/` owns application composition and renderer workspace lifecycle.
+- `packages/ui/src/csv/` contains CSV Tab state, the grid, dialect controls, and Stats Panel.
+- `packages/ui/src/comparison/` contains Comparison views and grid data access.
+- `packages/ui/src/components/ui/` contains shared visual primitives.
+- `packages/workspace/src/working-csv/` owns Working CSV storage, edit history, and export serialization.
+- `packages/workspace/src/comparison/` owns Comparison lifecycle, execution, key rules, and result projection.
+- `packages/workspace/src/query/` contains CSV query generation and result normalization.
+
+Workspace composition, the public product contract, and runtime adapter interfaces stay at `packages/workspace/src/`. Tests stay beside their feature code; package exports provide stable import paths for consumers.
+
 ### Workspace boundaries
 
 - Runtime adapters stay in their application. Shared packages do not import Electron, browser adapters, Node filesystem modules, or concrete DuckDB drivers.

@@ -5,7 +5,7 @@ import type {
   CsvViewerOperationMap,
   CsvViewerRequest,
 } from '@csv-viewer/workspace/csv-viewer';
-import { CsvViewerProvider } from '../csv-viewer';
+import { CsvViewerProvider } from '../app/csv-viewer';
 
 const testCsvViewerCapabilities: CsvViewerCapabilities = {
   recentCsvSources: true,

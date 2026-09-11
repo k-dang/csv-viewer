@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./comparison-presentation": "./src/comparison-presentation.ts",
-    "./csv-query": "./src/csv-query.ts",
-    "./csv-result-normalization": "./src/csv-result-normalization.ts",
+    "./comparison-presentation": "./src/comparison/comparison-presentation.ts",
+    "./csv-query": "./src/query/csv-query.ts",
+    "./csv-result-normalization": "./src/query/csv-result-normalization.ts",
     "./csv-viewer": "./src/csv-viewer.ts",
     "./csv-workspace": "./src/csv-workspace.ts",
     "./database": "./src/database.ts",

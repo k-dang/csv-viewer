@@ -58,4 +58,4 @@ If two CSV tabs are already open (human finished the dialog):
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.
 - Closing a CSV that a comparison depends on asks for confirmation and closes the Comparison Tab. Finish the comparison proof before closing sources.
-- Do not treat the comparison unit tests (`packages/workspace/src/csv-comparison-service.test.ts`, `packages/workspace/src/comparison-projection.test.ts`) as a substitute for this UI path.
+- Do not treat the comparison unit tests (`packages/workspace/src/comparison/csv-comparison-service.test.ts`, `packages/workspace/src/comparison/comparison-projection.test.ts`) as a substitute for this UI path.
