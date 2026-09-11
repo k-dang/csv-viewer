@@ -25,11 +25,16 @@ type ComparisonGridRequest = {
 export function createComparisonGridDataSource<Row>(
   viewer: Pick<CsvViewer, 'call'>,
   request: ComparisonGridRequest,
-  getActiveResultToken: () => ComparisonResultToken | null,
   projectRow: (row: ComparisonRow) => Row,
 ): IDatasource {
+  // AG Grid can reuse a datasource after resetting it. Retire only requests from its previous lifetime.
+  let generation = 0;
   return {
+    destroy() {
+      generation += 1;
+    },
     getRows(params) {
+      const requestGeneration = generation;
       const offset = params.startRow;
       const limit = Math.min(comparisonGridRequestBounds.maxWindowRows, Math.max(0, params.endRow - params.startRow));
       void viewer
@@ -43,17 +48,19 @@ export function createComparisonGridDataSource<Row>(
           columns: request.columns,
         })
         .then((outcome) => {
+          if (requestGeneration !== generation) return;
           if (
             outcome.status !== 'ready' ||
-            outcome.window.resultToken !== request.resultToken ||
-            getActiveResultToken() !== request.resultToken
+            outcome.window.resultToken !== request.resultToken
           ) {
             params.failCallback();
             return;
           }
           params.successCallback(outcome.window.rows.map(projectRow), outcome.window.totalRowCount);
         })
-        .catch(() => params.failCallback());
+        .catch(() => {
+          if (requestGeneration === generation) params.failCallback();
+        });
     },
   };
 }

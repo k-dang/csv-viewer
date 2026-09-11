@@ -38,7 +38,6 @@ describe('createComparisonGridDataSource', () => {
         rows: 'differences',
         columns: 'changed-first',
       },
-      () => 'result-1',
       (value) => value,
     );
 
@@ -69,14 +68,9 @@ describe('createComparisonGridDataSource', () => {
     });
   });
 
-  it('ignores a response whose result token became obsolete while the request was active', async () => {
-    let resolveWindow: (outcome: ComparisonWindowOutcome) => void = () => undefined;
-    const getComparisonWindow = vi.fn().mockReturnValue(
-      new Promise<ComparisonWindowOutcome>((resolve) => {
-        resolveWindow = resolve;
-      }),
-    );
-    let activeResultToken = 'result-1';
+  it.each(['resolve', 'reject'] as const)('ignores a retired request that later %ss and allows datasource reuse', async (completion) => {
+    const pending = Promise.withResolvers<ComparisonWindowOutcome>();
+    const getComparisonWindow = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(ready('result-1'));
     const successCallback = vi.fn();
     const failCallback = vi.fn();
     const dataSource = createComparisonGridDataSource(
@@ -87,7 +81,6 @@ describe('createComparisonGridDataSource', () => {
         rows: 'all',
         columns: 'csv-order',
       },
-      () => activeResultToken,
       (value) => value,
     );
 
@@ -98,9 +91,30 @@ describe('createComparisonGridDataSource', () => {
       successCallback,
       failCallback,
     } as never);
-    activeResultToken = 'result-2';
-    resolveWindow(ready('result-1'));
+    dataSource.destroy?.();
+    if (completion === 'resolve') pending.resolve(ready('result-1'));
+    else pending.reject(new Error('Retired request failed.'));
+    await pending.promise.catch(() => undefined);
+    await Promise.resolve();
 
+    expect(failCallback).not.toHaveBeenCalled();
+    expect(successCallback).not.toHaveBeenCalled();
+
+    // SAFETY: The datasource reads only the row bounds and callbacks supplied by this fixture.
+    dataSource.getRows({ startRow: 0, endRow: 100, successCallback, failCallback } as never);
+    await vi.waitFor(() => expect(successCallback).toHaveBeenCalledWith([row], 1));
+  });
+
+  it('rejects a response for a different result token', async () => {
+    const successCallback = vi.fn();
+    const failCallback = vi.fn();
+    const dataSource = createComparisonGridDataSource(
+      { call: vi.fn().mockResolvedValue(ready('result-2')) },
+      { comparisonId: 'comparison-1', resultToken: 'result-1', rows: 'all', columns: 'csv-order' },
+      (value) => value,
+    );
+    // SAFETY: The datasource reads only the row bounds and callbacks supplied by this fixture.
+    dataSource.getRows({ startRow: 0, endRow: 100, successCallback, failCallback } as never);
     await vi.waitFor(() => expect(failCallback).toHaveBeenCalledOnce());
     expect(successCallback).not.toHaveBeenCalled();
   });
