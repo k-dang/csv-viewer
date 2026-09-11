@@ -199,7 +199,7 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | `fill --role <role> --name <name> --value <text>` | Replace a textbox/searchbox value and fire input events |
 | `fill --focused --value <text>` | Replace the active editor (AG Grid cell editor) |
 | `type --text <text>` | Insert text at the current caret via CDP |
-| `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`) |
+| `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
 | `upload --role <role> --name <name> --file <path>` | Web only. Arms file-chooser interception, clicks the control, and answers the chooser with `--file` (resolved from the repo root) |
 | `wait --text <substring> [--timeout 10000]` | Poll `document.body.innerText` |
 | `snapshot --path <file>` | Visible text plus a compact AX dump |

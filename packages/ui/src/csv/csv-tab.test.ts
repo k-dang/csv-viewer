@@ -177,4 +177,38 @@ describe('CsvTab', () => {
     expect(state.editState).toEqual(exportedState);
     expect(state.revision).toBe(0);
   });
+
+  it('copies the focused column under the current query, nulls as empty lines', async () => {
+    const getColumnValues = vi.fn(async () => ({
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'age',
+      values: ['30', null, '41'],
+    }));
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-values': getColumnValues } }), workingCsv);
+
+    await tab.copyFocusedColumn();
+    expect(getColumnValues).not.toHaveBeenCalled();
+
+    tab.setFocusedColumn('age');
+    tab.setSearch('ada');
+    tab.setGridQuery([{ column: 'age', direction: 'desc' }], []);
+    await tab.copyFocusedColumn();
+
+    expect(getColumnValues).toHaveBeenCalledWith({
+      operation: 'csv.get-column-values',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'age',
+      sort: [{ column: 'age', direction: 'desc' }],
+      filters: [],
+      search: 'ada',
+    });
+    expect(writeText).toHaveBeenCalledWith('30\n\n41');
+    expect(tab.snapshot().copiedColumn).toEqual({ column: 'age', count: 3 });
+
+    tab.setSearch('grace');
+    expect(tab.snapshot().copiedColumn).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
-import { CsvGrid } from './csv-grid';
+import { CsvGrid, isCopyColumnShortcut } from './csv-grid';
 
 const DataGrid = () => null;
 
@@ -82,5 +82,14 @@ describe('CsvGrid', () => {
     });
 
     expect(screen.getByRole('status').textContent).toBe('Download started');
+  });
+
+  it('treats Ctrl+C or Cmd+C alone as the Copy column shortcut', () => {
+    const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', { key: 'c', ...init });
+
+    expect(isCopyColumnShortcut(key({ ctrlKey: true }))).toBe(true);
+    expect(isCopyColumnShortcut(key({ metaKey: true }))).toBe(true);
+    expect(isCopyColumnShortcut(key({}))).toBe(false);
+    expect(isCopyColumnShortcut(key({ ctrlKey: true, shiftKey: true }))).toBe(false);
   });
 });

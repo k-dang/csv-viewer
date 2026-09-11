@@ -775,6 +775,27 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       ]);
     });
 
+    it('returns one column under the row window query, in row window order', async () => {
+      const workingCsv = await fixture.openSource(
+        'column-values.csv',
+        ['name,team,score', 'Ada,compiler,10', 'Grace,navy,30', 'Margaret,compiler,', 'Barbara,compiler,50'].join('\n'),
+      );
+      const values = await workspace().call({
+        operation: 'csv.get-column-values',
+        workingCsvId: workingCsv.workingCsvId,
+        column: 'score',
+        sort: [{ column: 'name', direction: 'desc' }],
+        filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+        search: 'a',
+      });
+
+      expect(values).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        column: 'score',
+        values: [null, '50', '10'],
+      });
+    });
+
     it('returns an empty count list when Count Scope has no rows', async () => {
       const workingCsv = await fixture.openSource('value-counts-empty-scope.csv', ['status', 'Open'].join('\n'));
       const counts = await workspace().call({

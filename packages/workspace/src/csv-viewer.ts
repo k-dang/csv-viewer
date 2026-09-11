@@ -118,6 +118,21 @@ export type CsvRowWindow = {
   filteredRowCount: number;
 };
 
+/** One column under the row window's full query, so the copy matches what the grid shows. */
+export type CsvColumnValuesRequest = {
+  workingCsvId: WorkingCsvId;
+  column: string;
+  sort?: CsvSortDescriptor[];
+  filters?: CsvFilterDescriptor[];
+  search?: string;
+};
+
+export type CsvColumnValues = {
+  workingCsvId: WorkingCsvId;
+  column: string;
+  values: CsvCellValue[];
+};
+
 export type CsvColumnValueCountsRequest = {
   workingCsvId: WorkingCsvId;
   column: string;
@@ -466,6 +481,10 @@ export type CsvViewerOperationMap = {
   'csv.get-rows': {
     request: CsvRowWindowRequest;
     result: CsvRowWindow;
+  };
+  'csv.get-column-values': {
+    request: CsvColumnValuesRequest;
+    result: CsvColumnValues;
   };
   'csv.get-column-value-counts': {
     request: CsvColumnValueCountsRequest;

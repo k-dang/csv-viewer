@@ -3,6 +3,7 @@ import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
   type CellFocusedEvent,
+  type CellKeyDownEvent,
   CellStyleModule,
   ColumnApiModule,
   DateFilterModule,
@@ -45,6 +46,7 @@ import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
+import { CsvColumnBar } from './csv-column-bar';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -81,6 +83,9 @@ const csvGridLightTheme = themeQuartz.withParams({
   wrapperBorder: false,
   wrapperBorderRadius: 8,
 });
+
+/** Half of each theme's selectedRowBackgroundColor, so a selected row still reads across the focused column. */
+const csvColumnFocusColor = { light: 'rgba(15, 118, 110, 0.06)', dark: 'rgba(94, 234, 212, 0.08)' };
 
 const csvGridDarkTheme = themeQuartz.withParams({
   accentColor: '#5eead4',
@@ -120,8 +125,17 @@ export type CsvGridProps = {
  */
 export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps) {
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const { workingCsv, editState, editError, exportConfirmation, query, hasActiveQuery, selectedRowIds, stats } =
-    state;
+  const {
+    workingCsv,
+    editState,
+    editError,
+    exportConfirmation,
+    query,
+    hasActiveQuery,
+    selectedRowIds,
+    focusedColumn,
+    stats,
+  } = state;
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const revertingCellRef = useRef(false);
 
@@ -220,6 +234,14 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   function onCellFocused(event: CellFocusedEvent<CsvRow>) {
     const column = event.column instanceof Object ? event.column.getColId() : event.column ?? undefined;
     if (column) tab.setFocusedColumn(column);
+  }
+
+  // An open editor and text the user selected across cells keep the browser's own Ctrl+C.
+  function onCellKeyDown({ event, api }: CellKeyDownEvent<CsvRow>) {
+    if (!event || !isCopyColumnShortcut(event)) return;
+    if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;
+    event.preventDefault();
+    void tab.copyFocusedColumn();
   }
 
   const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
@@ -384,9 +406,14 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             </Button>
           </div>
         </div>
+        <CsvColumnBar tab={tab} />
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
+          {focusedColumn ? (
+            // Tints the Column Bar's column without rebuilding columnDefs on every focus change.
+            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: ${csvColumnFocusColor[themeMode]}; }`}</style>
+          ) : null}
           <DataGrid
             key={workingCsv.workingCsvId}
             theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
@@ -416,6 +443,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}
             onCellFocused={onCellFocused}
+            onCellKeyDown={onCellKeyDown}
             overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
           />
         </div>
@@ -423,6 +451,12 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
       </div>
     </div>
   );
+}
+
+/** Ctrl+C or Cmd+C with no other modifier. */
+export function isCopyColumnShortcut(event: Event): boolean {
+  if (!(event instanceof KeyboardEvent)) return false;
+  return event.key === 'c' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
 function getColumnFilter(columnType: string): string {

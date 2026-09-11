@@ -174,13 +174,8 @@ export function buildRowsQuery({
   limit: number;
   offset: number;
 }) {
-  const knownColumns = new Set(columns.map((column) => column.name));
   const scope = buildCountScopeWhere({ columns, filters, search });
-  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
-  const orderSql =
-    orderClauses.length > 0
-      ? ` ORDER BY ${orderClauses.join(', ')}`
-      : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
+  const orderSql = buildOrderSql(sort, new Set(columns.map((column) => column.name)));
   const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
   const rowProjectionSql = [
     quoteIdentifier(csvInternalRowIdField),
@@ -190,6 +185,31 @@ export function buildRowsQuery({
   return {
     countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
     rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
+    values: scope.values,
+  };
+}
+
+export function buildColumnValuesQuery({
+  tableName,
+  columns,
+  column,
+  filters,
+  search,
+  sort,
+}: {
+  tableName: string;
+  columns: CsvColumn[];
+  column: string;
+  filters: CsvFilterDescriptor[];
+  search: string;
+  sort: CsvSortDescriptor[];
+}): CsvStatement {
+  const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
+  assertKnownColumn(column, knownColumns);
+  const scope = buildCountScopeWhere({ columns, filters, search });
+
+  return {
+    sql: `SELECT ${quoteIdentifier(column)} AS column_value FROM ${quoteIdentifier(tableName)}${scope.whereSql}${buildOrderSql(sort, knownColumns)}`,
     values: scope.values,
   };
 }
@@ -256,6 +276,14 @@ function buildCountScopeWhere({
   const searchClause = buildSearchClause(columns, search, values);
   if (searchClause) whereClauses.push(searchClause);
   return { whereSql: ` WHERE ${whereClauses.join(' AND ')}`, values };
+}
+
+/** The grid's sort, else source order, so every query over the row window agrees on row order. */
+function buildOrderSql(sort: CsvSortDescriptor[], knownColumns: Set<string>): string {
+  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
+  return orderClauses.length > 0
+    ? ` ORDER BY ${orderClauses.join(', ')}`
+    : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
 }
 
 function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {
