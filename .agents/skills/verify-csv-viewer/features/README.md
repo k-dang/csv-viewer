@@ -53,5 +53,6 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, undo/redo, and the undriveable Export CSV dialog.
 - [Compare two CSVs](./compare-csvs.md) covers Compare…, the candidate picker, Apply key, and result badges.
 - [Column value counts](./column-counts.md) covers the Stats Panel scoped to the current search and filters.
+- [Copy a column](./copy-column.md) covers the Column Bar, the focused-column tint, and copying under the current query.
 - [Web runtime lifecycle](./web-lifecycle.md) covers the web startup gate, the fatal screen, and the unexported-changes navigation guard.
 
