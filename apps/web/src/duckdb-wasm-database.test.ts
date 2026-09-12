@@ -122,6 +122,26 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await worker.close();
   }, 15_000);
 
+  it.each(['pending request', 'pending creation'])('cancels startup during %s and terminates the Worker once', async (phase) => {
+    const worker = new ControllableWorker();
+    const creation = Promise.withResolvers<Worker>();
+    database = new DuckDbWasmWorkspaceDatabase({
+      mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
+      createWorker: () => phase === 'pending creation' ? creation.promise : Promise.resolve(worker),
+    });
+    const opening = database.ownerConnection().catch(() => undefined);
+    if (phase === 'pending request') await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    database.cancelStartup();
+    database.cancelStartup();
+    await expect(database.close()).resolves.toEqual([]);
+    if (phase === 'pending creation') {
+      creation.resolve(worker);
+      await opening;
+    }
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    await expect(database.ownerConnection()).rejects.toThrow();
+  });
+
   it('reports a Worker crash once and refuses to restart the engine', async () => {
     const worker = new ControllableWorker();
     database = new DuckDbWasmWorkspaceDatabase({

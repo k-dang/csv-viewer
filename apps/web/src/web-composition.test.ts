@@ -176,3 +176,24 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
     this.fatalListener?.(new Error('Worker crashed.'));
   }
 }
+
+it('cancels a pending startup query on page hide without waiting for its response', async () => {
+  const database = new DuckDbWasmWorkspaceDatabase({
+    mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
+    createWorker: () => new Promise(() => {}),
+  });
+  const close = vi.spyOn(database, 'close');
+  const controller = new AbortController();
+  const startup = startWebCsvViewer(database, async () => null, undefined, controller.signal);
+  const settled = vi.fn();
+  void startup.then(settled);
+  const page = new EventTarget();
+  const dispose = disposeWorkspaceWhenPageHides({ dispose: async () => {
+    controller.abort();
+    await startup;
+  } }, page);
+  page.dispatchEvent(new Event('pagehide'));
+  dispose();
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith({ status: 'unsupported' }));
+  expect(close).toHaveBeenCalledOnce();
+});

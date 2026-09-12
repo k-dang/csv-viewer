@@ -18,16 +18,21 @@ const root = createRoot(rootElement);
 applyTheme(getInitialTheme());
 root.render(<WebStartupState status="checking" />);
 
-const startup = startWebCsvViewer(createWebDuckDb(), pickPortableCsvSource);
+const startupController = new AbortController();
+const startup = startWebCsvViewer(createWebDuckDb(), pickPortableCsvSource, undefined, startupController.signal);
 let workspace: RendererWorkspace | null = null;
 let stopped = false;
 const dispose = disposeWorkspaceWhenPageHides({
   dispose: async () => {
     stopped = true;
-    root.unmount();
-    workspace?.dispose();
-    const started = await startup;
-    if (started.status === 'ready') await started.viewer.dispose();
+    startupController.abort();
+    try {
+      root.unmount();
+      workspace?.dispose();
+    } finally {
+      const started = await startup;
+      if (started.status === 'ready') await started.viewer.dispose();
+    }
   },
 });
 import.meta.hot?.dispose(dispose);
@@ -46,4 +51,7 @@ void startup.then((started) => {
       </CsvViewerProvider>
     </StrictMode>,
   );
+}).catch((error) => {
+  console.error('CSV Viewer Web startup failed.', error);
+  if (!stopped) root.render(<WebStartupState status="unsupported" />);
 });

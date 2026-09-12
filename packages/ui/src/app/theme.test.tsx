@@ -34,3 +34,24 @@ it('applies the system theme at startup, toggles it, and restores the saved choi
   expect(document.documentElement.style.colorScheme).toBe('dark');
   expect(window.localStorage.getItem('csv-viewer-theme')).toBe('dark');
 });
+
+it.each(['getItem', 'setItem'] as const)('keeps theme controls working when storage %s is blocked', async (method) => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  const blocked = vi.spyOn(Storage.prototype, method).mockImplementation(() => {
+    throw new DOMException('Storage is blocked', 'SecurityError');
+  });
+  try {
+    applyTheme(getInitialTheme());
+    const viewer = createTestCsvViewer({ capabilities: { recentCsvSources: false } });
+    workspace = new RendererWorkspace(viewer, { confirmClose: () => true });
+    render(withCsvViewer(<App workspace={workspace} />, viewer));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to light mode' }));
+    expect(document.documentElement.style.colorScheme).toBe('light');
+    expect(screen.getByRole('button', { name: 'Switch to dark mode' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to dark mode' }));
+    expect(document.documentElement.style.colorScheme).toBe('dark');
+  } finally {
+    blocked.mockRestore();
+  }
+});
