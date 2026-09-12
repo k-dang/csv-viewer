@@ -1,10 +1,7 @@
 import type {
   CloseImpact,
   ComparisonCandidate,
-  ComparisonColumnsMode,
   ComparisonEvent,
-  ComparisonRowsMode,
-  ComparisonView,
   CsvDialectOptions,
   CsvSourceId,
   CsvViewer,
@@ -15,16 +12,11 @@ import type {
   WorkingCsvView,
 } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from '../csv/csv-tab';
-
-export type ComparisonTabPresentation = {
-  draftKey: string[];
-  rows: ComparisonRowsMode;
-  columns: ComparisonColumnsMode;
-};
+import { ComparisonTab } from '../comparison/comparison-tab';
 
 export type RendererTab =
   | { kind: 'csv'; id: string; tab: CsvTab }
-  | { kind: 'comparison'; id: string; comparison: ComparisonView; presentation: ComparisonTabPresentation };
+  | { kind: 'comparison'; id: string; tab: ComparisonTab };
 
 export type RendererWorkspaceState = {
   tabs: RendererTab[];
@@ -147,10 +139,7 @@ export class RendererWorkspace {
         this.select(id);
       } else {
         this.set({
-          tabs: [...this.state.tabs, {
-            kind: 'comparison', id, comparison,
-            presentation: { draftKey: comparison.applied?.key ?? [], rows: 'differences', columns: 'changed-first' },
-          }],
+          tabs: [...this.state.tabs, { kind: 'comparison', id, tab: new ComparisonTab(this.viewer, comparison) }],
           activeTabId: id,
         });
       }
@@ -163,20 +152,13 @@ export class RendererWorkspace {
     }
   }
 
-  updateComparisonPresentation(comparisonId: string, presentation: ComparisonTabPresentation): void {
-    if (this.stopped) return;
-    this.set({ tabs: this.state.tabs.map((tab) =>
-      tab.kind === 'comparison' && tab.comparison.comparisonId === comparisonId ? { ...tab, presentation } : tab,
-    ) });
-  }
-
   async close(tabId: string = this.state.activeTabId ?? ''): Promise<void> {
     const tab = this.state.tabs.find((entry) => entry.id === tabId);
     if (!tab || !this.current(tab) || this.closingTabs.has(tab.id)) return;
     this.closingTabs.add(tab.id);
     try {
       if (tab.kind === 'comparison') {
-        const result = await this.viewer.call({ operation: 'comparison.close', comparisonId: tab.comparison.comparisonId });
+        const result = await this.viewer.call({ operation: 'comparison.close', comparisonId: tab.tab.comparisonId });
         if (this.stopped) return;
         if (result.status === 'failed') this.set({ error: result.failure.message });
         else this.comparisonEvent({ kind: 'closed', comparisonId: result.comparisonId });
@@ -196,7 +178,6 @@ export class RendererWorkspace {
       }
       if (result.status !== 'closed') return;
       this.openingClosedCsvs?.add(workingCsvId);
-      tab.tab.dispose();
       const ids = new Set(result.closedComparisonIds.map((id) => `comparison:${id}`));
       ids.add(tab.id);
       this.removeTabs(ids);
@@ -283,11 +264,9 @@ export class RendererWorkspace {
       this.removeTabs(new Set([`comparison:${event.comparisonId}`]));
       return;
     }
-    const incoming = event.comparison;
-    this.set({ tabs: this.state.tabs.map((tab) =>
-      tab.kind === 'comparison' && tab.comparison.comparisonId === incoming.comparisonId && tab.comparison.version < incoming.version
-        ? { ...tab, comparison: incoming } : tab,
-    ) });
+    const id = `comparison:${event.comparison.comparisonId}`;
+    const tab = this.state.tabs.find((entry) => entry.id === id);
+    if (tab?.kind === 'comparison') tab.tab.receive(event.comparison);
   }
 
   private activeTab(): RendererTab | undefined {
@@ -301,9 +280,7 @@ export class RendererWorkspace {
   }
 
   private current(tab: RendererTab): boolean {
-    return !this.stopped && this.state.tabs.some((entry) => entry.id === tab.id &&
-      (entry.kind !== 'csv' || (tab.kind === 'csv' && entry.tab === tab.tab)),
-    );
+    return !this.stopped && this.state.tabs.some((entry) => entry.id === tab.id && entry.tab === tab.tab);
   }
 
   private removeTabs(ids: Set<string>): void {
@@ -312,6 +289,7 @@ export class RendererWorkspace {
     for (const id of ids) {
       const index = tabs.findIndex((tab) => tab.id === id);
       if (index < 0) continue;
+      tabs[index].tab.dispose();
       tabs = tabs.filter((tab) => tab.id !== id);
       if (activeTabId === id) activeTabId = tabs[index]?.id ?? tabs[index - 1]?.id ?? null;
     }
@@ -322,7 +300,7 @@ export class RendererWorkspace {
     if (this.stopped) return;
     this.stopped = true;
     this.stopEvents();
-    for (const tab of this.state.tabs) if (tab.kind === 'csv') tab.tab.dispose();
+    for (const tab of this.state.tabs) tab.tab.dispose();
   }
   private set(patch: Partial<RendererWorkspaceState>): void {
     this.state = { ...this.state, ...patch };

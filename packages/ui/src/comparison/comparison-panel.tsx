@@ -1,97 +1,18 @@
-import { useCallback, useState, type HTMLAttributes } from 'react';
+import { useCallback, useSyncExternalStore, type HTMLAttributes } from 'react';
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ComparisonPhase, ComparisonSummary, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
-import type { ComparisonTabPresentation } from '../app/renderer-workspace';
+import type { ComparisonTab, ComparisonTabState } from './comparison-tab';
 import { ComparisonGrid } from './comparison-grid';
-import { useCsvViewer } from '../app/csv-viewer';
 
-export type { ComparisonTabPresentation } from '../app/renderer-workspace';
-
-export function ComparisonTab({
-  comparison,
-  presentation,
-  onPresentationChange,
-  themeMode,
-}: {
-  comparison: ComparisonView;
-  presentation: ComparisonTabPresentation;
-  onPresentationChange: (next: ComparisonTabPresentation) => void;
-  themeMode: 'light' | 'dark';
-}) {
-  const viewer = useCsvViewer();
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [dismissedAttemptId, setDismissedAttemptId] = useState<string | null>(null);
-  const [hiddenDiagnosticsAttemptId, setHiddenDiagnosticsAttemptId] = useState<string | null>(null);
-
-  function hideCurrentDiagnostics() {
-    if (comparison.lastAttempt?.status === 'invalid-key') {
-      setHiddenDiagnosticsAttemptId(comparison.lastAttempt.attemptId);
-    }
-  }
-
-  function updateDraft(column: string, checked: boolean) {
-    hideCurrentDiagnostics();
-    const draftKey = checked
-      ? [...presentation.draftKey, column]
-      : presentation.draftKey.filter((value) => value !== column);
-    onPresentationChange({ ...presentation, draftKey });
-  }
-
-  function moveDraft(index: number, direction: -1 | 1) {
-    const target = index + direction;
-    if (target < 0 || target >= presentation.draftKey.length) return;
-    hideCurrentDiagnostics();
-    const draftKey = [...presentation.draftKey];
-    [draftKey[index], draftKey[target]] = [draftKey[target], draftKey[index]];
-    onPresentationChange({ ...presentation, draftKey });
-  }
-
-  async function begin(kind: 'apply-key' | 'refresh') {
-    setActionError(null);
-    try {
-      const outcome = await viewer.call(
-        kind === 'apply-key'
-          ? {
-              operation: 'comparison.begin',
-              kind,
-              comparisonId: comparison.comparisonId,
-              key: presentation.draftKey,
-            }
-          : { operation: 'comparison.begin', kind, comparisonId: comparison.comparisonId },
-      );
-      if (outcome.status === 'rejected') setActionError(outcome.fault.message);
-    } catch (error) {
-      setActionError(actionFailureMessage(error, 'Unable to start comparison.'));
-    }
-  }
-
-  async function swap() {
-    setActionError(null);
-    try {
-      const outcome = await viewer.call({
-        operation: 'comparison.swap',
-        comparisonId: comparison.comparisonId,
-      });
-      if (outcome.status === 'rejected') setActionError(outcome.fault.message);
-    } catch (error) {
-      setActionError(actionFailureMessage(error, 'Unable to swap comparison sides.'));
-    }
-  }
-
-  async function cancel(operationId: string) {
-    setActionError(null);
-    try {
-      await viewer.call({
-        operation: 'comparison.cancel',
-        comparisonId: comparison.comparisonId,
-        operationId,
-      });
-    } catch (error) {
-      setActionError(actionFailureMessage(error, 'Unable to cancel comparison.'));
-    }
-  }
+/**
+ * The header, status banners, and result body of one Comparison Tab. Every fact shown here is
+ * read from the Tab and every action is a Tab command; only DOM focus is decided here.
+ */
+export function ComparisonPanel({ tab, themeMode }: { tab: ComparisonTab; themeMode: 'light' | 'dark' }) {
+  const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { comparison, draftKey, actionError, dismissedAttemptId, hiddenDiagnosticsAttemptId } = state;
 
   const attempt = comparison.lastAttempt;
   const diagnostics =
@@ -113,7 +34,7 @@ export function ComparisonTab({
             location={comparison.baseline.source.location}
           />
           <div className="flex items-center">
-            <Button type="button" variant="outline" onClick={swap} disabled={Boolean(comparison.operation)}>
+            <Button type="button" variant="outline" onClick={() => void tab.swap()} disabled={Boolean(operation)}>
               <ArrowLeftRight />
               Swap sides
             </Button>
@@ -127,8 +48,8 @@ export function ComparisonTab({
             <Button
               type="button"
               variant="outline"
-              disabled={!comparison.applied || Boolean(comparison.operation)}
-              onClick={() => void begin('refresh')}
+              disabled={!comparison.applied || Boolean(operation)}
+              onClick={() => void tab.refresh()}
             >
               <RefreshCw />
               Refresh comparison
@@ -141,20 +62,20 @@ export function ComparisonTab({
             {comparison.availableKeyColumns.map((column, index) => (
               <label key={column} className="flex items-center gap-2 text-sm">
                 <input
-                  autoFocus={index === 0 && !comparison.applied && !comparison.operation && !comparison.lastAttempt}
+                  autoFocus={index === 0 && !comparison.applied && !operation && !attempt}
                   type="checkbox"
-                  checked={presentation.draftKey.includes(column)}
-                  disabled={Boolean(comparison.operation)}
-                  onChange={(event) => updateDraft(column, event.target.checked)}
+                  checked={draftKey.includes(column)}
+                  disabled={Boolean(operation)}
+                  onChange={(event) => tab.toggleKeyColumn(column, event.target.checked)}
                 />
                 {column}
               </label>
             ))}
           </div>
-          {presentation.draftKey.length > 0 ? (
+          {draftKey.length > 0 ? (
             <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="Composite key order">
               <span className="text-xs font-semibold uppercase text-muted-foreground">Key order</span>
-              {presentation.draftKey.map((column, index) => (
+              {draftKey.map((column, index) => (
                 <span
                   key={column}
                   className="inline-flex items-center rounded-md border bg-background pl-2 text-sm font-medium"
@@ -165,8 +86,8 @@ export function ComparisonTab({
                     variant="ghost"
                     size="icon-xs"
                     aria-label={`Move ${column} earlier`}
-                    disabled={index === 0 || Boolean(comparison.operation)}
-                    onClick={() => moveDraft(index, -1)}
+                    disabled={index === 0 || Boolean(operation)}
+                    onClick={() => tab.moveKeyColumn(index, -1)}
                   >
                     <ArrowUp />
                   </Button>
@@ -175,8 +96,8 @@ export function ComparisonTab({
                     variant="ghost"
                     size="icon-xs"
                     aria-label={`Move ${column} later`}
-                    disabled={index === presentation.draftKey.length - 1 || Boolean(comparison.operation)}
-                    onClick={() => moveDraft(index, 1)}
+                    disabled={index === draftKey.length - 1 || Boolean(operation)}
+                    onClick={() => tab.moveKeyColumn(index, 1)}
                   >
                     <ArrowDown />
                   </Button>
@@ -187,8 +108,8 @@ export function ComparisonTab({
           <div className="mt-3 flex items-center gap-3">
             <Button
               type="button"
-              disabled={presentation.draftKey.length === 0 || Boolean(comparison.operation)}
-              onClick={() => void begin('apply-key')}
+              disabled={draftKey.length === 0 || Boolean(operation)}
+              onClick={() => void tab.applyKey()}
             >
               Apply key
             </Button>
@@ -207,17 +128,11 @@ export function ComparisonTab({
         actionError={actionError}
         dismissedAttemptId={dismissedAttemptId}
         operationLabel={operationLabel}
-        onCancel={(operationId) => void cancel(operationId)}
-        onDismiss={setDismissedAttemptId}
+        onCancel={() => void tab.cancel()}
+        onDismiss={() => tab.dismissAttempt()}
       />
 
-      <ComparisonBody
-        comparison={comparison}
-        presentation={presentation}
-        operationLabel={operationLabel}
-        themeMode={themeMode}
-        onPresentationChange={onPresentationChange}
-      />
+      <ComparisonBody tab={tab} state={state} operationLabel={operationLabel} themeMode={themeMode} />
     </section>
   );
 }
@@ -227,8 +142,8 @@ type ComparisonStatusProps = {
   actionError: string | null;
   dismissedAttemptId: string | null;
   operationLabel: string | null;
-  onCancel: (operationId: string) => void;
-  onDismiss: (attemptId: string) => void;
+  onCancel: () => void;
+  onDismiss: () => void;
 };
 
 function ComparisonStatus({
@@ -252,13 +167,7 @@ function ComparisonStatus({
               ? 'The current result remains readable until its replacement is ready.'
               : 'The result will appear only after the complete operation succeeds.'}
           </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            onClick={() => onCancel(operation.operationId)}
-          >
+          <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={onCancel}>
             Cancel
           </Button>
         </StatusBanner>
@@ -272,13 +181,7 @@ function ComparisonStatus({
       {attempt?.status === 'cancelled' && comparison.applied && dismissedAttemptId !== attempt.attemptId ? (
         <StatusBanner tone="neutral" aria-live="polite">
           Comparison cancelled. The previous applied result was preserved.
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="ml-auto"
-            onClick={() => onDismiss(attempt.attemptId)}
-          >
+          <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={onDismiss}>
             Dismiss
           </Button>
         </StatusBanner>
@@ -305,36 +208,20 @@ function ComparisonStatus({
 }
 
 type ComparisonBodyProps = {
-  comparison: ComparisonView;
-  presentation: ComparisonTabPresentation;
+  tab: ComparisonTab;
+  state: ComparisonTabState;
   operationLabel: string | null;
   themeMode: 'light' | 'dark';
-  onPresentationChange: (next: ComparisonTabPresentation) => void;
 };
 
-function ComparisonBody({
-  comparison,
-  presentation,
-  operationLabel,
-  themeMode,
-  onPresentationChange,
-}: ComparisonBodyProps) {
+function ComparisonBody({ tab, state, operationLabel, themeMode }: ComparisonBodyProps) {
+  const { comparison } = state;
   const attempt = comparison.lastAttempt;
   if (comparison.applied) {
     return (
       <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
-        <ComparisonSummaryBar
-          summary={comparison.applied.summary}
-          presentation={presentation}
-          onChange={onPresentationChange}
-        />
-        <ComparisonGrid
-          comparison={comparison}
-          applied={comparison.applied}
-          rowsMode={presentation.rows}
-          columnsMode={presentation.columns}
-          themeMode={themeMode}
-        />
+        <ComparisonSummaryBar tab={tab} state={state} summary={comparison.applied.summary} />
+        <ComparisonGrid tab={tab} state={state} applied={comparison.applied} themeMode={themeMode} />
       </div>
     );
   }
@@ -426,10 +313,6 @@ function StatusBanner({
   );
 }
 
-function actionFailureMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error && cause.message ? cause.message : fallback;
-}
-
 function KeyDiagnostics({
   comparison,
   diagnostics,
@@ -496,13 +379,13 @@ function DiagnosticSide({
 }
 
 function ComparisonSummaryBar({
+  tab,
+  state,
   summary,
-  presentation,
-  onChange,
 }: {
+  tab: ComparisonTab;
+  state: ComparisonTabState;
   summary: ComparisonSummary;
-  presentation: ComparisonTabPresentation;
-  onChange: (next: ComparisonTabPresentation) => void;
 }) {
   const rows = summary.rows;
   return (
@@ -514,21 +397,21 @@ function ComparisonSummaryBar({
       <span className="mr-auto text-xs text-muted-foreground">{rows.total} total rows</span>
       <Toggle
         label="Rows"
-        value={presentation.rows}
+        value={state.rows}
         options={[
           ['differences', 'Differences'],
           ['all', 'All rows'],
         ]}
-        onChange={(rows) => onChange({ ...presentation, rows })}
+        onChange={(rows) => tab.setRowsMode(rows)}
       />
       <Toggle
         label="Columns"
-        value={presentation.columns}
+        value={state.columns}
         options={[
           ['changed-first', 'Changed first'],
           ['csv-order', 'All in CSV order'],
         ]}
-        onChange={(columns) => onChange({ ...presentation, columns })}
+        onChange={(columns) => tab.setColumnsMode(columns)}
       />
     </div>
   );

@@ -185,17 +185,18 @@ describe('RendererWorkspace lifecycle', () => {
     expect(workspace.snapshot().activeTabId).toBeNull();
   });
 
-  it('preserves Comparison presentation across projection updates and ignores older results', async () => {
+  it('routes Comparison projections to the same Comparison Tab and removes it on close', async () => {
     const { workspace, emit } = setup();
     await workspace.openRecent('a');
     await workspace.openRecent('b');
     await workspace.openComparison('a', 'b');
-    const presentation = { draftKey: ['id'], rows: 'all' as const, columns: 'csv-order' as const };
-    workspace.updateComparisonPresentation('comparison-1', presentation);
+    const entry = workspace.snapshot().tabs.at(-1);
+    if (entry?.kind !== 'comparison') throw new Error('Comparison Tab is absent.');
+    entry.tab.setRowsMode('all');
     emit({ type: 'comparison', event: { kind: 'changed', comparison: comparison(3) } });
-    emit({ type: 'comparison', event: { kind: 'changed', comparison: comparison(2) } });
     await workspace.openComparison('a', 'b');
-    expect(workspace.snapshot().tabs.at(-1)).toMatchObject({ comparison: { version: 3 }, presentation });
+    expect(workspace.snapshot().tabs.at(-1)?.tab).toBe(entry.tab);
+    expect(entry.tab.snapshot()).toMatchObject({ comparison: { version: 3 }, rows: 'all' });
     emit({ type: 'comparison', event: { kind: 'closed', comparisonId: 'comparison-1' } });
     expect(workspace.snapshot().tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:b']);
   });

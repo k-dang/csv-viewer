@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '@/csv/csv-dialect';
 import { ComparisonCandidateDialog } from '@/comparison/comparison-candidate-dialog';
-import { ComparisonTab } from '@/comparison/comparison-tab';
+import { ComparisonPanel } from '@/comparison/comparison-panel';
 import { CsvGrid } from '@/csv/csv-grid';
 import { DialectControls } from '@/csv/dialect-controls';
 import { EmptyCsvState } from '@/csv/empty-csv-state';
@@ -264,24 +264,14 @@ function WorkspaceView({
                 </section>
               );
             })}
-            {comparisonTabs.map((tab) => {
-              const comparison = tab.comparison;
-              return (
-                <div
-                  key={comparison.comparisonId}
-                  className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
-                >
-                  <ComparisonTab
-                    comparison={comparison}
-                    presentation={tab.presentation}
-                    themeMode={themeMode}
-                    onPresentationChange={(presentation) =>
-                      workspace.updateComparisonPresentation(comparison.comparisonId, presentation)
-                    }
-                  />
-                </div>
-              );
-            })}
+            {comparisonTabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={cn('col-start-1 row-start-1 grid min-h-0 min-w-0', tab.id !== activeTabId && 'hidden')}
+              >
+                <ComparisonPanel tab={tab.tab} themeMode={themeMode} />
+              </div>
+            ))}
           </div>
         </div>
       ) : (
