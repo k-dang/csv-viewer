@@ -6,11 +6,11 @@ test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page 
   await page.route('**/src/main.tsx', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
-    const anchor = 'disposeWorkspaceWhenPageHides(started.viewer);';
+    const anchor = 'workspace = new RendererWorkspace(started.viewer, { confirmClose: confirmTabClose });';
     expect(source).toContain(anchor);
     await route.fulfill({
       response,
-      body: source.replace(anchor, `${anchor}
+      body: source.replace(anchor, `
         const call = started.viewer.call.bind(started.viewer);
         started.viewer.call = async (request) => {
           const result = await call(request);
@@ -22,6 +22,7 @@ test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page 
           }
           return result;
         };
+        ${anchor}
       `),
     });
   });
