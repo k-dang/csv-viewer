@@ -12,8 +12,10 @@ import type {
   CsvViewerIntent,
   CsvViewerRequest,
   OpenCsvResult,
+  RecentCsvSource,
   WorkingCsvView,
 } from '@csv-viewer/workspace/csv-viewer';
+import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '../csv/csv-dialect';
 import { CsvTab } from '../csv/csv-tab';
 
 export type ComparisonTabPresentation = {
@@ -27,6 +29,10 @@ export type RendererTab =
   | { kind: 'comparison'; id: string; comparison: ComparisonView; presentation: ComparisonTabPresentation };
 
 export type RendererWorkspaceState = {
+  delimiter: string;
+  headerMode: CsvHeaderMode;
+  dialectError: string | null;
+  recentSources: RecentCsvSource[];
   tabs: RendererTab[];
   activeTabId: string | null;
   isOpening: boolean;
@@ -34,9 +40,8 @@ export type RendererWorkspaceState = {
   fatalError: string | null;
 };
 
-/** The view supplies form validation and confirmation display; lifecycle stays in the workspace. */
+/** The runtime supplies confirmation display; the workspace owns input validation. */
 export type RendererWorkspaceHost = {
-  openOptions(): CsvDialectOptions | null;
   confirmClose(sourceName: string, impact: CloseImpact): boolean | Promise<boolean>;
 };
 
@@ -45,10 +50,14 @@ type OpenRequest = Extract<CsvViewerRequest, { operation: 'csv.open' | 'csv.open
 /**
  * Owns the renderer's Tabs and their lifetime, independently of React commits. Commands and
  * CsvViewer events use the same current state. Runtime data ownership remains behind CsvViewer.
- * Create once on mounting the renderer, and dispose on unmount to invalidate outstanding work.
+ * Create at application startup and dispose when the session ends to invalidate outstanding work.
  */
 export class RendererWorkspace {
   private state: RendererWorkspaceState = {
+    delimiter: '',
+    headerMode: 'auto',
+    dialectError: null,
+    recentSources: [],
     tabs: [],
     activeTabId: null,
     isOpening: false,
@@ -57,6 +66,7 @@ export class RendererWorkspace {
   };
   private readonly listeners = new Set<() => void>();
   private stopped = false;
+  private recentSourcesRequest = 0;
   private stopEvents: () => void = () => {};
   /** Closed IDs matter only to the single Open/Reopen response currently in flight. */
   private openingClosedCsvs: Set<string> | null = null;
@@ -68,6 +78,7 @@ export class RendererWorkspace {
     this.stopEvents = viewer.onEvent((event) => this.receive(event));
     // A runtime can replay a fatal event synchronously while subscribing.
     if (this.stopped) this.stopEvents();
+    void this.refreshRecentSources();
   }
 
   readonly snapshot = (): RendererWorkspaceState => this.state;
@@ -76,6 +87,10 @@ export class RendererWorkspace {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
+
+  updateDialect(delimiter: string, headerMode: CsvHeaderMode): void {
+    if (!this.stopped) this.set({ delimiter, headerMode });
+  }
 
   open(): Promise<void> {
     return this.runOpen((options) => ({ operation: 'csv.open', options }), 'Unable to open CSV.');
@@ -219,10 +234,15 @@ export class RendererWorkspace {
     reopening?: Extract<RendererTab, { kind: 'csv' }>,
   ): Promise<void> {
     if (this.stopped || this.state.isOpening) return;
-    const options = this.host.openOptions();
-    if (!options) return;
+    const options = buildDialectOptions(this.state.delimiter, this.state.headerMode);
+    if (isDialectError(options)) {
+      this.set({ dialectError: options });
+      return;
+    }
+    this.set({ dialectError: null });
     const closedCsvs = new Set<string>();
     this.openingClosedCsvs = closedCsvs;
+    this.recentSourcesRequest += 1;
     this.set({ isOpening: true });
     try {
       const result = await this.viewer.call(request(options));
@@ -233,7 +253,10 @@ export class RendererWorkspace {
       if (!this.stopped && (!reopening || this.current(reopening))) this.set({ error: error instanceof Error ? error.message : fallback });
     } finally {
       this.openingClosedCsvs = null;
-      if (!this.stopped) this.set({ isOpening: false });
+      if (!this.stopped) {
+        this.set({ isOpening: false });
+        await this.refreshRecentSources();
+      }
     }
   }
 
@@ -316,6 +339,20 @@ export class RendererWorkspace {
       if (activeTabId === id) activeTabId = tabs[index]?.id ?? tabs[index - 1]?.id ?? null;
     }
     this.set({ tabs, activeTabId });
+    if (this.state.tabs.length === 0) void this.refreshRecentSources();
+  }
+
+  /** Refresh history when the empty workspace appears or an open attempt finishes there. */
+  private async refreshRecentSources(): Promise<void> {
+    if (this.stopped || !this.viewer.capabilities.recentCsvSources || this.state.isOpening || this.state.tabs.length > 0) return;
+    const request = ++this.recentSourcesRequest;
+    let recentSources: RecentCsvSource[];
+    try {
+      recentSources = await this.viewer.call({ operation: 'csv.get-recent-sources' });
+    } catch {
+      recentSources = [];
+    }
+    if (!this.stopped && request === this.recentSourcesRequest) this.set({ recentSources });
   }
 
   private stop(): void {

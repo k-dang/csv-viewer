@@ -182,6 +182,11 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     }
   }
 
+  /** Interrupts startup without waiting for a Worker request that may never settle. */
+  cancelStartup(): void {
+    this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
+  }
+
   /** Closes every Wasm resource, collecting rather than throwing teardown failures. */
   async close(): Promise<Error[]> {
     const failures: Error[] = [];
@@ -213,6 +218,10 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
   protected async createEngine(): Promise<AsyncDuckDB> {
     const worker = await this.options.createWorker(this.options.mainWorker);
+    if (this.fatalError) {
+      worker.terminate();
+      this.throwIfFatal();
+    }
     this.worker = worker;
     worker.addEventListener('error', this.handleWorkerError);
     const database = new AsyncDuckDB(new VoidLogger(), worker);
@@ -240,6 +249,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   private async openOwnerConnection(): Promise<DuckDbWasmConnection> {
     return normalizeDatabaseOperation(async () => {
       const database = await this.createEngine();
+      this.throwIfFatal();
       this.database = database;
       try {
         await database.open({
@@ -257,6 +267,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
         await connection.run('SET autoinstall_known_extensions = false');
         await connection.run('SET autoload_known_extensions = false');
         await connection.run('SET lock_configuration = true');
+        this.throwIfFatal();
         this.connection = connection;
         return connection;
       } catch (error) {

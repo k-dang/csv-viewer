@@ -20,10 +20,14 @@ export async function startWebCsvViewer(
   database: DuckDbWasmWorkspaceDatabase,
   pickFile: WebCsvFilePicker,
   limits?: WebCsvCapacityLimits,
+  signal?: AbortSignal,
 ): Promise<WebCsvViewerStartup> {
   const fatalError = Promise.withResolvers<never>();
   const stopWatchingStartup = database.onFatalError(fatalError.reject);
+  const cancel = () => database.cancelStartup();
+  signal?.addEventListener('abort', cancel, { once: true });
   try {
+    if (signal?.aborted) cancel();
     await Promise.race([verifyRequiredWasmFeatures(database), fatalError.promise]);
     stopWatchingStartup();
     const workspace = createCsvViewer(new WebWorkspaceHost(database, pickFile, limits), database);
@@ -33,10 +37,12 @@ export async function startWebCsvViewer(
     };
   } catch (error) {
     stopWatchingStartup();
-    console.error('CSV Viewer Web startup check failed.', error);
+    if (!signal?.aborted) console.error('CSV Viewer Web startup check failed.', error);
     const failures = await database.close();
     failures.forEach((failure) => console.error('CSV Viewer Web cleanup failed.', failure));
     return { status: 'unsupported' };
+  } finally {
+    signal?.removeEventListener('abort', cancel);
   }
 }
 
