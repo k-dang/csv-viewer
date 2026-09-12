@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
+import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { ComparisonCandidateDialog } from '@/comparison/comparison-candidate-dialog';
 import { ComparisonTab } from '@/comparison/comparison-tab';
@@ -104,27 +105,25 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
 
   return (
     <main className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
-      <header className="flex min-h-[78px] flex-col items-start justify-center gap-4 border-b bg-card/92 px-5 py-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur md:h-[78px] md:flex-row md:items-center md:justify-between md:gap-6 md:px-7 md:py-0">
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-card/92 px-4 py-2 backdrop-blur md:h-14 md:flex-nowrap md:py-0">
+        <div className="flex min-w-0 items-center gap-2.5">
           <div
-            className="grid size-10 shrink-0 place-items-center rounded-lg border border-primary/10 bg-primary text-primary-foreground shadow-sm"
+            className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"
             aria-hidden="true"
           >
-            <Table2 className="size-5" />
+            <Table2 className="size-4" />
           </div>
-          <div className="min-w-0">
-            <p className="mb-1 text-xs font-bold uppercase text-muted-foreground">Local CSV workspace</p>
-            <h1 className="truncate text-[22px] leading-tight font-semibold text-foreground">CSV Viewer</h1>
-          </div>
+          <h1 className="truncate text-base font-semibold tracking-tight text-foreground">CSV Viewer</h1>
         </div>
-        <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 md:ml-auto">
           <DialectControls
             delimiter={delimiter}
             headerMode={headerMode}
             onDelimiterChange={(value) => workspace.updateDialect(value, headerMode)}
             onHeaderModeChange={(value) => workspace.updateDialect(delimiter, value)}
           />
-          <Button type="button" onClick={() => void workspace.open()} disabled={isOpening}>
+          <Separator orientation="vertical" className="hidden md:my-1 md:block" />
+          <Button type="button" size="sm" onClick={() => void workspace.open()} disabled={isOpening}>
             {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}
             {isOpening ? 'Opening...' : 'Open CSV'}
           </Button>
@@ -132,6 +131,19 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
             <Button
               type="button"
               variant="outline"
+              size="sm"
+              onClick={() => void workspace.reopen()}
+              disabled={isOpening}
+            >
+              <RefreshCw />
+              Reopen
+            </Button>
+          ) : null}
+          {activeCsvTab ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={() => void showCandidatePicker()}
               disabled={csvTabs.length < 2}
             >
@@ -139,16 +151,11 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
               Compare…
             </Button>
           ) : null}
-          {activeCsvTab ? (
-            <Button type="button" variant="outline" onClick={() => void workspace.reopen()} disabled={isOpening}>
-              <RefreshCw />
-              Reopen
-            </Button>
-          ) : null}
+          <Separator orientation="vertical" className="hidden md:my-1 md:block" />
           <Button
             type="button"
-            variant="outline"
-            size="icon"
+            variant="ghost"
+            size="icon-sm"
             onClick={toggleTheme}
             title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
