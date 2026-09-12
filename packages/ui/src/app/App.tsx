@@ -1,73 +1,27 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field';
 import { cn } from '@/lib/utils';
-import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '@/csv/csv-dialect';
 import { ComparisonCandidateDialog } from '@/comparison/comparison-candidate-dialog';
 import { ComparisonTab } from '@/comparison/comparison-tab';
 import { CsvGrid } from '@/csv/csv-grid';
 import { DialectControls } from '@/csv/dialect-controls';
 import { EmptyCsvState } from '@/csv/empty-csv-state';
 import { TabStrip } from '@/app/tab-strip';
-import type { CloseImpact, ComparisonCandidate, CsvDialectOptions, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
-import { RendererWorkspace } from './renderer-workspace';
+import type { ComparisonCandidate, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import type { RendererWorkspace } from './renderer-workspace';
 import { useCsvViewer } from './csv-viewer';
+import { applyTheme, getInitialTheme, type ThemeMode } from './theme';
 
-type ThemeMode = 'light' | 'dark';
-const themeStorageKey = 'csv-viewer-theme';
-
-function getInitialTheme(): ThemeMode {
-  const storedTheme = window.localStorage.getItem(themeStorageKey);
-  if (storedTheme === 'light' || storedTheme === 'dark') return storedTheme;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
-function confirmTabClose(sourceName: string, impact: CloseImpact): boolean {
-  const dependentNames = impact.dependentComparisons.map(
-    (comparison) => `${comparison.baselineName} ⇄ ${comparison.candidateName}`,
-  );
-  const description = [
-    impact.hasUnexportedChanges ? 'Unexported Changes will be lost.' : null,
-    dependentNames.length > 0
-      ? `These dependent Comparison Tabs will also close:\n${dependentNames.join('\n')}`
-      : null,
-  ].filter(Boolean).join('\n\n');
-  return window.confirm(`Close ${sourceName}?\n\n${description}`);
-}
-
-/** Each committed mount owns a fresh workspace, including Strict Mode's effect replay. */
-export function App() {
-  const viewer = useCsvViewer();
-  const openOptions = useRef<() => CsvDialectOptions | null>(() => ({}));
-  const [workspace, setWorkspace] = useState<RendererWorkspace | null>(null);
-  useEffect(() => {
-    const owned = new RendererWorkspace(viewer, {
-      openOptions: () => openOptions.current(),
-      confirmClose: confirmTabClose,
-    });
-    setWorkspace(owned);
-    return () => owned.dispose();
-  }, [viewer]);
-  return workspace ? <WorkspaceView workspace={workspace} openOptions={openOptions} /> : null;
-}
-
-function WorkspaceView({
-  workspace,
-  openOptions,
-}: {
-  workspace: RendererWorkspace;
-  openOptions: RefObject<() => CsvDialectOptions | null>;
-}) {
+export function App({ workspace }: { workspace: RendererWorkspace }) {
   const viewer = useCsvViewer();
   const workspaceState = useSyncExternalStore(workspace.subscribe, workspace.snapshot);
   const [candidatePicker, setCandidatePicker] = useState<{
     baseline: WorkingCsvView;
     candidates: ComparisonCandidate[];
   } | null>(null);
-  const [delimiter, setDelimiter] = useState('');
-  const [headerMode, setHeaderMode] = useState<CsvHeaderMode>('auto');
-  const [dialectError, setDialectError] = useState<string | null>(null);
+  const { delimiter, headerMode, dialectError } = workspaceState;
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
 
   const { tabs: openTabs, activeTabId, isOpening, error: openError, fatalError } = workspaceState;
@@ -76,26 +30,11 @@ function WorkspaceView({
   const activeTab = openTabs.find((tab) => tab.id === activeTabId);
   const activeCsvTab = activeTab?.kind === 'csv' ? activeTab.tab : null;
 
-  // Input events publish validation for both menu and button commands before the next render.
-  function updateDialect(nextDelimiter: string, nextHeaderMode: CsvHeaderMode) {
-    setDelimiter(nextDelimiter);
-    setHeaderMode(nextHeaderMode);
-    openOptions.current = () => {
-      const options = buildDialectOptions(nextDelimiter, nextHeaderMode);
-      if (isDialectError(options)) {
-        setDialectError(options);
-        return null;
-      }
-      setDialectError(null);
-      return options;
-    };
+  function toggleTheme() {
+    const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
+    applyTheme(nextTheme);
+    setThemeMode(nextTheme);
   }
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', themeMode === 'dark');
-    document.documentElement.style.colorScheme = themeMode;
-    window.localStorage.setItem(themeStorageKey, themeMode);
-  }, [themeMode]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -182,8 +121,8 @@ function WorkspaceView({
           <DialectControls
             delimiter={delimiter}
             headerMode={headerMode}
-            onDelimiterChange={(value) => updateDialect(value, headerMode)}
-            onHeaderModeChange={(value) => updateDialect(delimiter, value)}
+            onDelimiterChange={(value) => workspace.updateDialect(value, headerMode)}
+            onHeaderModeChange={(value) => workspace.updateDialect(delimiter, value)}
           />
           <Button type="button" onClick={() => void workspace.open()} disabled={isOpening}>
             {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}
@@ -210,7 +149,7 @@ function WorkspaceView({
             type="button"
             variant="outline"
             size="icon"
-            onClick={() => setThemeMode(isDarkMode ? 'light' : 'dark')}
+            onClick={toggleTheme}
             title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
           >
@@ -279,6 +218,7 @@ function WorkspaceView({
         </div>
       ) : (
         <EmptyCsvState
+          recentSources={workspaceState.recentSources}
           isOpening={isOpening}
           errorMessage={openError}
           dialectError={dialectError}

@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CsvViewerEvent, OpenCsvResult, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
+import { RendererWorkspace } from './renderer-workspace';
+import { confirmTabClose } from './confirm-tab-close';
 import { App } from './App';
 import { CsvViewerProvider } from './csv-viewer';
 import { workingCsvFixture } from '../test-helpers/csv-views';
@@ -19,6 +21,13 @@ const tabHandlers = (workingCsv: WorkingCsvView) => ({
   }),
 });
 
+const owned: RendererWorkspace[] = [];
+function createWorkspace(viewer: ReturnType<typeof createTestCsvViewer>) {
+  const workspace = new RendererWorkspace(viewer, { confirmClose: confirmTabClose });
+  owned.push(workspace);
+  return workspace;
+}
+
 beforeEach(() => {
   // jsdom ships neither of these: the App reads matchMedia for the initial theme and confirm on close.
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -27,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  for (const workspace of owned.splice(0)) workspace.dispose();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
@@ -40,7 +50,7 @@ describe('App', () => {
       handlers: { 'csv.open': open, 'csv.get-recent-sources': async () => [] },
       onEvent: (listener) => { receiveEvent = listener; return () => {}; },
     });
-    render(<CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider>);
+    render(<CsvViewerProvider viewer={viewer}><App workspace={createWorkspace(viewer)} /></CsvViewerProvider>);
     fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: 'xx' } });
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     expect(open).not.toHaveBeenCalled();
@@ -67,7 +77,8 @@ describe('App', () => {
         return () => { listeners.delete(listener); };
       },
     });
-    const rendered = render(<StrictMode><CsvViewerProvider viewer={viewer}><App /></CsvViewerProvider></StrictMode>);
+    const workspace = createWorkspace(viewer);
+    const rendered = render(<StrictMode><CsvViewerProvider viewer={viewer}><App workspace={workspace} /></CsvViewerProvider></StrictMode>);
     expect(listeners.size).toBe(1);
     act(() => {
       for (const listener of listeners) {
@@ -77,7 +88,13 @@ describe('App', () => {
     });
     await act(async () => pending.resolve({ status: 'cancelled' }));
     expect(open).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ';' } });
     rendered.unmount();
+    expect(listeners.size).toBe(1);
+    render(<StrictMode><CsvViewerProvider viewer={viewer}><App workspace={workspace} /></CsvViewerProvider></StrictMode>);
+    expect(screen.getByRole('textbox', { name: 'Delimiter' }).getAttribute('value')).toBe(';');
+    expect(listeners.size).toBe(1);
+    workspace.dispose();
     expect(listeners.size).toBe(0);
   });
 
@@ -107,7 +124,7 @@ describe('App', () => {
     });
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App />
+        <App workspace={createWorkspace(viewer)} />
       </CsvViewerProvider>,
     );
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
@@ -143,7 +160,7 @@ describe('App', () => {
 
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App />
+        <App workspace={createWorkspace(viewer)} />
       </CsvViewerProvider>,
     );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
@@ -195,7 +212,7 @@ describe('App', () => {
 
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App />
+        <App workspace={createWorkspace(viewer)} />
       </CsvViewerProvider>,
     );
     if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
@@ -245,7 +262,7 @@ describe('App', () => {
 
     render(
       <CsvViewerProvider viewer={viewer}>
-        <App />
+        <App workspace={createWorkspace(viewer)} />
       </CsvViewerProvider>,
     );
 
@@ -283,7 +300,7 @@ describe('App', () => {
 
       render(
         <CsvViewerProvider viewer={viewer}>
-          <App />
+          <App workspace={createWorkspace(viewer)} />
         </CsvViewerProvider>,
       );
       if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');

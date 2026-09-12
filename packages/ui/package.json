@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./renderer-workspace": "./src/app/renderer-workspace.ts",
+    "./confirm-tab-close": "./src/app/confirm-tab-close.ts",
     "./App": "./src/app/App.tsx",
+    "./theme": "./src/app/theme.ts",
     "./csv-viewer": "./src/app/csv-viewer.tsx",
     "./styles.css": "./src/styles.css"
   },

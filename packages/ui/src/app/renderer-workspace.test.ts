@@ -28,7 +28,7 @@ function setup(overrides: Parameters<typeof createTestCsvViewer>[0] = {}, host: 
       return () => { unsubscribe(); listeners.delete(listener); };
     }),
   });
-  const workspace = new RendererWorkspace(viewer, { openOptions: () => ({}), confirmClose: () => true, ...host });
+  const workspace = new RendererWorkspace(viewer, { confirmClose: () => true, ...host });
   owned.push(workspace);
   return { workspace, unsubscribe, emit: (event: CsvViewerEvent) => { for (const listener of listeners) listener(event); } };
 }
@@ -83,14 +83,16 @@ describe('RendererWorkspace lifecycle', () => {
     expect(workspace.snapshot().tabs).toHaveLength(1);
   });
 
-  it('keeps form validation in the host and clears busy state after failures', async () => {
-    const options = vi.fn<RendererWorkspaceHost['openOptions']>().mockReturnValueOnce(null).mockReturnValue({ delimiter: ';' });
+  it('validates dialect inputs and clears busy state after failures', async () => {
     const open = vi.fn().mockRejectedValueOnce(new Error('Read failed')).mockResolvedValueOnce({ status: 'opened', workingCsv: csv('a') });
-    const { workspace } = setup({ handlers: { 'csv.open': open } }, { openOptions: options });
+    const { workspace } = setup({ handlers: { 'csv.open': open } });
+    workspace.updateDialect('xx', 'auto');
     await workspace.open();
     expect(open).not.toHaveBeenCalled();
+    expect(workspace.snapshot().dialectError).toBe('Delimiter must be one character, or blank for automatic detection.');
+    workspace.updateDialect(';', 'auto');
     await workspace.open();
-    expect(workspace.snapshot()).toMatchObject({ error: 'Read failed', isOpening: false });
+    expect(workspace.snapshot()).toMatchObject({ dialectError: null, error: 'Read failed', isOpening: false });
     expect(open).toHaveBeenCalledWith({ operation: 'csv.open', options: { delimiter: ';' } });
     await workspace.open();
     expect(workspace.snapshot()).toMatchObject({ error: null, isOpening: false, activeTabId: 'csv:a' });
@@ -279,5 +281,51 @@ describe('RendererWorkspace lifecycle', () => {
     confirmation.resolve(true);
     await completed;
     expect(close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('recent sources', () => {
+  const sources = [{ sourceId: 'a', name: 'a.csv', location: '/a.csv', sizeBytes: 20, lastOpenedAt: '2026-01-01T00:00:00.000Z' }];
+
+  it('loads initially, refreshes after failed opens, and reloads after closing the last tab', async () => {
+    const recent = vi.fn().mockResolvedValueOnce(sources).mockResolvedValueOnce([]).mockResolvedValue(sources);
+    const openRecent = vi.fn().mockResolvedValue({ status: 'failed', message: 'Missing source' });
+    const { workspace } = setup({ handlers: { 'csv.get-recent-sources': recent, 'csv.open-recent': openRecent } });
+    await vi.waitFor(() => expect(workspace.snapshot().recentSources).toEqual(sources));
+    await workspace.openRecent('a');
+    expect(workspace.snapshot().recentSources).toEqual([]);
+    await workspace.open();
+    expect(recent).toHaveBeenCalledTimes(2);
+    await workspace.close();
+    await vi.waitFor(() => expect(workspace.snapshot().recentSources).toEqual(sources));
+    expect(recent).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not request recent sources when the runtime cannot reopen them', async () => {
+    const recent = vi.fn();
+    const { workspace } = setup({ capabilities: { recentCsvSources: false }, handlers: { 'csv.get-recent-sources': recent } });
+    await workspace.open();
+    await workspace.close();
+    expect(recent).not.toHaveBeenCalled();
+  });
+
+  it('ignores old history responses after an open attempt or disposal', async () => {
+    const first = Promise.withResolvers<typeof sources>();
+    const last = Promise.withResolvers<typeof sources>();
+    const recent = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValueOnce([]).mockReturnValueOnce(last.promise);
+    const { workspace } = setup({ handlers: {
+      'csv.get-recent-sources': recent,
+      'csv.open': async () => ({ status: 'cancelled' }),
+    } });
+    await workspace.open();
+    first.resolve(sources);
+    await first.promise;
+    expect(workspace.snapshot().recentSources).toEqual([]);
+    const opening = workspace.open();
+    await vi.waitFor(() => expect(recent).toHaveBeenCalledTimes(3));
+    workspace.dispose();
+    last.resolve(sources);
+    await opening;
+    expect(workspace.snapshot().recentSources).toEqual([]);
   });
 });
