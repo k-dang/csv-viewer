@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Toaster } from '@/components/ui/toast';
 import { FieldError } from '@/components/ui/field';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
@@ -241,6 +242,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
           onClose={closeCandidatePicker}
         />
       ) : null}
+      <Toaster timeout={3000} />
     </main>
   );
 }

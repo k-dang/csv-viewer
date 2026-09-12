@@ -42,6 +42,7 @@ import { Input } from '@/components/ui/input';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
+import { copyColumn } from './copy-column';
 import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
@@ -241,7 +242,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     if (!event || !isCopyColumnShortcut(event)) return;
     if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;
     event.preventDefault();
-    void tab.copyFocusedColumn();
+    void copyColumn(tab);
   }
 
   const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
