@@ -126,7 +126,7 @@ Stable handles from this renderer:
 | Open from disk | button `Open CSV`. Two of them render on the empty window (header and card), so pass `--nth 0`. On desktop this is a native OS dialog: do not click it. On web, drive it with `upload --file <path>` |
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
 | Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`) |
-| Header mode | combobox `Header mode` (`#csv-header-mode`), options `Auto header`, `First row headers`, `No headers` |
+| Header mode | combobox `Headers` (`#csv-header-mode`), options `Auto`, `First row`, `None` |
 | Compare | button `Compare…` (ellipsis character `…`, U+2026). Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Unattended runs cannot open a second CSV (Recent CSV Sources unmount after the first open; `Open CSV` is a native dialog). |
 | Reopen | button `Reopen` |
 | Theme | button `Switch to dark mode` / `Switch to light mode` |
