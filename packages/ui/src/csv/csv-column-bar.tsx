@@ -3,6 +3,7 @@ import { Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { CsvTab } from './csv-tab';
 import { formatNumber } from './csv-format';
+import { copyColumn } from './copy-column';
 
 /**
  * The strip between the toolbar and the row grid that names the focused column and copies it.
@@ -10,8 +11,7 @@ import { formatNumber } from './csv-format';
  * Ctrl+C on a focused cell runs the same Tab command.
  */
 export function CsvColumnBar({ tab }: { tab: CsvTab }) {
-  const { focusedColumn, filteredRowCount, copiedColumn } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const copiedCount = copiedColumn?.column === focusedColumn ? copiedColumn.count : null;
+  const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
 
   return (
     <div className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
@@ -19,18 +19,13 @@ export function CsvColumnBar({ tab }: { tab: CsvTab }) {
         <>
           <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
           <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
-          {copiedCount !== null ? (
-            <span className="shrink-0 text-primary" role="status">
-              Copied {formatNumber(copiedCount)}
-            </span>
-          ) : null}
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="ml-auto"
             title="Copy column (Ctrl+C on a cell)"
-            onClick={() => void tab.copyFocusedColumn()}
+            onClick={() => void copyColumn(tab)}
           >
             <Copy />
             Copy column
