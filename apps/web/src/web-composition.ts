@@ -2,6 +2,8 @@ import { quoteLiteral } from '@csv-viewer/workspace/csv-query';
 import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import type {
   ConfirmWorkspaceCloseOutcome,
+  CsvCapacityExceeded,
+  CsvSourceId,
   CsvViewerEvent,
   CsvViewerRequest,
   CsvViewerResult,
@@ -12,7 +14,7 @@ import type { WebCsvCapacityLimits, WebCsvFilePicker } from './web-workspace-hos
 import { WebWorkspaceHost } from './web-workspace-host';
 
 export type WebCsvViewerStartup =
-  | { status: 'ready'; viewer: CsvWorkspaceOwner }
+  | { status: 'ready'; viewer: CsvWorkspaceOwner; acquireDroppedSource: (file: File) => Promise<CsvSourceId | CsvCapacityExceeded> }
   | { status: 'unsupported' };
 
 /** Starts the pinned Worker and proves its in-memory CSV path before file selection is enabled. */
@@ -30,10 +32,12 @@ export async function startWebCsvViewer(
     if (signal?.aborted) cancel();
     await Promise.race([verifyRequiredWasmFeatures(database), fatalError.promise]);
     stopWatchingStartup();
-    const workspace = createCsvViewer(new WebWorkspaceHost(database, pickFile, limits), database);
+    const host = new WebWorkspaceHost(database, pickFile, limits);
+    const workspace = createCsvViewer(host, database);
     return {
       status: 'ready',
       viewer: new WebCsvViewerSession(workspace, database),
+      acquireDroppedSource: async (file) => host.registerSource(file),
     };
   } catch (error) {
     stopWatchingStartup();

@@ -43,7 +43,10 @@ void startup.then((started) => {
     root.render(<WebStartupState status="unsupported" />);
     return;
   }
-  workspace = new RendererWorkspace(started.viewer, { confirmClose: confirmTabClose });
+  workspace = new RendererWorkspace(started.viewer, {
+    confirmClose: confirmTabClose,
+    acquireDroppedSource: started.acquireDroppedSource,
+  });
   root.render(
     <StrictMode>
       <CsvViewerProvider viewer={started.viewer}>

@@ -41,6 +41,9 @@ export function EmptyCsvState({
           <FieldDescription className="max-w-[46ch] text-[15px] leading-relaxed">
             Open a local CSV Source to inspect, query, edit, and compare its data. All processing stays on this device.
           </FieldDescription>
+          <FieldDescription className="text-sm font-medium text-foreground">
+            Drop CSV, TSV, or TXT files anywhere to open them.
+          </FieldDescription>
           {!viewer.capabilities.recentCsvSources ? (
             <FieldDescription className="max-w-[46ch] text-sm leading-relaxed">
               Select your CSV Sources again after reload.
@@ -51,7 +54,7 @@ export function EmptyCsvState({
           {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}
           {isOpening ? 'Opening...' : 'Open CSV'}
         </Button>
-        <FieldError>{errorMessage}</FieldError>
+        <FieldError className="max-h-40 overflow-auto whitespace-pre-line break-words">{errorMessage}</FieldError>
         <FieldError>{dialectError}</FieldError>
         {viewer.capabilities.recentCsvSources && recentSources.length > 0 ? (
           <RecentCsvSourceList sources={recentSources} disabled={isOpening} onOpenRecent={onOpenRecent} />

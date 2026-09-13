@@ -2,4 +2,5 @@
 export const ipcChannels = {
   request: 'csv-viewer:request',
   event: 'csv-viewer:event',
+  acquireDroppedSource: 'csv-viewer:acquire-dropped-source',
 } as const;

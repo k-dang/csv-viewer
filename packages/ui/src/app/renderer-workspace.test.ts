@@ -28,7 +28,7 @@ function setup(overrides: Parameters<typeof createTestCsvViewer>[0] = {}, host: 
       return () => { unsubscribe(); listeners.delete(listener); };
     }),
   });
-  const workspace = new RendererWorkspace(viewer, { confirmClose: () => true, ...host });
+  const workspace = new RendererWorkspace(viewer, { confirmClose: () => true, acquireDroppedSource: async (file) => file.name, ...host });
   owned.push(workspace);
   return { workspace, unsubscribe, emit: (event: CsvViewerEvent) => { for (const listener of listeners) listener(event); } };
 }
@@ -40,6 +40,50 @@ function csvTab(workspace: RendererWorkspace, id: string) {
 }
 
 describe('RendererWorkspace lifecycle', () => {
+  it('continues a drop after acquisition and open failures, then focuses a known source without replacing its tab', async () => {
+    const pending = Promise.withResolvers<OpenCsvResult>();
+    const acquire = vi.fn(async (file: File) => {
+      if (file.name === 'missing.csv') throw new Error('File disappeared');
+      return file.name;
+    });
+    const open = vi.fn(async ({ sourceId }: { sourceId?: string }): Promise<OpenCsvResult> => {
+      if (sourceId === 'first.csv') return pending.promise;
+      if (sourceId === 'bad.csv') return { status: 'failed', message: 'Cannot parse this file' };
+      if (sourceId === 'a.csv') return { status: 'already-open', workingCsv: csv('a') };
+      return { status: 'opened', workingCsv: csv('last') };
+    });
+    const { workspace } = setup({ handlers: { 'csv.open': open } }, { acquireDroppedSource: acquire });
+    await workspace.openRecent('a');
+    const original = csvTab(workspace, 'a');
+    const items = ['first.csv', 'missing.csv', 'bad.csv', 'last.csv', 'a.csv'].map((name) => ({ name, file: new File(['a\n1'], name) }));
+    const opening = workspace.openDroppedFiles(items);
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    expect(acquire).toHaveBeenCalledTimes(1);
+    await workspace.openDroppedFiles([{ name: 'extra.csv', file: new File(['a\n1'], 'extra.csv') }]);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    pending.resolve({ status: 'opened', workingCsv: csv('first') });
+    await opening;
+    expect(workspace.snapshot().tabs.map((tab) => tab.id)).toEqual(['csv:a', 'csv:first', 'csv:last']);
+    expect(workspace.snapshot().activeTabId).toBe('csv:a');
+    expect(csvTab(workspace, 'a')).toBe(original);
+    expect(workspace.snapshot().error).toBe('missing.csv: File disappeared\nbad.csv: Cannot parse this file');
+    expect(workspace.snapshot().isOpening).toBe(false);
+  });
+
+  it('stops acquiring dropped files when the renderer is disposed during an open', async () => {
+    const pending = Promise.withResolvers<OpenCsvResult>();
+    const acquire = vi.fn(async (file: File) => file.name);
+    const open = vi.fn(() => pending.promise);
+    const { workspace } = setup({ handlers: { 'csv.open': open } }, { acquireDroppedSource: acquire });
+    const opening = workspace.openDroppedFiles(['a.csv', 'b.csv'].map((name) => ({ name, file: new File(['a\n1'], name) })));
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    workspace.dispose();
+    pending.resolve({ status: 'opened', workingCsv: csv('a') });
+    await opening;
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(workspace.snapshot().tabs).toEqual([]);
+  });
+
   it('retains a known CSV Tab and its query, then resets that same Tab on Reopen', async () => {
     const reopened = { ...csv('a'), rowCount: 15 };
     const { workspace } = setup({ handlers: {

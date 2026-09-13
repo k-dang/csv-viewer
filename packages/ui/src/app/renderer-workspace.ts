@@ -6,6 +6,7 @@ import type {
   ComparisonRowsMode,
   ComparisonView,
   CsvDialectOptions,
+  CsvCapacityExceeded,
   CsvSourceId,
   CsvViewer,
   CsvViewerEvent,
@@ -40,12 +41,15 @@ export type RendererWorkspaceState = {
   fatalError: string | null;
 };
 
-/** The runtime supplies confirmation display; the workspace owns input validation. */
+/** The runtime supplies confirmation display and acquisition of dropped files. */
 export type RendererWorkspaceHost = {
   confirmClose(sourceName: string, impact: CloseImpact): boolean | Promise<boolean>;
+  acquireDroppedSource(file: File): Promise<CsvSourceId | CsvCapacityExceeded>;
 };
 
 type OpenRequest = Extract<CsvViewerRequest, { operation: 'csv.open' | 'csv.open-recent' | 'csv.reopen' }>;
+export type DroppedCsvItem = { name: string; file: File | null };
+type CsvOpenOperation = { name: string | null; open: (options: CsvDialectOptions) => Promise<OpenCsvResult> };
 
 /**
  * Owns the renderer's Tabs and their lifetime, independently of React commits. Commands and
@@ -94,6 +98,28 @@ export class RendererWorkspace {
 
   open(): Promise<void> {
     return this.runOpen((options) => ({ operation: 'csv.open', options }), 'Unable to open CSV.');
+  }
+
+  /** Opens one drop as a batch, retaining successes and reporting all rejected items together. */
+  openDroppedFiles(items: DroppedCsvItem[]): Promise<void> {
+    const failures: string[] = [];
+    const operations: CsvOpenOperation[] = [];
+    for (const item of items) {
+      const file = item.file;
+      if (!file || !/\.(csv|tsv|txt)$/i.test(item.name)) {
+        failures.push(`${item.name}: Only CSV, TSV, and TXT files are supported. Folders cannot be opened.`);
+        continue;
+      }
+      operations.push({
+        name: item.name,
+        open: async (options) => {
+          const sourceId = await this.host.acquireDroppedSource(file);
+          if (sourceId instanceof Object) return sourceId;
+          return this.viewer.call({ operation: 'csv.open', sourceId, options });
+        },
+      });
+    }
+    return this.runOpens(operations, failures, 'Unable to open CSV.');
   }
 
   openRecent(sourceId: CsvSourceId): Promise<void> {
@@ -228,8 +254,17 @@ export class RendererWorkspace {
     this.listeners.clear();
   }
 
-  private async runOpen(
+  private runOpen(
     request: (options: CsvDialectOptions) => OpenRequest,
+    fallback: string,
+    reopening?: Extract<RendererTab, { kind: 'csv' }>,
+  ): Promise<void> {
+    return this.runOpens([{ name: null, open: (options) => this.viewer.call(request(options)) }], [], fallback, reopening);
+  }
+
+  private async runOpens(
+    operations: CsvOpenOperation[],
+    failures: string[],
     fallback: string,
     reopening?: Extract<RendererTab, { kind: 'csv' }>,
   ): Promise<void> {
@@ -245,12 +280,19 @@ export class RendererWorkspace {
     this.recentSourcesRequest += 1;
     this.set({ isOpening: true });
     try {
-      const result = await this.viewer.call(request(options));
-      if (this.stopped || (reopening && !this.current(reopening))) return;
-      if ((result.status === 'opened' || result.status === 'already-open') && closedCsvs.has(result.workingCsv.workingCsvId)) return;
-      this.applyOpen(result);
-    } catch (error) {
-      if (!this.stopped && (!reopening || this.current(reopening))) this.set({ error: error instanceof Error ? error.message : fallback });
+      for (const operation of operations) {
+        if (this.stopped) return;
+        const result = await attemptOpen(operation, options, fallback);
+        if (this.stopped || (reopening && !this.current(reopening))) return;
+        if (result.status === 'failed' || result.status === 'capacity-exceeded') {
+          failures.push(operation.name ? `${operation.name}: ${result.message}` : result.message);
+        } else if (result.status !== 'cancelled' && !closedCsvs.has(result.workingCsv.workingCsvId)) {
+          this.applyOpen(result);
+        }
+      }
+      if (!this.stopped && (!reopening || this.current(reopening)) && failures.length > 0) {
+        this.set({ error: failures.join('\n') });
+      }
     } finally {
       this.openingClosedCsvs = null;
       if (!this.stopped) {
@@ -260,12 +302,7 @@ export class RendererWorkspace {
     }
   }
 
-  private applyOpen(result: OpenCsvResult): void {
-    if (result.status === 'cancelled') return;
-    if (result.status === 'failed' || result.status === 'capacity-exceeded') {
-      this.set({ error: result.message });
-      return;
-    }
+  private applyOpen(result: Extract<OpenCsvResult, { status: 'opened' | 'already-open' }>): void {
     const workingCsv = result.workingCsv;
     const existing = this.csvEntry(workingCsv.workingCsvId);
     if (existing) {
@@ -364,5 +401,13 @@ export class RendererWorkspace {
   private set(patch: Partial<RendererWorkspaceState>): void {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
+  }
+}
+
+async function attemptOpen(operation: CsvOpenOperation, options: CsvDialectOptions, fallback: string): Promise<OpenCsvResult> {
+  try {
+    return await operation.open(options);
+  } catch (error) {
+    return { status: 'failed', message: error instanceof Error ? error.message : fallback };
   }
 }
