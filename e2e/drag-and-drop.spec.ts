@@ -35,7 +35,7 @@ test('opens a mixed drop, summarizes failures, and preserves edits when more fil
   const text = await file('more.txt');
   const tsv = await file('last.TSV', 'name\tage\nKatherine\t42\n');
   await page.goto('/');
-  await expect(page.getByText('Drop CSV, TSV, or TXT files anywhere to open them.')).toBeVisible();
+  await expect(page.getByText('No CSV open', { exact: true })).toBeVisible();
   await drop(page, [first], true);
   await expect(page.getByText('Drop files to open', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');

@@ -4,7 +4,7 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 
 ## Sub-features
 
-- `open-empty` shows the empty window, Open CSV, and a file-drop hint.
+- `open-empty` shows the empty window and Open CSV.
 - `open-drop` highlights a file drag and opens CSV, TSV, or TXT files, ignoring extension case.
 - `open-drop-batch` opens multiple files sequentially, retains successes, and summarizes rejected or failed items.
 - `open-drop-blocked` declines drops during loading and blocks them during modal dialogs.
@@ -34,7 +34,7 @@ Preconditions:
 - Begin on the empty window with fixtures `phase-2-sample.csv` and `phase-2-sample-edited.csv` available.
 - Commands below are helper subcommands. Evidence paths resolve under the skill directory.
 
-- **Empty state.** Capture `snapshot --path evidence/drag-and-drop/empty.aria.txt` and `screenshot --path evidence/drag-and-drop/empty.png`. Require CSV Viewer, No CSV open, Open CSV, and the drop hint.
+- **Empty state.** Capture `snapshot --path evidence/drag-and-drop/empty.aria.txt` and `screenshot --path evidence/drag-and-drop/empty.png`. Require CSV Viewer, No CSV open, and Open CSV.
 - **Highlight.** Run `drop --file fixtures/phase-2-sample.csv --hover`. Capture a screenshot showing Drop files to open. Run the same command with `--cancel` to remove the highlight without opening a file. Test dark and light themes.
 - **Mixed batch.** Run `drop --files '["fixtures/phase-2-sample.csv","README.md","fixtures/phase-2-sample-edited.csv"]'`. Require two tabs, the edited fixture active, its row counts and grid values, and a summary naming README.md. No drop highlight remains. Capture both a snapshot and screenshot.
 - **Duplicate and edits.** Select the first fixture, edit Ada's cell, and require Unexported Changes. Run `drop --file fixtures/phase-2-sample.csv`. Desktop keeps two tabs and the edited value. Web adds a third tab containing the original data; selecting the first tab restores its edited value.

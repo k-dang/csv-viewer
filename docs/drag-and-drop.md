@@ -5,7 +5,6 @@ Status: Approved and implemented.
 ## Confirmed decisions
 
 - Support dropping files anywhere in the app, including when a CSV is already open.
-- Show a drop hint on the empty screen.
 - Highlight the drop area while files are dragged over the window.
 - Keep the Open CSV button.
 - Support both the desktop and web apps with the same visible interaction.

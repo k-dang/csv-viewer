@@ -41,9 +41,6 @@ export function EmptyCsvState({
           <FieldDescription className="max-w-[46ch] text-[15px] leading-relaxed">
             Open a local CSV Source to inspect, query, edit, and compare its data. All processing stays on this device.
           </FieldDescription>
-          <FieldDescription className="text-sm font-medium text-foreground">
-            Drop CSV, TSV, or TXT files anywhere to open them.
-          </FieldDescription>
           {!viewer.capabilities.recentCsvSources ? (
             <FieldDescription className="max-w-[46ch] text-sm leading-relaxed">
               Select your CSV Sources again after reload.
