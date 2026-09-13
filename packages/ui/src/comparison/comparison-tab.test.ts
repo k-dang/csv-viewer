@@ -55,9 +55,9 @@ describe('ComparisonTab', () => {
   it('hides the current invalid-key diagnostics once the draft is edited', () => {
     const tab = new ComparisonTab(createTestCsvViewer(), comparisonFixture({ lastAttempt: invalidKey }));
     tab.toggleKeyColumn('id', true);
-    expect(tab.snapshot().hiddenDiagnosticsAttemptId).toBe('attempt-1');
+    expect(tab.snapshot().acknowledgedAttemptId).toBe('attempt-1');
     tab.receive(comparisonFixture({ version: 2, lastAttempt: { ...invalidKey, attemptId: 'attempt-2' } }));
-    expect(tab.snapshot().hiddenDiagnosticsAttemptId).toBe('attempt-1');
+    expect(tab.snapshot().acknowledgedAttemptId).toBe('attempt-1');
   });
 
   it('surfaces a rejected command and a failed call as the action error, clearing it on the next command', async () => {
@@ -116,13 +116,13 @@ describe('ComparisonTab', () => {
 
     tab.receive(comparisonFixture({ version: 2, applied: applied('result-1') }));
     tab.setRowsMode('all');
-    expect((await tab.rows(0, 5_000))?.resultToken).toBe('result-1');
+    expect((await tab.rows(0, 100))?.resultToken).toBe('result-1');
     expect(getWindow).toHaveBeenLastCalledWith({
       operation: 'comparison.get-window',
       comparisonId: 'comparison-1',
       resultToken: 'result-1',
       offset: 0,
-      limit: 1_000,
+      limit: 100,
       rows: 'all',
       columns: 'changed-first',
     });
@@ -141,6 +141,6 @@ describe('ComparisonTab', () => {
       lastAttempt: { attemptId: 'attempt-9', status: 'cancelled' },
     }));
     tab.dismissAttempt();
-    expect(tab.snapshot().dismissedAttemptId).toBe('attempt-9');
+    expect(tab.snapshot().acknowledgedAttemptId).toBe('attempt-9');
   });
 });

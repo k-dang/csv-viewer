@@ -14,14 +14,9 @@ export type ComparisonTabState = {
   columns: ComparisonColumnsMode;
   /** The failure of the last command, cleared by the next command. */
   actionError: string | null;
-  /** The cancelled attempt whose banner the user dismissed. */
-  dismissedAttemptId: string | null;
-  /** The invalid-key attempt whose diagnostics were hidden by a later draft edit. */
-  hiddenDiagnosticsAttemptId: string | null;
+  /** The attempt whose feedback the user already acted on: a dismissed banner or an edited draft. */
+  acknowledgedAttemptId: string | null;
 };
-
-/** The largest row window one `rows` call requests, matching the workspace's window limit. */
-const maxWindowRows = 1_000;
 
 /**
  * One Comparison Tab: the Aligned Comparison it presents, its Draft Comparison Key, its result-view
@@ -47,8 +42,7 @@ export class ComparisonTab {
       rows: 'differences',
       columns: 'changed-first',
       actionError: null,
-      dismissedAttemptId: null,
-      hiddenDiagnosticsAttemptId: null,
+      acknowledgedAttemptId: null,
     };
   }
 
@@ -80,7 +74,7 @@ export class ComparisonTab {
   moveKeyColumn(index: number, direction: -1 | 1): void {
     const target = index + direction;
     const draftKey = [...this.state.draftKey];
-    if (index < 0 || index >= draftKey.length || target < 0 || target >= draftKey.length) return;
+    if (target < 0 || target >= draftKey.length) return;
     [draftKey[index], draftKey[target]] = [draftKey[target], draftKey[index]];
     this.editDraft(draftKey);
   }
@@ -96,34 +90,17 @@ export class ComparisonTab {
   /** Hides the cancelled-attempt banner for the current attempt. */
   dismissAttempt(): void {
     const attempt = this.state.comparison.lastAttempt;
-    if (attempt) this.set({ dismissedAttemptId: attempt.attemptId });
+    if (attempt) this.set({ acknowledgedAttemptId: attempt.attemptId });
   }
 
   /** Starts validating and applying the Draft Comparison Key. Outcomes arrive through `receive`. */
   applyKey(): Promise<void> {
     const { draftKey } = this.state;
-    if (draftKey.length === 0) return Promise.resolve();
-    return this.command('Unable to start comparison.', async () => {
-      const outcome = await this.viewer.call({
-        operation: 'comparison.begin',
-        kind: 'apply-key',
-        comparisonId: this.comparisonId,
-        key: draftKey,
-      });
-      return outcome.status === 'rejected' ? outcome.fault.message : null;
-    });
+    return draftKey.length === 0 ? Promise.resolve() : this.begin({ kind: 'apply-key', key: draftKey });
   }
 
   refresh(): Promise<void> {
-    if (!this.state.comparison.applied) return Promise.resolve();
-    return this.command('Unable to start comparison.', async () => {
-      const outcome = await this.viewer.call({
-        operation: 'comparison.begin',
-        kind: 'refresh',
-        comparisonId: this.comparisonId,
-      });
-      return outcome.status === 'rejected' ? outcome.fault.message : null;
-    });
+    return this.state.comparison.applied ? this.begin({ kind: 'refresh' }) : Promise.resolve();
   }
 
   swap(): Promise<void> {
@@ -163,7 +140,7 @@ export class ComparisonTab {
       comparisonId: comparison.comparisonId,
       resultToken: applied.resultToken,
       offset,
-      limit: Math.min(maxWindowRows, Math.max(0, limit)),
+      limit,
       rows,
       columns,
     });
@@ -182,24 +159,31 @@ export class ComparisonTab {
     this.listeners.clear();
   }
 
+  private begin(request: { kind: 'apply-key'; key: string[] } | { kind: 'refresh' }): Promise<void> {
+    return this.command('Unable to start comparison.', async () => {
+      const outcome = await this.viewer.call({ operation: 'comparison.begin', comparisonId: this.comparisonId, ...request });
+      return outcome.status === 'rejected' ? outcome.fault.message : null;
+    });
+  }
+
   /** Runs one command; the operation returns the rejection message, or null when accepted. */
   private async command(fallback: string, operation: () => Promise<string | null>): Promise<void> {
     this.set({ actionError: null });
+    let actionError: string | null;
     try {
-      const rejection = await operation();
-      if (rejection !== null && !this.disposed) this.set({ actionError: rejection });
+      actionError = await operation();
     } catch (error) {
-      if (this.disposed) return;
-      this.set({ actionError: error instanceof Error && error.message ? error.message : fallback });
+      actionError = error instanceof Error && error.message ? error.message : fallback;
     }
+    if (actionError !== null && !this.disposed) this.set({ actionError });
   }
 
   private editDraft(draftKey: string[]): void {
     const attempt = this.state.comparison.lastAttempt;
     this.set({
       draftKey,
-      hiddenDiagnosticsAttemptId:
-        attempt?.status === 'invalid-key' ? attempt.attemptId : this.state.hiddenDiagnosticsAttemptId,
+      acknowledgedAttemptId:
+        attempt?.status === 'invalid-key' ? attempt.attemptId : this.state.acknowledgedAttemptId,
     });
   }
 

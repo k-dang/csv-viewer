@@ -77,7 +77,7 @@ function ComparisonTabItem({
   isActive: boolean;
   onClose: () => void;
 }) {
-  const { comparison } = useSyncExternalStore(tab.tab.subscribe, tab.tab.snapshot);
+  const comparison = useSyncExternalStore(tab.tab.subscribe, () => tab.tab.snapshot().comparison);
   const label = `${comparison.baseline.source.name} ⇄ ${comparison.candidate.source.name}`;
   return (
     <TabItem

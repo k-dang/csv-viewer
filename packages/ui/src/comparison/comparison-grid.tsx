@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellStyleModule,
@@ -12,9 +12,9 @@ import {
   type ICellRendererParams,
   type IDatasource,
 } from 'ag-grid-community';
-import type { ComparisonRow, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
+import type { ComparisonRow, ComparisonSide, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
 import { orderComparisonValueColumns } from '@csv-viewer/workspace/comparison-presentation';
-import type { ComparisonTab, ComparisonTabState } from './comparison-tab';
+import type { ComparisonTab } from './comparison-tab';
 
 ModuleRegistry.registerModules([CellStyleModule, ColumnApiModule, InfiniteRowModelModule, RenderApiModule]);
 
@@ -23,7 +23,7 @@ type DisplayValue = {
   text: string;
   copyText: string;
   changed: boolean;
-  side: 'baseline' | 'candidate';
+  side: ComparisonSide;
 };
 
 type GridComparisonRow = {
@@ -38,6 +38,7 @@ const lightTheme = themeQuartz.withParams({
   wrapperBorder: false,
   wrapperBorderRadius: 0,
 });
+const defaultColDef: ColDef = { resizable: true, sortable: false, minWidth: 120 };
 const darkTheme = themeQuartz.withParams({
   accentColor: '#5eead4',
   browserColorScheme: 'dark',
@@ -53,16 +54,14 @@ const darkTheme = themeQuartz.withParams({
 /** The result grid of one Comparison Tab. Rows come from the Tab; only AG Grid translation lives here. */
 export function ComparisonGrid({
   tab,
-  state,
   applied,
   themeMode,
 }: {
   tab: ComparisonTab;
-  state: ComparisonTabState;
   applied: NonNullable<ComparisonView['applied']>;
   themeMode: 'light' | 'dark';
 }) {
-  const { comparison, rows: rowsMode, columns: columnsMode } = state;
+  const { comparison, rows: rowsMode, columns: columnsMode } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const changedCounts = useMemo(
     () => new Map(applied.summary.changedColumns.map((column) => [column.name, column.changedRowCount])),
     [applied.summary.changedColumns],
@@ -155,7 +154,7 @@ export function ComparisonGrid({
           event.preventDefault();
           copyComparisonValue(params.value.copyText);
         }}
-        defaultColDef={{ resizable: true, sortable: false, minWidth: 120 }}
+        defaultColDef={defaultColDef}
         overlayLoadingTemplate="<span class='ag-overlay-loading-center'>Loading comparison rows…</span>"
       />
     </div>
@@ -237,7 +236,7 @@ function displayValue(
   value: string | null | undefined,
   missing: boolean,
   changed: boolean,
-  side: 'baseline' | 'candidate',
+  side: ComparisonSide,
 ): DisplayValue {
   if (missing)
     return {
@@ -255,6 +254,6 @@ function displayValue(
 function keyField(index: number) {
   return `key:${index}`;
 }
-function columnField(index: number, side: 'baseline' | 'candidate') {
+function columnField(index: number, side: ComparisonSide) {
   return `${side}:${index}`;
 }
