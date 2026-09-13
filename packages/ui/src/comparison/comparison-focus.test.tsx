@@ -1,31 +1,28 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
 import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
 import { comparisonFixture } from '../test-helpers/csv-views';
-import { withCsvViewer } from '../test-helpers/csv-viewer';
+import { createTestCsvViewer } from '../test-helpers/csv-viewer';
+import { ComparisonPanel } from './comparison-panel';
 import { ComparisonTab } from './comparison-tab';
 
 afterEach(cleanup);
 
-function view(comparison: ComparisonView) {
-  return withCsvViewer(
-    <ComparisonTab
-      comparison={comparison}
-      presentation={{ draftKey: ['id'], rows: 'differences', columns: 'changed-first' }}
-      onPresentationChange={vi.fn()}
-      themeMode="light"
-    />,
-  );
+/** Renders one Comparison Tab; `update` delivers later projections the way the workspace would. */
+function renderPanel(comparison: ComparisonView) {
+  const tab = new ComparisonTab(createTestCsvViewer(), comparison);
+  render(<ComparisonPanel tab={tab} themeMode="light" />);
+  return { update: (next: ComparisonView) => act(() => tab.receive(next)) };
 }
 
 it('focuses the first key on mount without stealing focus on later renders', () => {
   const comparison = comparisonFixture();
-  const rendered = render(view(comparison));
+  const { update } = renderPanel(comparison);
   expect(document.activeElement).toBe(screen.getByRole('checkbox', { name: 'id' }));
   const apply = screen.getByRole('button', { name: 'Apply key' });
   apply.focus();
-  rendered.rerender(view({ ...comparison, version: 2 }));
+  update({ ...comparison, version: 2 });
   expect(document.activeElement).toBe(apply);
 });
 
@@ -43,7 +40,7 @@ it('focuses each invalid attempt, preserves expanded evidence, and leaves unrela
   const comparison = comparisonFixture({
     lastAttempt: { attemptId: 'attempt-1', status: 'invalid-key', diagnostics },
   });
-  const rendered = render(view(comparison));
+  const { update } = renderPanel(comparison);
   const alert = screen.getByRole('alert');
   expect(document.activeElement).toBe(alert);
   const details = alert.querySelector('details');
@@ -51,9 +48,9 @@ it('focuses each invalid attempt, preserves expanded evidence, and leaves unrela
   details.open = true;
   const apply = screen.getByRole('button', { name: 'Apply key' });
   apply.focus();
-  rendered.rerender(view({ ...comparison, version: 2 }));
+  update({ ...comparison, version: 2 });
   expect(document.activeElement).toBe(apply);
-  rendered.rerender(view({
+  update({
     ...comparison,
     version: 3,
     lastAttempt: {
@@ -61,12 +58,13 @@ it('focuses each invalid attempt, preserves expanded evidence, and leaves unrela
       status: 'invalid-key',
       diagnostics: structuredClone(diagnostics),
     },
-  }));
+  });
   expect(document.activeElement).toBe(apply);
-  rendered.rerender(view({
+  update({
     ...comparison,
+    version: 4,
     lastAttempt: { attemptId: 'attempt-2', status: 'invalid-key', diagnostics },
-  }));
+  });
   expect(document.activeElement).toBe(alert);
   expect(details.open).toBe(true);
 });

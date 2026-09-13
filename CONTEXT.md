@@ -44,6 +44,10 @@ _Avoid_: Primary key, row number, inferred key
 A Comparison Key whose combined value is present and unique for every row within each Working CSV. Blank key parts and duplicate combined values make a Comparison Key invalid and block comparison.
 _Avoid_: Best-effort key, ambiguous key, mostly unique key
 
+**Draft Comparison Key**:
+The columns a user has chosen and ordered in a Comparison Tab but not yet applied. A Comparison Tab keeps its Draft Comparison Key while the user switches Tabs, and editing it hides the key diagnostics of the last attempt.
+_Avoid_: Pending key, selected columns, key selection
+
 **Comparison-Compatible CSVs**:
 Two Working CSVs with exactly the same set of column names. Column order and inferred column types do not affect compatibility.
 _Avoid_: Same schema, matching files, identical columns

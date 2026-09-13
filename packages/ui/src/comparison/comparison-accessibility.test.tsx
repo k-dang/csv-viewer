@@ -1,9 +1,12 @@
+// @vitest-environment jsdom
+import { cleanup, render } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
 import { comparisonFixture, workingCsvFixture } from '../test-helpers/csv-views';
-import { withCsvViewer } from '../test-helpers/csv-viewer';
+import { createTestCsvViewer } from '../test-helpers/csv-viewer';
 import { ComparisonCandidateDialog } from './comparison-candidate-dialog';
+import { ComparisonPanel } from './comparison-panel';
 import { ComparisonTab } from './comparison-tab';
 
 const workingCsv = (workingCsvId: string) =>
@@ -23,11 +26,13 @@ const comparison = (overrides: Partial<ComparisonView> = {}) =>
     ...overrides,
   });
 
-const presentation = {
-  draftKey: ['id'],
-  rows: 'differences' as const,
-  columns: 'changed-first' as const,
-};
+afterEach(cleanup);
+
+/** Renders one Comparison Tab and returns its markup, the way the static dialog case reads it. */
+function panelMarkup(view: ComparisonView, themeMode: 'light' | 'dark' = 'light'): string {
+  const tab = new ComparisonTab(createTestCsvViewer(), view);
+  return render(<ComparisonPanel tab={tab} themeMode={themeMode} />).container.innerHTML;
+}
 
 describe('Comparison accessibility semantics', () => {
   it('names and describes the modal Candidate picker and exposes incompatible choices', () => {
@@ -62,21 +67,8 @@ describe('Comparison accessibility semantics', () => {
   });
 
   it('announces progress politely and exposes a keyboard-operable Cancel action', () => {
-    const markup = renderToStaticMarkup(
-      withCsvViewer(
-        <ComparisonTab
-          comparison={comparison({
-            operation: {
-              operationId: 'operation-1',
-              intent: 'apply-key',
-              phase: 'comparing',
-            },
-          })}
-          presentation={presentation}
-          onPresentationChange={vi.fn()}
-          themeMode="light"
-        />,
-      ),
+    const markup = panelMarkup(
+      comparison({ operation: { operationId: 'operation-1', intent: 'apply-key', phase: 'comparing' } }),
     );
 
     expect(markup).toContain('aria-live="polite"');
@@ -86,35 +78,29 @@ describe('Comparison accessibility semantics', () => {
   });
 
   it('marks invalid-key diagnostics as a programmatically focusable alert with bounded evidence', () => {
-    const markup = renderToStaticMarkup(
-      withCsvViewer(
-        <ComparisonTab
-          comparison={comparison({
-            lastAttempt: {
-              attemptId: 'attempt-1',
-              status: 'invalid-key',
-              diagnostics: {
-                key: ['id'],
-                baseline: {
-                  blankRowCount: 1,
-                  duplicateGroupCount: 0,
-                  blankExamples: [{ rowId: '1', keyValues: [null] }],
-                  duplicateExamples: [],
-                },
-                candidate: {
-                  blankRowCount: 0,
-                  duplicateGroupCount: 1,
-                  blankExamples: [],
-                  duplicateExamples: [{ keyValues: ['2'], rowCount: 2, rowIds: ['1', '2'] }],
-                },
-              },
+    const markup = panelMarkup(
+      comparison({
+        lastAttempt: {
+          attemptId: 'attempt-1',
+          status: 'invalid-key',
+          diagnostics: {
+            key: ['id'],
+            baseline: {
+              blankRowCount: 1,
+              duplicateGroupCount: 0,
+              blankExamples: [{ rowId: '1', keyValues: [null] }],
+              duplicateExamples: [],
             },
-          })}
-          presentation={presentation}
-          onPresentationChange={vi.fn()}
-          themeMode="dark"
-        />,
-      ),
+            candidate: {
+              blankRowCount: 0,
+              duplicateGroupCount: 1,
+              blankExamples: [],
+              duplicateExamples: [{ keyValues: ['2'], rowCount: 2, rowIds: ['1', '2'] }],
+            },
+          },
+        },
+      }),
+      'dark',
     );
 
     expect(markup).toContain('role="alert"');

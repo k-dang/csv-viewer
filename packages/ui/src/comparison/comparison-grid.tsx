@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   CellStyleModule,
@@ -10,16 +10,11 @@ import {
   type ColDef,
   type ColGroupDef,
   type ICellRendererParams,
+  type IDatasource,
 } from 'ag-grid-community';
-import type {
-  ComparisonColumnsMode,
-  ComparisonRow,
-  ComparisonRowsMode,
-  ComparisonView,
-} from '@csv-viewer/workspace/csv-viewer';
+import type { ComparisonRow, ComparisonSide, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
 import { orderComparisonValueColumns } from '@csv-viewer/workspace/comparison-presentation';
-import { comparisonGridRequestBounds, createComparisonGridDataSource } from './comparison-grid-data-source';
-import { useCsvViewer } from '../app/csv-viewer';
+import type { ComparisonTab } from './comparison-tab';
 
 ModuleRegistry.registerModules([CellStyleModule, ColumnApiModule, InfiniteRowModelModule, RenderApiModule]);
 
@@ -28,7 +23,7 @@ type DisplayValue = {
   text: string;
   copyText: string;
   changed: boolean;
-  side: 'baseline' | 'candidate';
+  side: ComparisonSide;
 };
 
 type GridComparisonRow = {
@@ -43,6 +38,7 @@ const lightTheme = themeQuartz.withParams({
   wrapperBorder: false,
   wrapperBorderRadius: 0,
 });
+const defaultColDef: ColDef = { resizable: true, sortable: false, minWidth: 120 };
 const darkTheme = themeQuartz.withParams({
   accentColor: '#5eead4',
   browserColorScheme: 'dark',
@@ -55,20 +51,17 @@ const darkTheme = themeQuartz.withParams({
   wrapperBorderRadius: 0,
 });
 
+/** The result grid of one Comparison Tab. Rows come from the Tab; only AG Grid translation lives here. */
 export function ComparisonGrid({
-  comparison,
+  tab,
   applied,
-  rowsMode,
-  columnsMode,
   themeMode,
 }: {
-  comparison: ComparisonView;
+  tab: ComparisonTab;
   applied: NonNullable<ComparisonView['applied']>;
-  rowsMode: ComparisonRowsMode;
-  columnsMode: ComparisonColumnsMode;
   themeMode: 'light' | 'dark';
 }) {
-  const viewer = useCsvViewer();
+  const { comparison, rows: rowsMode, columns: columnsMode } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const changedCounts = useMemo(
     () => new Map(applied.summary.changedColumns.map((column) => [column.name, column.changedRowCount])),
     [applied.summary.changedColumns],
@@ -122,19 +115,21 @@ export function ComparisonGrid({
     [applied.key, changedCounts, valueColumns],
   );
 
-  const dataSource = useMemo(
-    () =>
-      createComparisonGridDataSource(
-        viewer,
-        {
-          comparisonId: comparison.comparisonId,
-          resultToken: applied.resultToken,
-          rows: rowsMode,
-          columns: columnsMode,
-        },
-        toGridRow,
-      ),
-    [applied.resultToken, columnsMode, comparison.comparisonId, rowsMode, viewer],
+  // The grid remounts on every result or view-mode change (see `key`), so one datasource serves
+  // one result under one view mode; the Tab drops windows that arrive after either moved on.
+  const datasource = useMemo<IDatasource>(
+    () => ({
+      getRows: (params) => {
+        tab
+          .rows(params.startRow, params.endRow - params.startRow)
+          .then((window) => {
+            if (window) params.successCallback(window.rows.map(toGridRow), window.totalRowCount);
+            else params.failCallback();
+          })
+          .catch(() => params.failCallback());
+      },
+    }),
+    [tab],
   );
 
   return (
@@ -143,11 +138,11 @@ export function ComparisonGrid({
         key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.workingCsvId}`}
         theme={themeMode === 'dark' ? darkTheme : lightTheme}
         rowModelType="infinite"
-        datasource={dataSource}
+        datasource={datasource}
         columnDefs={columnDefs}
-        cacheBlockSize={comparisonGridRequestBounds.cacheBlockSize}
-        maxBlocksInCache={comparisonGridRequestBounds.maxBlocksInCache}
-        maxConcurrentDatasourceRequests={comparisonGridRequestBounds.maxConcurrentRequests}
+        cacheBlockSize={100}
+        maxBlocksInCache={6}
+        maxConcurrentDatasourceRequests={2}
         infiniteInitialRowCount={1}
         getRowId={(params) => params.data.rowKey}
         onCellKeyDown={(params) => {
@@ -159,7 +154,7 @@ export function ComparisonGrid({
           event.preventDefault();
           copyComparisonValue(params.value.copyText);
         }}
-        defaultColDef={{ resizable: true, sortable: false, minWidth: 120 }}
+        defaultColDef={defaultColDef}
         overlayLoadingTemplate="<span class='ag-overlay-loading-center'>Loading comparison rows…</span>"
       />
     </div>
@@ -241,7 +236,7 @@ function displayValue(
   value: string | null | undefined,
   missing: boolean,
   changed: boolean,
-  side: 'baseline' | 'candidate',
+  side: ComparisonSide,
 ): DisplayValue {
   if (missing)
     return {
@@ -259,6 +254,6 @@ function displayValue(
 function keyField(index: number) {
   return `key:${index}`;
 }
-function columnField(index: number, side: 'baseline' | 'candidate') {
+function columnField(index: number, side: ComparisonSide) {
   return `${side}:${index}`;
 }

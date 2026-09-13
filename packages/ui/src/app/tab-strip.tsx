@@ -4,12 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
-import type { CsvTab } from '../csv/csv-tab';
-
-export type OpenRendererTab =
-  | { kind: 'csv'; id: string; tab: CsvTab }
-  | { kind: 'comparison'; id: string; comparison: ComparisonView };
+import type { RendererTab } from './renderer-workspace';
 
 export function TabStrip({
   tabs,
@@ -17,10 +12,10 @@ export function TabStrip({
   onSelectTab,
   onCloseTab,
 }: {
-  tabs: OpenRendererTab[];
+  tabs: RendererTab[];
   activeTabId: string | null;
   onSelectTab: (tabId: string) => void;
-  onCloseTab: (tab: OpenRendererTab) => void;
+  onCloseTab: (tab: RendererTab) => void;
 }) {
   return (
     <Tabs value={activeTabId ?? undefined} onValueChange={onSelectTab} className="gap-0 border-b bg-muted/40">
@@ -34,46 +29,25 @@ export function TabStrip({
           }
         }}
       >
-        {tabs.map((tab) => {
-          if (tab.kind === 'csv') {
-            return (
-              <CsvTabItem key={tab.id} tab={tab} isActive={tab.id === activeTabId} onClose={() => onCloseTab(tab)} />
-            );
-          }
-          const label = `${tab.comparison.baseline.source.name} ⇄ ${tab.comparison.candidate.source.name}`;
-          return (
-            <TabItem
-              key={tab.id}
-              id={tab.id}
-              label={label}
-              title={label}
-              isActive={tab.id === activeTabId}
-              onClose={() => onCloseTab(tab)}
-              icon={<ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />}
-              badge={
-                tab.comparison.applied?.freshness.kind === 'outdated' ? (
-                  <Badge
-                    role="img"
-                    className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0"
-                    aria-label="Outdated comparison"
-                  />
-                ) : null
-              }
-            />
-          );
-        })}
+        {tabs.map((tab) =>
+          tab.kind === 'csv' ? (
+            <CsvTabItem key={tab.id} tab={tab} isActive={tab.id === activeTabId} onClose={() => onCloseTab(tab)} />
+          ) : (
+            <ComparisonTabItem key={tab.id} tab={tab} isActive={tab.id === activeTabId} onClose={() => onCloseTab(tab)} />
+          ),
+        )}
       </TabsList>
     </Tabs>
   );
 }
 
-/** Subscribes to its own CSV Tab, so an edit re-renders one label rather than the whole strip. */
+/** Each item subscribes to its own Tab, so a change re-renders one label rather than the whole strip. */
 function CsvTabItem({
   tab,
   isActive,
   onClose,
 }: {
-  tab: Extract<OpenRendererTab, { kind: 'csv' }>;
+  tab: Extract<RendererTab, { kind: 'csv' }>;
   isActive: boolean;
   onClose: () => void;
 }) {
@@ -88,6 +62,34 @@ function CsvTabItem({
       badge={
         state.editState.hasUnexportedChanges ? (
           <Badge role="img" variant="secondary" className="size-1.5 shrink-0 rounded-full p-0" aria-label="Unexported Changes" />
+        ) : null
+      }
+    />
+  );
+}
+
+function ComparisonTabItem({
+  tab,
+  isActive,
+  onClose,
+}: {
+  tab: Extract<RendererTab, { kind: 'comparison' }>;
+  isActive: boolean;
+  onClose: () => void;
+}) {
+  const comparison = useSyncExternalStore(tab.tab.subscribe, () => tab.tab.snapshot().comparison);
+  const label = `${comparison.baseline.source.name} ⇄ ${comparison.candidate.source.name}`;
+  return (
+    <TabItem
+      id={tab.id}
+      label={label}
+      title={label}
+      isActive={isActive}
+      onClose={onClose}
+      icon={<ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />}
+      badge={
+        comparison.applied?.freshness.kind === 'outdated' ? (
+          <Badge role="img" className="size-1.5 shrink-0 rounded-full bg-amber-500 p-0" aria-label="Outdated comparison" />
         ) : null
       }
     />
