@@ -1,64 +1,65 @@
 # Open a CSV
 
-Open a CSV loads a local file into a Working CSV tab, shows bounded rows in the grid, and remembers the path on the Recent CSV Sources list. The original file is not overwritten.
+Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits. File drops work anywhere in both runtimes. CSV Sources remain unchanged on disk.
 
 ## Sub-features
 
-- `open-empty` shows the empty window with health and seeded Recent CSV Sources.
-- `open-recent` opens a fixture from Recent CSV Sources without the OS file dialog.
-- `open-tab` shows the file name tab, heading, row counts, and grid values.
-- `open-reopen` reloads the active CSV from disk with Reopen.
+- `open-empty` shows the empty window, Open CSV, and a file-drop hint.
+- `open-drop` highlights a file drag and opens CSV, TSV, or TXT files, ignoring extension case.
+- `open-drop-batch` opens multiple files sequentially, retains successes, and summarizes rejected or failed items.
+- `open-drop-blocked` declines drops during loading and blocks them during modal dialogs.
+- `open-recent` opens a desktop Recent CSV Source.
+- `open-tab` shows the file tab, metadata, row counts, and grid values.
+- `open-reopen` reloads the active source into its existing CSV Tab.
 - `open-close` closes a tab and returns to the empty window when none remain.
-- `open-second` opens a second CSV and keeps both tabs. Unattended runs cannot finish this path.
-- `open-already-open` activating an already-open file focuses the existing tab instead of duplicating it. Unattended runs cannot finish this path.
-- `open-cycle` cycles tabs with Ctrl+Tab and Ctrl+Shift+Tab. Needs two tabs, so unattended runs cannot finish this path.
-- `open-dialog` is the Open CSV button and File menu path. Unattended runs cannot finish the OS dialog.
+- `open-second` opens a second CSV and keeps both tabs.
+- `open-already-open` focuses an existing desktop CSV Tab without replacing edits. Web creates a new source for each selection.
+- `open-cycle` switches tabs with Ctrl+Tab and Ctrl+Shift+Tab.
+- `open-dialog` selects a file through Open CSV or the desktop File menu.
 
 ## How to get to it (user POV)
 
-- Choose a name under `Recent CSV Sources` on the empty window.
-- Choose `Open CSV` in the header or empty card, then pick a file in the OS dialog.
-- Choose `File → Open CSV...` or press `Ctrl+O`, then pick a file in the OS dialog.
-- After a CSV is open, choose `Reopen` or `File → Reopen CSV` / `Ctrl+R`.
-- Move between open tabs by clicking a tab, or with `Ctrl+Tab` / `Ctrl+Shift+Tab`.
-- Close with the tab close button, `File → Close Tab`, or `Ctrl+W`.
+- Drop one or more CSV, TSV, or TXT files anywhere in the window.
+- Choose Open CSV in the header or empty card and select a file.
+- On desktop, choose a Recent CSV Source on the empty window, File > Open CSV, or Ctrl+O.
+- Use Reopen to reload the active source. Desktop also supports File > Reopen CSV and Ctrl+R.
+- Select a tab or use Ctrl+Tab and Ctrl+Shift+Tab.
+- Close with the tab close button. Desktop also supports File > Close Tab and Ctrl+W.
 
 ## Driving it with control-csv-viewer
 
 Preconditions:
 
-- `launch` has finished and `doctor` is `ok`.
-- Empty window text includes `No CSV open`, `RECENT CSV SOURCES`, `phase-2-sample.csv`, and `phase-2-sample-edited.csv`.
-- Fixtures exist at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
+- Launch the intended runtime through the helper and require `doctor` status `ok`.
+- Begin on the empty window with fixtures `phase-2-sample.csv` and `phase-2-sample-edited.csv` available.
+- Commands below are helper subcommands. Evidence paths resolve under the skill directory.
 
-- **Record empty state.** Run `snapshot --path evidence/open-csv/empty.aria.txt` and `screenshot --path evidence/open-csv/empty.png`. Both show `CSV Viewer`, `No CSV open`, and the seeded Recent CSV Sources. Neither `Compare…` nor `Reopen` is present; that absence is the `open-empty` proof.
-- **Open first fixture.** Choose the Recent CSV Sources button for `phase-2-sample.csv`. Run `click --role button --name "phase-2-sample.csv"`, then `wait --text "5 visible of 5 rows" --timeout 15000`. The tablist `Open CSV and Comparison Tabs` contains tab `phase-2-sample.csv`. Heading `#metadata-title` is `phase-2-sample.csv`. Badge `Ready` is visible. Grid text includes `Ada Lovelace`. `Compare…` is now rendered; `click --role button --name "Compare…"` reports `"disabled": true` with one tab open. Recent CSV Sources are gone.
-- **Confirm source untouched.** The bytes of `fixtures/phase-2-sample.csv` still match the pre-open file. Isolated `userDataDir/recent-files.json` still lists that absolute path.
-- **Reopen.** With `phase-2-sample.csv` active, run `click --role button --name "Reopen"`. Then read `text`. The same file stays open with `#metadata-title`, the row count, `Ada Lovelace`, no error banner, and no `Unexported Changes`.
-- **Proof.** Snapshot and screenshot `evidence/open-csv/opened.aria.txt` and `opened.png` after the first successful open, before closing. They show `CSV Viewer`, `phase-2-sample.csv`, `5 visible of 5 rows`, and `Ada Lovelace`.
-- **Close tabs.** Run `click --role button --name "Close phase-2-sample.csv"`, then `wait --text "No CSV open"`. Recent CSV Sources are back.
-- **Skip, do not fake.** Do not click `Open CSV`. Report `open-dialog`, `open-second`, `open-already-open`, and `open-cycle` as unreachable without a human OS dialog. After one tab is open, Recent CSV Sources are gone, so a second CSV (or re-picking the already-open file) requires that dialog.
+- **Empty state.** Capture `snapshot --path evidence/drag-and-drop/empty.aria.txt` and `screenshot --path evidence/drag-and-drop/empty.png`. Require CSV Viewer, No CSV open, Open CSV, and the drop hint.
+- **Highlight.** Run `drop --file fixtures/phase-2-sample.csv --hover`. Capture a screenshot showing Drop files to open. Run the same command with `--cancel` to remove the highlight without opening a file. Test dark and light themes.
+- **Mixed batch.** Run `drop --files '["fixtures/phase-2-sample.csv","README.md","fixtures/phase-2-sample-edited.csv"]'`. Require two tabs, the edited fixture active, its row counts and grid values, and a summary naming README.md. No drop highlight remains. Capture both a snapshot and screenshot.
+- **Duplicate and edits.** Select the first fixture, edit Ada's cell, and require Unexported Changes. Run `drop --file fixtures/phase-2-sample.csv`. Desktop keeps two tabs and the edited value. Web adds a third tab containing the original data; selecting the first tab restores its edited value.
+- **Modal blocking.** With two CSV tabs open, choose Compare and wait for Choose a Candidate. Drop another file. The dialog and tab count remain unchanged, and no navigation occurs. Cancel the dialog before further drops.
+- **Busy and failures.** `e2e/drag-and-drop.spec.ts` holds source acquisition to prove that another drop receives the busy message. It also verifies folder rejection, browser capacity, uppercase TSV parsing, and mixed-drop continuation. Renderer tests cover acquisition exceptions and parse failures.
+- **Recent source.** On the empty desktop window, run `click --role button --name "phase-2-sample.csv"`. Require a CSV Tab, metadata, and grid values. This proves the recent-source entry point separately from dropping.
+- **Picker.** On web, run `upload --role button --name "Open CSV" --nth 0 --file fixtures/phase-2-sample.csv`. Desktop picker and menu dialogs require a human; leave those paths explicitly unverified in unattended runs.
+- **Reopen and close.** Reopen a clean active tab. Close clean tabs with their Close buttons, then require No CSV open. Desktop Recent CSV Sources return. A dirty reopen or close requires confirmation.
+- **Source preservation.** Compare fixture bytes with their pre-run contents. On desktop, the isolated recent-files.json must still list successfully opened fixture paths.
 
 ## Web differences
 
-Web has no Recent CSV Sources (`recentCsvSources: false`) and no native dialog. Its empty window shows `No CSV open`, `Open CSV`, and `Select your CSV Sources again after reload.`
-
-- Open every CSV with `upload --role button --name "Open CSV" --nth 0 --file fixtures/phase-2-sample.csv`. Two `Open CSV` buttons render on the empty window, so `--nth 0` is required; once a tab is open the header button is unambiguous.
-- `open-second`, `open-already-open`, and `open-cycle` are reachable here, because a second `upload` needs no dialog. They are the reason to run this feature on web at all.
-- CSV Sources are `File` objects held for the page's lifetime, described as `This browser session` rather than a path. Nothing is written to disk, so the "fixture bytes unchanged" check still applies but proves less.
-- `Reopen` re-reads the in-memory `File`, so it discards edits exactly like desktop. A dirty Reopen raises `window.confirm` here rather than a native box, which still wedges the run.
-- There is no application menu, so `Ctrl+O`, `Ctrl+R`, and `Ctrl+W` do not exist. `Ctrl+Tab` cycling is renderer-level and works on both, though the browser may claim it first.
-- The page is served by the dev server, so a reload picks up source edits. Nothing else about opening a CSV differs from a production bundle.
+- Web has no Recent CSV Sources or application menu. Open CSV is driveable through `upload`.
+- Dropping the same file again creates another tab. Names and sizes do not establish source identity.
+- Web accepts at most 100 MB per source and 200 MB total reserved source bytes.
+- Reopen reads the selected File held in memory. Reloading the page requires selecting sources again.
+- Ctrl+Tab may be intercepted by the browser.
 
 ## Gotchas
 
-- `wait --text "phase-2-sample.csv"` proves nothing after clicking the Recent entry. The empty window already contains that string twice, as the entry name and inside its full-path subtitle, so the wait returns whether or not the click landed. `5 visible of 5 rows` is the discriminating wait.
-- Reopen on a clean file is observably a no-op. `Ready` and the row counts are both on screen before the click: the badge renders `Ready` while idle, and both counts are seeded from the open-time row count. Do not treat either as evidence that Reopen ran.
-- Reopening a file with `Unexported Changes` raises a **native** Electron discard dialog that CDP cannot dismiss, which wedges the run. Only Reopen a clean tab.
-- `click --name "phase-2-sample.csv"` can match the Recent CSV Sources button or, after open, the tab. The Recent control's `title` is the full path, so the name also contains the fixture path. After a file is open the Recent list is gone. Use `--role tab` to switch and `--role button` with `Close phase-2-sample.csv` to close.
-- `Open CSV` is ambiguous on the empty window: the header button and the empty-card button share the name, so `click` reports ambiguous without `--nth`. It is a native dialog either way, so do not click it.
-- The window follows OS color scheme on a fresh userData dir (`csv-viewer-theme` in localStorage). Dark or light is fine when the heading and expected feature state are legible.
-- Opening is async. Wait for the visible-row line, not a fixed sleep. The row count paints before the rows do, so wait for a cell value such as `Ada Lovelace` before addressing a `gridcell`, or the click reports `No control matched role=gridcell`.
-- `pnpm run dev` also shows this UI but uses default userData and a DevTools window. Doctor must see the recorded pid and a userData path under `runs/`.
-- Locale formatting may insert separators in row counts on some machines. If `5 visible of 5 rows` misses, read `text` and match the actual formatted line.
-- Compare stays disabled until two CSV tabs are open. That is expected on `open-recent` for a single file.
+- Native desktop Open/Export dialogs are not driveable over CDP. File drops provide a separate entry point; they do not verify those dialogs.
+- The empty screen has two Open CSV buttons. Use `--nth 0`.
+- Wait for grid values after metadata appears. The row count can paint before the cells.
+- An edited tab's accessible name includes Unexported Changes. An exact filename match can select a different tab when names repeat.
+- A drop during loading is declined, not queued. Retry after loading completes.
+- Folders are rejected even when their names end in .csv. Text and in-app grid drags must retain their normal behavior.
+- Mixed-drop errors remain visible after successful files open. The last successful open receives focus, including an already-open desktop source.
+- Desktop dirty reopen uses a native confirmation. Finish verification before invoking it without a human.

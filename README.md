@@ -10,6 +10,8 @@ A local desktop and web app for opening, inspecting, filtering, and cleaning CSV
 
 CSV Viewer is built for practical CSV work: open files from disk, browse large datasets smoothly, adjust parsing options, search and filter rows, make focused cleanup edits, compare two CSVs row by row, then deliver the Working CSV separately with Export CSV.
 
+Drop CSV, TSV, or TXT files anywhere in the desktop or web app, or use Open CSV. Multiple dropped files open in sequence. Existing tabs and edits stay intact, and any rejected or failed files appear in a summary.
+
 ## Highlights
 
 - **Local Processing.** Desktop and web keep CSV Sources and Working CSV data on your device. CSV Sources are never uploaded or overwritten.

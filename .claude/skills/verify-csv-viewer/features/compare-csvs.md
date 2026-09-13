@@ -27,11 +27,7 @@ Preconditions:
 - Both fixtures are open as CSV tabs. Active tab is `phase-2-sample.csv`.
 - `Compare…` is enabled. The ellipsis is `…` (U+2026), not `...`.
 
-On **desktop** those preconditions are unreachable unattended. Recent CSV Sources exist only on the empty window and unmount as soon as one tab is open. The File menu has no Open Recent, there is no drag-and-drop or command-line file handling, and re-picking the same fixture replaces its tab instead of adding one. The second file therefore requires `Open CSV` (native OS dialog). Record the attempted route: with one tab open, `click --role button --name "Compare…"` returns `"disabled": true`, the picker does not open, and `text` shows no `RECENT CSV SOURCES`.
-
-On **web** they are reachable. Two `upload` calls open both fixtures with no dialog, and `Compare…` enables. Verify this feature there. Never mark it verified from unit tests or from a disabled `Compare…` button.
-
-If two CSV tabs are already open (human finished the dialog):
+Open both fixtures on either runtime with `drop --files '["fixtures/phase-2-sample.csv","fixtures/phase-2-sample-edited.csv"]'`, then select the baseline with `click --role tab --name "phase-2-sample.csv"`. Web also supports two `upload` calls. Verify the picker through the UI.
 
 - **Open picker.** Run `click --role button --name "Compare…"`. Wait for `Choose a Candidate` and `Baseline · phase-2-sample.csv`. Candidate `phase-2-sample-edited.csv` shows `Comparison-Compatible`.
 - **Cancel once.** Run `click --role button --name "Cancel"`. The dialog is gone. CSV tabs remain.
@@ -42,7 +38,7 @@ If two CSV tabs are already open (human finished the dialog):
 
 ## Web differences
 
-**Run this feature on web.** It is unreachable on desktop and fully driveable here, because a second CSV needs only `upload`, not a native dialog.
+Both runtimes support this recipe through file drops. Web also supports `upload`.
 
 - Open both fixtures with two `upload` calls, then `Compare…` is enabled.
 - Pick the candidate by its subtitle, `This browser session`, not by its file name: the bare name also matches the tab and its close button, and `--nth 0` lands on the tab.

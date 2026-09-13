@@ -11,6 +11,7 @@ import { CsvGrid } from '@/csv/csv-grid';
 import { DialectControls } from '@/csv/dialect-controls';
 import { EmptyCsvState } from '@/csv/empty-csv-state';
 import { TabStrip } from '@/app/tab-strip';
+import { FileDropZone } from './file-drop-zone';
 import type { ComparisonCandidate, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import type { RendererWorkspace } from './renderer-workspace';
 import { useCsvViewer } from './csv-viewer';
@@ -176,7 +177,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
               onCloseTab={(tab) => void workspace.close(tab.id)}
             />
             {openError ? (
-              <FieldError className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 font-semibold">
+              <FieldError className="max-h-40 overflow-auto whitespace-pre-line break-words border-b border-destructive/30 bg-destructive/10 px-4 py-2 font-semibold">
                 {openError}
               </FieldError>
             ) : null}
@@ -243,6 +244,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
         />
       ) : null}
       <Toaster timeout={3000} />
+      <FileDropZone workspace={workspace} />
     </main>
   );
 }

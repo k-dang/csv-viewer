@@ -44,6 +44,11 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
   async acquireSource(): Promise<CsvSourceId | CsvCapacityExceeded | null> {
     const file = await this.pickFile();
     if (!file) return null;
+    return this.registerSource(file);
+  }
+
+  /** Reserves selected or dropped bytes under the same browser capacity policy. */
+  registerSource(file: File): CsvSourceId | CsvCapacityExceeded {
     if (file.size > this.limits.sourceBytes) {
       return {
         status: 'capacity-exceeded',
