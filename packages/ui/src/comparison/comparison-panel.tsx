@@ -163,9 +163,11 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
           are ready.
         </StatusBanner>
       ) : null}
-      {attempt?.status === 'cancelled' && comparison.applied && acknowledgedAttemptId !== attempt.attemptId ? (
+      {attempt?.status === 'cancelled' && acknowledgedAttemptId !== attempt.attemptId ? (
         <StatusBanner tone="neutral" aria-live="polite">
-          Comparison cancelled. The previous applied result was preserved.
+          {comparison.applied
+            ? 'Comparison cancelled. The previous applied result was preserved.'
+            : 'Comparison cancelled. No result was applied.'}
           <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={() => tab.dismissAttempt()}>
             Dismiss
           </Button>
