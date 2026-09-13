@@ -51,7 +51,7 @@ export function EmptyCsvState({
           {isOpening ? <Loader2 className="animate-spin" /> : <FolderOpen />}
           {isOpening ? 'Opening...' : 'Open CSV'}
         </Button>
-        <FieldError>{errorMessage}</FieldError>
+        <FieldError className="max-h-40 overflow-auto whitespace-pre-line break-words">{errorMessage}</FieldError>
         <FieldError>{dialectError}</FieldError>
         {viewer.capabilities.recentCsvSources && recentSources.length > 0 ? (
           <RecentCsvSourceList sources={recentSources} disabled={isOpening} onOpenRecent={onOpenRecent} />

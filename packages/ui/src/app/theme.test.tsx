@@ -21,7 +21,7 @@ it('applies the system theme at startup, toggles it, and restores the saved choi
   applyTheme(getInitialTheme());
   expect(document.documentElement.classList.contains('dark')).toBe(true);
   const viewer = createTestCsvViewer({ capabilities: { recentCsvSources: false } });
-  workspace = new RendererWorkspace(viewer, { confirmClose: () => true });
+  workspace = new RendererWorkspace(viewer, { confirmClose: () => true, acquireDroppedSource: async (file) => file.name });
   render(withCsvViewer(<App workspace={workspace} />, viewer));
   await act(async () => {});
   fireEvent.click(screen.getByRole('button', { name: 'Switch to light mode' }));
@@ -43,7 +43,7 @@ it.each(['getItem', 'setItem'] as const)('keeps theme controls working when stor
   try {
     applyTheme(getInitialTheme());
     const viewer = createTestCsvViewer({ capabilities: { recentCsvSources: false } });
-    workspace = new RendererWorkspace(viewer, { confirmClose: () => true });
+    workspace = new RendererWorkspace(viewer, { confirmClose: () => true, acquireDroppedSource: async (file) => file.name });
     render(withCsvViewer(<App workspace={workspace} />, viewer));
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Switch to light mode' }));

@@ -10,7 +10,7 @@ CSV Viewer ships two runtimes over one shared UI. Users open CSV files, browse t
 - **desktop** is the Electron app. CSV Sources are files on disk, opened through Recent CSV Sources or a native OS dialog. `window.csvViewer` IPC exists only here.
 - **web** is the browser build, served by the real dev server and driven in a real installed browser. CSV Sources are `File` objects held for the page's lifetime, opened through an `<input type="file">`. There are no Recent CSV Sources and no native dialogs.
 
-Pick the target that matches the claim. When a behavior lives in the shared UI, prefer **web**: its file input and its `<a download>` export are both driveable, so opening a second CSV, the whole comparison feature, and the Export CSV round trip can be proven there and nowhere else. Prove desktop-only surfaces (Recent CSV Sources, the native dialogs, the application menu) on desktop.
+Prefer **web** for shared UI and Export CSV verification. Use **desktop** for Recent CSV Sources, source identity, and the preload path for dropped files. Both runtimes support opening multiple files through `drop`; native Open/Export dialogs still require a human.
 
 Drive only an instance started by `control-csv-viewer.mjs launch`. Never attach to a user's `pnpm run dev` window or the default Electron userData directory.
 
@@ -127,7 +127,7 @@ Stable handles from this renderer:
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
 | Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`) |
 | Header mode | combobox `Headers` (`#csv-header-mode`), options `Auto`, `First row`, `None` |
-| Compare | button `Compare…` (ellipsis character `…`, U+2026). Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Unattended runs cannot open a second CSV (Recent CSV Sources unmount after the first open; `Open CSV` is a native dialog). |
+| Compare | button `Compare…` (ellipsis character `…`, U+2026). Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Use `drop --file <path>` to open a second CSV on either runtime. |
 | Reopen | button `Reopen` |
 | Theme | button `Switch to dark mode` / `Switch to light mode` |
 | Tabs | tablist `Open CSV and Comparison Tabs`, tab named with the file name |
@@ -154,7 +154,7 @@ Disabled state is only readable from `click`, which prints `"disabled": true` an
 
 Base UI popups (the `Stats Column` select) do not open from a synthetic click. Click the trigger, then `press --key ArrowDown`, then click the option.
 
-On **desktop**, native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through the seeded Recent CSV Sources list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
+On **desktop**, native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through `drop --file <path>` or the seeded Recent CSV Sources list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
 
 On **web** there are no native dialogs. `upload --file` answers the file input, so a second CSV, the comparison feature, and the Export CSV round trip are all provable unattended. Exported bytes land in `runs/<id>/downloads/` (`doctor` prints `downloadDir`); read them to prove the export really contains the edit. Repeated exports of one source overwrite each other there, so copy anything you need into `evidence/` before the next one.
 
@@ -173,7 +173,7 @@ Proof standards:
 - Every artifact set includes a snapshot (`.aria.txt`) and a screenshot (`.png`) that show `CSV Viewer` and the feature's observable result.
 - Record the feature id and the entry point used (recent-files button, header Compare, searchbox, and so on).
 - Opening a CSV also writes `recent-files.json` in the isolated userData dir. After a successful open, that file must still list the fixture path. The fixture bytes on disk must be unchanged. The app does not overwrite CSV sources.
-- Export CSV is not provable without a human finishing the OS dialog. Do not mark Export verified from an enabled button alone. `Compare…` is not provable in an unattended run: the second CSV requires that same OS dialog.
+- Desktop Export CSV requires a human to finish the OS dialog. An enabled button is not export proof. Web exports are driveable. Comparison is driveable on both runtimes after opening files with `drop`.
 
 ## Cleanup
 
@@ -200,6 +200,7 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | `fill --focused --value <text>` | Replace the active editor (AG Grid cell editor) |
 | `type --text <text>` | Insert text at the current caret via CDP |
 | `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
+| `drop --file <path>` or `drop --files <JSON array>` | Both runtimes. Sends file-backed Chromium drag input at the window center. Add `--hover` for the highlight, `--cancel` to cancel, or `--x` and `--y` to target another location |
 | `upload --role <role> --name <name> --file <path>` | Web only. Arms file-chooser interception, clicks the control, and answers the chooser with `--file` (resolved from the repo root) |
 | `wait --text <substring> [--timeout 10000]` | Poll `document.body.innerText` |
 | `snapshot --path <file>` | Visible text plus a compact AX dump |

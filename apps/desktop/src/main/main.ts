@@ -251,6 +251,12 @@ app.whenReady().then(() => {
   registerContentSecurityPolicy();
   createApplicationMenu();
   registerCsvViewerRequestHandler(ipcMain, workspace);
+  ipcMain.handle(ipcChannels.acquireDroppedSource, (_event, filePath: string) => {
+    if (Object.prototype.toString.call(filePath) !== '[object String]' || !path.isAbsolute(filePath)) {
+      throw new Error('Drop a file from your device.');
+    }
+    return workspaceHost.acquireDroppedSource(filePath);
+  });
   workspace.onEvent(sendEvent);
   createWindow();
 

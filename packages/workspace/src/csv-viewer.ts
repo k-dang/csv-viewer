@@ -463,7 +463,8 @@ export type CsvViewerCapabilities = {
 
 export type CsvViewerOperationMap = {
   'csv.open': {
-    request: { options?: CsvDialectOptions };
+    /** Omit sourceId to show the picker; otherwise open a source reserved by the runtime. */
+    request: { sourceId?: CsvSourceId; options?: CsvDialectOptions };
     result: OpenCsvResult;
   };
   'csv.open-recent': {

@@ -11,10 +11,10 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 Per target:
 
-- **desktop.** Seeded Recent CSV Sources are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`. Native Open/Export dialogs are out of band: open CSVs from Recent CSV Sources on the empty window, and never click `Open CSV` or `Export CSV`.
-- **web.** Runs the real dev server plus an installed Chrome, Edge or Chromium. No Recent CSV Sources and no native dialogs. Open every CSV with `upload --role button --name "Open CSV" --file <fixture>`, and let `Export CSV` download into the run's `downloads/` directory. `doctor` must also report `viteAlive: true`.
+- **desktop.** Seeded Recent CSV Sources are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`. Native Open/Export dialogs are out of band: open CSVs with `drop --file <fixture>` or Recent CSV Sources on the empty window, and never click `Open CSV` or `Export CSV`.
+- **web.** Runs the real dev server plus an installed Chrome, Edge or Chromium. No Recent CSV Sources and no native dialogs. Open CSVs with `drop --file <fixture>` or `upload --role button --name "Open CSV" --file <fixture>`, and let `Export CSV` download into the run's `downloads/` directory. `doctor` must also report `viteAlive: true`.
 
-Choose web whenever the claim is about shared UI behavior. Opening a second CSV, the whole comparison feature, and the Export CSV round trip are provable there and nowhere else.
+Prefer web for shared UI and the Export CSV round trip. File drops and comparison are driveable on both runtimes. Use desktop to prove that re-dropping the same local file focuses its existing tab.
 
 ## Driving conventions
 
@@ -48,7 +48,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Open a CSV](./open-csv.md) covers the empty window, Recent CSV Sources, tabs, reopen, and close.
+- [Open a CSV](./open-csv.md) covers file drops, the empty window, Recent CSV Sources, tabs, reopen, and close.
 - [Search and clear query](./search-filter.md) covers global search, empty matches, and Clear query.
 - [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, undo/redo, and the undriveable Export CSV dialog.
 - [Compare two CSVs](./compare-csvs.md) covers Compare…, the candidate picker, Apply key, and result badges.

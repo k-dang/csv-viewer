@@ -56,7 +56,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   async call(request: CsvViewerRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
     switch (request.operation) {
       case 'csv.open':
-        return this.openCsv(request.options);
+        return this.openCsv(request.options, request.sourceId);
       case 'csv.open-recent':
         return this.openRecentCsv(request.sourceId, request.options);
       case 'csv.reopen':
@@ -115,8 +115,8 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     return this.comparisonStore.subscribe((event) => listener({ type: 'comparison', event }));
   }
 
-  private async openCsv(options?: CsvDialectOptions): Promise<OpenCsvResult> {
-    const sourceId = await this.host.acquireSource();
+  private async openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Promise<OpenCsvResult> {
+    const sourceId = reservedSourceId ?? await this.host.acquireSource();
     if (!sourceId) return { status: 'cancelled' };
     if (sourceId instanceof Object) return sourceId;
     let retained = false;

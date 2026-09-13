@@ -23,7 +23,7 @@ const tabHandlers = (workingCsv: WorkingCsvView) => ({
 
 const owned: RendererWorkspace[] = [];
 function createWorkspace(viewer: ReturnType<typeof createTestCsvViewer>) {
-  const workspace = new RendererWorkspace(viewer, { confirmClose: confirmTabClose });
+  const workspace = new RendererWorkspace(viewer, { confirmClose: confirmTabClose, acquireDroppedSource: async (file) => file.name });
   owned.push(workspace);
   return workspace;
 }

@@ -6,13 +6,16 @@ import { App } from '@csv-viewer/ui/App';
 import { applyTheme, getInitialTheme } from '@csv-viewer/ui/theme';
 import { CsvViewerProvider } from '@csv-viewer/ui/csv-viewer';
 import '@csv-viewer/ui/styles.css';
-import { electronCsvViewer } from './electron-csv-viewer';
+import { acquireDroppedCsvSource, electronCsvViewer } from './electron-csv-viewer';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('CSV Viewer root element was not found.');
 
 const viewer = electronCsvViewer();
-const workspace = new RendererWorkspace(viewer, { confirmClose: confirmTabClose });
+const workspace = new RendererWorkspace(viewer, {
+  confirmClose: confirmTabClose,
+  acquireDroppedSource: acquireDroppedCsvSource,
+});
 const reactRoot = createRoot(root);
 
 function dispose() {

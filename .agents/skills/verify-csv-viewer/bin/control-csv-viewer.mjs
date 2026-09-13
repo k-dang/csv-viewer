@@ -30,6 +30,7 @@ const commands = {
   wait: runWait,
   text: runText,
   upload: runUpload,
+  drop: runDrop,
 };
 
 function parseFlags(argv) {
@@ -958,6 +959,35 @@ async function runUpload(options) {
     });
     await session.send('Page.setInterceptFileChooserDialog', { enabled: false });
     printJson({ status: 'ok', name: found.name, file: filePath });
+  });
+}
+
+/** Sends real file-backed drag input through Chromium, including Electron's preload path. */
+async function runDrop(options) {
+  const run = await requireCurrentRun();
+  const names = options.files ? JSON.parse(String(options.files)) : [options.file];
+  if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== 'string')) {
+    fail('drop requires --file <path> or --files <JSON array of paths>');
+  }
+  const files = names.map((name) => path.resolve(repoRoot, name));
+  for (const file of files) if (!(await pathExists(file))) fail(`Missing file ${file}`);
+  await withCdp(run, async (session) => {
+    const point = await session.evaluate('({ x: innerWidth / 2, y: innerHeight / 2 })');
+    const params = {
+      x: Number(options.x ?? point.x), y: Number(options.y ?? point.y),
+      data: { items: [], files, dragOperationsMask: 1 },
+    };
+    if (options.cancel) {
+      // Chromium's dragCancel alone does not dispatch a DOM leave event for injected drags.
+      await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape' });
+      await session.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape' });
+      await session.send('Input.dispatchDragEvent', { ...params, type: 'dragCancel' });
+    } else {
+      await session.send('Input.dispatchDragEvent', { ...params, type: 'dragEnter' });
+      await session.send('Input.dispatchDragEvent', { ...params, type: 'dragOver' });
+      if (!options.hover) await session.send('Input.dispatchDragEvent', { ...params, type: 'drop' });
+    }
+    printJson({ status: 'ok', files, phase: options.cancel ? 'cancel' : options.hover ? 'hover' : 'drop' });
   });
 }
 

@@ -6,7 +6,7 @@ test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page 
   await page.route('**/src/main.tsx', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
-    const anchor = 'workspace = new RendererWorkspace(started.viewer, { confirmClose: confirmTabClose });';
+    const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
     expect(source).toContain(anchor);
     await route.fulfill({
       response,

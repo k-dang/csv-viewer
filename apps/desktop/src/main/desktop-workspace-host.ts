@@ -74,6 +74,13 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     return filePath ? this.registerSource(filePath) : null;
   }
 
+  async acquireDroppedSource(filePath: string): Promise<CsvSourceId> {
+    if (!/\.(csv|tsv|txt)$/i.test(filePath)) throw new Error('Only CSV, TSV, and TXT files can be dropped.');
+    const fileStats = await stat(filePath);
+    if (!fileStats.isFile()) throw new Error('Folders cannot be opened. Drop CSV, TSV, or TXT files.');
+    return this.registerSource(filePath);
+  }
+
   releaseSource(): void {
     // Desktop retains identity for Recent CSV Sources; it holds no open file or byte reservation.
   }
