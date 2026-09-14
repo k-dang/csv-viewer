@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField } from '../../src/csv-viewer';
+import { csvInternalRowIdField, type CsvFilterDescriptor } from '../../src/csv-viewer';
 import {
   expectVisibleRows,
   rowIds,
@@ -517,7 +517,9 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         'insert-filtered.csv',
         ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,compiler'].join('\n'),
       );
-      const filters = [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }] as const;
+      const filters: CsvFilterDescriptor[] = [
+        { column: 'team', kind: 'text', operator: 'equals', value: 'compiler' },
+      ];
       const filtered = await workspace().call({
         operation: 'csv.get-rows',
         workingCsvId: workingCsv.workingCsvId,
