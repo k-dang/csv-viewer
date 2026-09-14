@@ -13,7 +13,7 @@
     "build:desktop": "pnpm --filter @csv-viewer/desktop build",
     "build:web": "pnpm --filter @csv-viewer/web build",
     "package": "pnpm --filter @csv-viewer/desktop package",
-    "lint": "oxlint --deny-warnings",
+    "lint": "NODE_OPTIONS=\"--experimental-strip-types --disable-warning=ExperimentalWarning\" oxlint --deny-warnings",
     "test": "vitest run",
     "test:browser": "playwright test",
     "typecheck": "pnpm -r --if-present run typecheck && tsc -p tsconfig.json --noEmit",
