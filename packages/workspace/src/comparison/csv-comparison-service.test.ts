@@ -1,11 +1,14 @@
+import { Effect } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
+import { cleanupEffect, databaseEffect } from './comparison-effects';
 import type {
+  CloseComparisonResult,
   ComparisonOperationId,
   ComparisonSummary,
   WorkingCsvView,
   SourceKeyDiagnostics,
 } from '../csv-viewer';
-import { CsvComparisonService } from './csv-comparison-service';
+import { CsvComparisonService, type BeginComparisonAttempt } from './csv-comparison-service';
 import type {
   ComparisonExecutor,
   CreateComparisonSnapshotRequest,
@@ -97,6 +100,15 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   private readonly pendingSnapshots = new Map<string, (error: Error) => void>();
   private readonly pendingDrops: Array<() => void> = [];
   private readonly pendingReleases: Array<() => void> = [];
+
+  openAttempt() {
+    return Effect.acquireRelease(Effect.succeed({
+      validateKey: () => databaseEffect(() => this.validateKey()),
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => databaseEffect(() => this.createSnapshot(request)).pipe(
+        Effect.onInterrupt(() => Effect.sync(() => this.cancel(request.artifactId))),
+      ),
+    }), () => cleanupEffect(() => this.release()));
+  }
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
     return validDiagnostics;
@@ -537,6 +549,136 @@ describe('CsvComparisonService interaction contract', () => {
         columns: 'csv-order',
       }),
     ).rejects.toThrow('scripted read failure');
+    await service.dispose();
+  });
+
+  it.each(['none', 'cancel', 'source-change'] as const)(
+    'preserves validation outcomes when worker cleanup fails with %s during cleanup',
+    async (interruption) => {
+      const store = new FakeCsvStore();
+      store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+      store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
+      const executor = new ScriptedComparisonExecutor();
+      const service = new CsvComparisonService(store, executor);
+      const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+      if (opened.status === 'rejected') throw new Error('open rejected');
+      const comparisonId = opened.comparison.comparisonId;
+      const first = service.begin({ kind: 'apply-key', comparisonId, key: ['id'] });
+      if (first.status !== 'accepted') throw new Error('begin rejected');
+      const applied = await first.completion;
+      if (applied.status !== 'applied') throw new Error('result not applied');
+      const snapshot = applied.comparison.applied;
+      if (!snapshot) throw new Error('snapshot missing');
+
+      const diagnostics: SourceKeyDiagnostics = {
+        blankRowCount: 1,
+        duplicateGroupCount: 1,
+        blankExamples: [{ rowId: '1', keyValues: [null] }],
+        duplicateExamples: [{ keyValues: ['active'], rowCount: 2, rowIds: ['2', '3'] }],
+      };
+      const cleanupStarted = Promise.withResolvers<void>();
+      const cleanup = Promise.withResolvers<void>();
+      const validate = vi.spyOn(executor, 'validateKey').mockResolvedValue(diagnostics);
+      const release = vi.spyOn(executor, 'release').mockImplementationOnce(() => {
+        cleanupStarted.resolve();
+        return cleanup.promise;
+      });
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const replacement = service.begin({ kind: 'apply-key', comparisonId, key: ['status'] });
+        if (replacement.status !== 'accepted') throw new Error('begin rejected');
+        await cleanupStarted.promise;
+        if (interruption === 'cancel') {
+          await service.cancel({ comparisonId, operationId: replacement.operationId });
+        } else if (interruption === 'source-change') {
+          store.change('a');
+        }
+        cleanup.reject(new Error('worker close failed'));
+        const result = await replacement.completion;
+        if (interruption === 'none') {
+          expect(result).toMatchObject({
+            status: 'invalid-key',
+            diagnostics: { key: ['status'], baseline: diagnostics, candidate: diagnostics },
+          });
+        } else if (interruption === 'cancel') {
+          expect(result.status).toBe('cancelled');
+        } else {
+          expect(result).toMatchObject({ status: 'sources-changed', changedSides: ['baseline'] });
+        }
+        expect(service.getState(comparisonId)?.applied?.resultToken).toBe(snapshot.resultToken);
+        await expect(service.getWindow({
+          comparisonId, resultToken: snapshot.resultToken, offset: 0, limit: 100,
+          rows: 'all', columns: 'csv-order',
+        })).resolves.toMatchObject({ status: 'ready' });
+        expect(errors).toHaveBeenCalled();
+      } finally {
+        validate.mockRestore();
+        release.mockRestore();
+        await service.dispose();
+        errors.mockRestore();
+      }
+    },
+  );
+
+  it('settles a defect, keeps it observable, and allows a subsequent attempt', async () => {
+    const store = new FakeCsvStore();
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
+    const executor = new ScriptedComparisonExecutor();
+    const defect = new Error('unexpected activation defect');
+    const activate = vi.spyOn(executor, 'activateSnapshot').mockImplementationOnce(() => {
+      throw defect;
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const service = new CsvComparisonService(store, executor);
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+    const request = { kind: 'apply-key' as const, comparisonId: opened.comparison.comparisonId, key: ['id'] };
+    const begun = service.begin(request);
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    await expect(begun.completion).resolves.toMatchObject({ status: 'failed', failure: { code: 'query-failed' } });
+    expect(errors).toHaveBeenCalled();
+    expect(executor.droppedArtifacts).toContain(begun.operationId);
+    const retry = service.begin(request);
+    if (retry.status !== 'accepted') throw new Error('retry rejected');
+    await expect(retry.completion).resolves.toMatchObject({ status: 'applied' });
+    await service.dispose();
+    activate.mockRestore();
+    errors.mockRestore();
+  });
+
+  it('shares reentrant closure and rejects new work from the settlement subscriber', async () => {
+    const store = new FakeCsvStore();
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
+    const service = new CsvComparisonService(store, new ScriptedComparisonExecutor());
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+    const request = { kind: 'apply-key' as const, comparisonId: opened.comparison.comparisonId, key: ['id'] };
+    const events: string[] = [];
+    const rejectedAttempts: BeginComparisonAttempt[] = [];
+    const closes: Promise<CloseComparisonResult>[] = [];
+    service.subscribe((event) => {
+      events.push(event.kind);
+      if (event.kind !== 'changed') return;
+      if (event.comparison.operation) {
+        closes.push(service.close(request.comparisonId), service.close(request.comparisonId));
+      } else {
+        rejectedAttempts.push(service.begin(request));
+      }
+    });
+    const begun = service.begin(request);
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    await begun.completion;
+    await expect(Promise.all(closes)).resolves.toEqual([
+      { status: 'closed', comparisonId: request.comparisonId },
+      { status: 'closed', comparisonId: request.comparisonId },
+    ]);
+    expect(rejectedAttempts).toMatchObject([
+      { status: 'rejected', fault: { code: 'comparison-not-found' } },
+    ]);
+    expect(events).toEqual(['changed', 'changed', 'closed']);
+    expect(service.getState(request.comparisonId)).toBeNull();
     await service.dispose();
   });
 });

@@ -1,3 +1,5 @@
+import { Cause, Effect, Exit, Fiber, type Scope } from 'effect';
+import type { DataEngineError } from '../database';
 import type {
   BeginComparisonRequest,
   CancelComparisonRequest,
@@ -59,11 +61,19 @@ type Operation = {
   phase: 'validating' | 'comparing' | 'summarizing';
   cancelRequested: boolean;
   changedSides: ComparisonSide[];
+  invalidKeyDiagnostics: ComparisonKeyDiagnostics | null;
 };
+
+type AttemptResult = NonNullable<ComparisonView['lastAttempt']>;
 
 type ComparisonActivity =
   | { kind: 'idle'; lastAttempt: ComparisonView['lastAttempt'] }
-  | { kind: 'running'; operation: Operation; completion: Promise<ComparisonAttemptOutcome> };
+  | {
+      kind: 'running';
+      operation: Operation;
+      fiber: Fiber.Fiber<AttemptResult, DataEngineError>;
+      completion: Promise<ComparisonAttemptOutcome>;
+    };
 
 export type ComparisonAttemptOutcome =
   | { status: 'applied'; comparison: ComparisonView }
@@ -107,6 +117,7 @@ export class CsvComparisonService {
   private readonly pairIndex = new Map<string, ComparisonId>();
   private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
+  private readonly closing = new Map<ComparisonId, Promise<CloseComparisonResult>>();
   private readonly pendingRetirements = new Set<string>();
   private readonly unsubscribeFromDataChanges: () => void;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
@@ -198,6 +209,10 @@ export class CsvComparisonService {
       return { status: 'busy', activeOperationId: entity.activity.operation.operationId };
     }
 
+    if (this.closing.has(entity.comparisonId)) {
+      return rejected('comparison-not-found', 'The Comparison Tab is closing.');
+    }
+
     const key = request.kind === 'apply-key' ? request.key : entity.snapshot?.key;
     if (!key) return rejected('no-applied-key', 'Apply a Comparison Key before refreshing.');
     const keyFault = validateKeySelection(key, this.availableKeyColumns(entity));
@@ -214,9 +229,13 @@ export class CsvComparisonService {
       phase: 'validating',
       cancelRequested: false,
       changedSides: [],
+      invalidKeyDiagnostics: null,
     };
-    const completion = Promise.resolve().then(() => this.run(entity, operation, [...key]));
-    entity.activity = { kind: 'running', operation, completion };
+    const fiber = Effect.runFork(Effect.scoped(this.compute(entity, operation, [...key])));
+    const completion = Effect.runPromise(Fiber.await(fiber)).then((result) =>
+      this.finishAttempt(entity, operation, result),
+    );
+    entity.activity = { kind: 'running', operation, fiber, completion };
     this.publishChange(entity);
     return { status: 'accepted', operationId: operation.operationId, completion };
   }
@@ -229,7 +248,7 @@ export class CsvComparisonService {
     if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
     if (operation.cancelRequested) return { status: 'already-requested' };
     operation.cancelRequested = true;
-    this.executor.cancel(operation.operationId);
+    Effect.runFork(Fiber.interrupt(entity.activity.fiber));
     return { status: 'requested' };
   }
 
@@ -339,12 +358,23 @@ export class CsvComparisonService {
   }
 
   async close(comparisonId: ComparisonId): Promise<CloseComparisonResult> {
+    const pending = this.closing.get(comparisonId);
+    if (pending) return pending;
     const entity = this.entities.get(comparisonId);
     if (!entity) return { status: 'closed', comparisonId };
+    const completion = Promise.resolve().then(() => this.closeEntity(entity)).finally(() => {
+      this.closing.delete(comparisonId);
+    });
+    this.closing.set(comparisonId, completion);
+    return completion;
+  }
+
+  private async closeEntity(entity: ComparisonRecord): Promise<CloseComparisonResult> {
+    const { comparisonId } = entity;
     if (entity.activity.kind === 'running') {
       const { operation, completion } = entity.activity;
       operation.cancelRequested = true;
-      this.executor.cancel(operation.operationId);
+      Effect.runFork(Fiber.interrupt(entity.activity.fiber));
       await completion;
     }
     try {
@@ -409,102 +439,114 @@ export class CsvComparisonService {
     this.lifecycle = 'disposed';
   }
 
-  private async run(entity: ComparisonRecord, operation: Operation, key: string[]): Promise<ComparisonAttemptOutcome> {
-    let stagingArtifactId: ComparisonOperationId | null = null;
-    try {
-      await yieldToEventLoop();
-      if (!this.operationIsCurrent(entity, operation)) {
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'cancelled',
-        });
-      }
-      await this.retryPendingRetirements();
-      if (!this.operationIsCurrent(entity, operation)) {
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'cancelled',
-        });
-      }
-      const baseline = this.csvs.getState(entity.baselineId);
-      const candidate = this.csvs.getState(entity.candidateId);
-      if (!baseline || !candidate) {
-        await this.releaseWorker(operation.operationId);
-        return this.finishFailed(entity, operation, 'source-unavailable');
-      }
-      const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
-      const baselineDiagnostics = await this.executor.validateKey(operation.operationId, entity.baselineId, key);
-      const candidateDiagnostics = await this.executor.validateKey(operation.operationId, entity.candidateId, key);
-      if (!this.operationIsCurrent(entity, operation)) {
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'cancelled',
-        });
-      }
-
-      const diagnostics: ComparisonKeyDiagnostics = {
-        key,
-        baseline: baselineDiagnostics,
-        candidate: candidateDiagnostics,
-      };
-      if (hasInvalidKeys(diagnostics)) {
-        this.executor.cancel(operation.operationId);
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'invalid-key',
-          diagnostics,
-        });
-      }
-
-      operation.phase = 'comparing';
-      this.publishChange(entity);
-      await yieldToEventLoop();
-      if (!this.operationIsCurrent(entity, operation)) {
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'cancelled',
-        });
-      }
-      const valueColumns = baseline.columns.map((column) => column.name).filter((column) => !key.includes(column));
-      stagingArtifactId = operation.operationId;
-      const summary = await this.executor.createSnapshot({
-        artifactId: stagingArtifactId,
-        comparisonId: entity.comparisonId,
-        baselineId: entity.baselineId,
-        candidateId: entity.candidateId,
-        key,
-        valueColumns,
+  // Settle outside the fiber so cancellation cannot interrupt settlement.
+  private finishAttempt(
+    entity: ComparisonRecord,
+    operation: Operation,
+    result: Exit.Exit<AttemptResult, DataEngineError>,
+  ): ComparisonAttemptOutcome {
+    if (Exit.isFailure(result) && !Cause.hasInterruptsOnly(result.cause)) {
+      console.error(`Comparison operation ${operation.operationId} failed.`, result.cause);
+    }
+    // Cancellation or cleanup failure after publication must preserve the committed result.
+    if (entity.snapshot?.artifactId === operation.operationId) {
+      return this.settle(entity, operation, { attemptId: operation.operationId, status: 'applied' });
+    }
+    if (operation.changedSides.length > 0) {
+      return this.finishSourcesChanged(entity, operation, operation.changedSides);
+    }
+    if (operation.cancelRequested || (Exit.isFailure(result) && Cause.hasInterrupts(result.cause))) {
+      return this.finishCancelled(entity, operation);
+    }
+    if (operation.invalidKeyDiagnostics) {
+      return this.settle(entity, operation, {
+        attemptId: operation.operationId,
+        status: 'invalid-key',
+        diagnostics: operation.invalidKeyDiagnostics,
       });
+    }
+    if (Exit.isFailure(result)) return this.finishFailed(entity, operation);
+    return this.settle(entity, operation, result.value);
+  }
 
-      operation.phase = 'summarizing';
-      this.publishChange(entity);
-      await yieldToEventLoop();
-      if (!this.operationIsCurrent(entity, operation)) {
-        await this.retireSnapshot(stagingArtifactId);
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'cancelled',
-        });
-      }
+  private readonly compute = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    entity: ComparisonRecord,
+    operation: Operation,
+    key: string[],
+  ): Effect.fn.Return<AttemptResult, DataEngineError, Scope.Scope> {
+    // Let begin() record the attempt before subscribers can close it.
+    yield* Effect.sleep(0);
+    yield* Effect.promise(() => this.retryPendingRetirements()).pipe(Effect.uninterruptible);
+    const baseline = this.csvs.getState(entity.baselineId);
+    const candidate = this.csvs.getState(entity.candidateId);
+    if (!baseline || !candidate) {
+      return {
+        attemptId: operation.operationId,
+        status: 'failed',
+        failure: {
+          code: 'source-unavailable',
+          message: 'A source Working CSV is no longer available.',
+          retryable: false,
+        },
+      };
+    }
+    const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
+    const executor = yield* this.executor.openAttempt();
+    const baselineDiagnostics = yield* executor.validateKey(entity.baselineId, key);
+    const candidateDiagnostics = yield* executor.validateKey(entity.candidateId, key);
+    const diagnostics: ComparisonKeyDiagnostics = {
+      key,
+      baseline: baselineDiagnostics,
+      candidate: candidateDiagnostics,
+    };
+    if (hasInvalidKeys(diagnostics)) {
+      // Keep completed diagnostics if closing the worker turns the scope's Exit into a failure.
+      operation.invalidKeyDiagnostics = diagnostics;
+      return { attemptId: operation.operationId, status: 'invalid-key', diagnostics };
+    }
+
+    operation.phase = 'comparing';
+    this.publishChange(entity);
+    yield* Effect.sleep(0);
+    const valueColumns = baseline.columns.map((column) => column.name).filter((column) => !key.includes(column));
+    // Retire partial snapshots unless publication transferred ownership to the tab.
+    yield* Effect.addFinalizer(() => Effect.promise(async () => {
+      if (entity.snapshot?.artifactId !== operation.operationId) await this.retireSnapshot(operation.operationId);
+    }));
+    const summary = yield* executor.createSnapshot({
+      artifactId: operation.operationId,
+      comparisonId: entity.comparisonId,
+      baselineId: entity.baselineId,
+      candidateId: entity.candidateId,
+      key,
+      valueColumns,
+    });
+    operation.phase = 'summarizing';
+    this.publishChange(entity);
+    yield* Effect.sleep(0);
+    const previousArtifactId = entity.snapshot?.artifactId;
+    if (previousArtifactId) {
+      yield* Effect.addFinalizer(() => Effect.promise(async () => {
+        if (entity.snapshot?.artifactId === operation.operationId) await this.retireSnapshot(previousArtifactId);
+      }));
+    }
+    return yield* Effect.sync((): AttemptResult => {
       const changedSides = changedComparisonSides(
         this.csvs.getState(entity.baselineId),
         this.csvs.getState(entity.candidateId),
         captured,
       );
       if (changedSides.length > 0) {
-        await this.retireSnapshot(stagingArtifactId);
-        return this.settleAfterRelease(entity, operation, {
-          attemptId: operation.operationId,
-          status: 'sources-changed',
-          changedSides,
-        });
+        return { attemptId: operation.operationId, status: 'sources-changed', changedSides };
       }
-
-      const previousArtifactId = entity.snapshot?.artifactId ?? null;
-      this.executor.activateSnapshot(stagingArtifactId);
+      if (!this.operationIsCurrent(entity, operation)) {
+        return { attemptId: operation.operationId, status: 'cancelled' };
+      }
+      this.executor.activateSnapshot(operation.operationId);
       entity.snapshot = {
-        artifactId: stagingArtifactId,
-        resultToken: stagingArtifactId,
+        artifactId: operation.operationId,
+        resultToken: operation.operationId,
         key,
         valueColumns,
         swapped: false,
@@ -512,41 +554,10 @@ export class CsvComparisonService {
         revisions: captured,
         freshness: { kind: 'current' },
       };
-      stagingArtifactId = null;
       this.publishChange(entity);
-      if (previousArtifactId) await this.retireSnapshot(previousArtifactId);
-      return this.settleAfterRelease(entity, operation, {
-        attemptId: operation.operationId,
-        status: 'applied',
-      });
-    } catch (error) {
-      if (stagingArtifactId) await this.retireSnapshot(stagingArtifactId);
-      await this.releaseWorker(operation.operationId);
-      if (operation.changedSides.length > 0) {
-        return this.finishSourcesChanged(entity, operation, operation.changedSides);
-      }
-      if (operation.cancelRequested) return this.finishCancelled(entity, operation);
-      console.error(`Comparison operation ${operation.operationId} failed.`, error);
-      return this.finishFailed(entity, operation, 'query-failed');
-    } finally {
-      await this.releaseWorker(operation.operationId);
-    }
-  }
-
-  private async settleAfterRelease(
-    entity: ComparisonRecord,
-    operation: Operation,
-    lastAttempt: ComparisonView['lastAttempt'],
-  ): Promise<ComparisonAttemptOutcome> {
-    await this.releaseWorker(operation.operationId);
-    return this.settle(entity, operation, lastAttempt);
-  }
-
-  private async releaseWorker(operationId: ComparisonOperationId): Promise<void> {
-    await this.executor.release(operationId).catch((error) => {
-      console.error(`Failed to release Comparison worker ${operationId}.`, error);
-    });
-  }
+      return { attemptId: operation.operationId, status: 'applied' };
+    }).pipe(Effect.uninterruptible);
+  });
 
   private async retireSnapshot(artifactId: ComparisonOperationId): Promise<void> {
     try {
@@ -571,18 +582,11 @@ export class CsvComparisonService {
     });
   }
 
-  private finishFailed(
-    entity: ComparisonRecord,
-    operation: Operation,
-    code: 'source-unavailable' | 'query-failed',
-  ): ComparisonAttemptOutcome {
+  private finishFailed(entity: ComparisonRecord, operation: Operation): ComparisonAttemptOutcome {
     return this.settle(entity, operation, {
       attemptId: operation.operationId,
       status: 'failed',
-      failure:
-        code === 'source-unavailable'
-          ? { code, message: 'A source Working CSV is no longer available.', retryable: false }
-          : { code, message: 'The comparison query failed. Try again.', retryable: true },
+      failure: { code: 'query-failed', message: 'The comparison query failed. Try again.', retryable: true },
     });
   }
 
@@ -617,7 +621,7 @@ export class CsvComparisonService {
       if (entity.activity.kind === 'running') {
         const { operation } = entity.activity;
         if (!operation.changedSides.includes(side)) operation.changedSides.push(side);
-        this.executor.cancel(operation.operationId);
+        Effect.runFork(Fiber.interrupt(entity.activity.fiber));
       }
       if (!entity.snapshot) continue;
       const changedSides = entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
@@ -725,7 +729,13 @@ export class CsvComparisonService {
   }
 
   private emit(event: ComparisonEvent): void {
-    for (const listener of this.listeners) listener(event);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error('Comparison event subscriber failed.', error);
+      }
+    }
   }
 }
 
@@ -746,8 +756,4 @@ function pairKey(left: string, right: string): string {
 
 function compareText(left: string, right: string): number {
   return left.localeCompare(right, undefined, { sensitivity: 'base' });
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }

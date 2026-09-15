@@ -676,6 +676,43 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       });
     });
 
+    it('preserves the applied result and cancellation protocol across replacement attempts', async () => {
+      const baseline = await value.openSource('baseline.csv', 'id,value\n1,old\n');
+      const candidate = await value.openSource('candidate.csv', 'id,value\n1,new\n');
+      const comparison = await openComparison(value, baseline, candidate);
+      const applied = await applyKey(value, comparison.comparisonId, ['id']);
+      const originalWindow = await readWindow(value, applied);
+      const request = {
+        operation: 'comparison.begin' as const,
+        kind: 'refresh' as const,
+        comparisonId: comparison.comparisonId,
+      };
+      const started = await value.viewer.call(request);
+      if (started.status !== 'accepted') throw new Error('refresh rejected');
+      const cancel = {
+        operation: 'comparison.cancel' as const,
+        comparisonId: comparison.comparisonId,
+        operationId: started.operationId,
+      };
+      await expect(Promise.all([
+        value.viewer.call(request),
+        value.viewer.call({ ...cancel, operationId: 'unrelated-attempt' }),
+        value.viewer.call(cancel),
+        value.viewer.call(cancel),
+      ])).resolves.toEqual([
+        { status: 'busy', activeOperationId: started.operationId },
+        { status: 'operation-mismatch' },
+        { status: 'requested' },
+        { status: 'already-requested' },
+      ]);
+      await expect(value.awaitComparisonOutcome(started.operationId)).resolves.toMatchObject({ status: 'cancelled' });
+      await expect(readWindow(value, applied)).resolves.toEqual(originalWindow);
+      await expect(value.viewer.call(cancel)).resolves.toEqual({ status: 'already-finished' });
+      await expect(value.viewer.call({ ...cancel, comparisonId: 'missing' })).resolves.toEqual({ status: 'comparison-not-found' });
+      const replacement = await refresh(value, comparison.comparisonId);
+      expect(replacement.applied?.resultToken).not.toBe(applied.applied?.resultToken);
+    });
+
     it('handles key-only data, zero and maximum windows, and Swap sides without recomputation', async () => {
       const [baseline, candidate] = await Promise.all([
         value.openSource('baseline.csv', ['id', '1', '2', ''].join('\n')),
