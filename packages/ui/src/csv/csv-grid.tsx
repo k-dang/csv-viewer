@@ -246,7 +246,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   }
 
   const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
-  const canInsertRelative = !hasActiveQuery && selectedRowIds.length === 1;
+  const canInsertRelative = selectedRowIds.length === 1;
   const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
 
   return (
