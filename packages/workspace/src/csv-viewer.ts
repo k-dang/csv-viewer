@@ -183,6 +183,12 @@ export type CsvInsertRowRequest = {
   hasActiveQuery: boolean;
 };
 
+export type CsvRenameColumnRequest = {
+  workingCsvId: WorkingCsvId;
+  column: string;
+  name: string;
+};
+
 export type CsvEditStateRequest = {
   workingCsvId: WorkingCsvId;
 };
@@ -199,6 +205,10 @@ export type CsvEditState = {
   hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
+};
+
+export type CsvSchemaEditState = CsvEditState & {
+  columns: CsvColumn[];
 };
 
 export type OpenCsvResult =
@@ -503,17 +513,21 @@ export type CsvViewerOperationMap = {
     request: CsvInsertRowRequest;
     result: CsvEditState;
   };
+  'csv.rename-column': {
+    request: CsvRenameColumnRequest;
+    result: CsvSchemaEditState;
+  };
   'csv.get-edit-state': {
     request: CsvEditStateRequest;
     result: CsvEditState;
   };
   'csv.undo': {
     request: CsvEditStateRequest;
-    result: CsvEditState;
+    result: CsvSchemaEditState;
   };
   'csv.redo': {
     request: CsvEditStateRequest;
-    result: CsvEditState;
+    result: CsvSchemaEditState;
   };
   'csv.export': {
     request: CsvExportRequest;

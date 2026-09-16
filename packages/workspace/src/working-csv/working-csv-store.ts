@@ -1,5 +1,5 @@
 import { toError } from '../errors';
-import { supportedCsvFileExtensions } from '../csv-viewer';
+import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
@@ -13,8 +13,10 @@ import type {
   CsvExportOutcome,
   CsvEditStateRequest,
   CsvInsertRowRequest,
+  CsvRenameColumnRequest,
   CsvRowWindow,
   CsvRowWindowRequest,
+  CsvSchemaEditState,
   CsvSourceId,
   WorkingCsvId,
   WorkingCsvView,
@@ -33,6 +35,7 @@ import {
 import { normalizeCellValue, normalizeCount, normalizeRow } from '../query/csv-result-normalization';
 import {
   applyCellValue,
+  applyColumnRename,
   applyRowDeletion,
   assertRowsExist,
   createWorkingCsvTable,
@@ -42,9 +45,11 @@ import {
   readColumns,
   readExportRows,
   readRowCount,
+  renameCsvColumns,
   runEditCommand,
   type CsvTable,
 } from './csv-working-csv-table';
+import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-executor';
 import { CsvSourceUnavailableError, type CsvWorkspaceHost } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
@@ -479,21 +484,53 @@ export class WorkingCsvStore {
     });
   }
 
-  async undo(workingCsvId: WorkingCsvId): Promise<CsvEditState> {
+  async renameColumn(request: CsvRenameColumnRequest): Promise<CsvSchemaEditState> {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
+      const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
+      assertKnownColumn(request.column, knownColumns);
+
+      const name = request.name.trim();
+      if (name.length === 0) {
+        throw new Error('CSV column name cannot be blank.');
+      }
+      if (isReservedCsvColumnName(name)) {
+        throw new Error('CSV column name is reserved.');
+      }
+      if (hasConflictingColumnName(state.metadata.columns, name, request.column)) {
+        throw new Error('CSV column name already exists.');
+      }
+      if (name === request.column) {
+        return buildSchemaEditState(state);
+      }
+
+      await applyColumnRename(this.tableFor(state), request.column, name);
+      state.metadata.columns = renameCsvColumns(state.metadata.columns, request.column, name);
+      state.history.record({ type: 'rename-column', from: request.column, to: name });
+      this.commitDataChange(state);
+      return buildSchemaEditState(state);
+    });
+  }
+
+  async undo(workingCsvId: WorkingCsvId): Promise<CsvSchemaEditState> {
     return this.stepHistory(workingCsvId, 'undo');
   }
 
-  async redo(workingCsvId: WorkingCsvId): Promise<CsvEditState> {
+  async redo(workingCsvId: WorkingCsvId): Promise<CsvSchemaEditState> {
     return this.stepHistory(workingCsvId, 'redo');
   }
 
-  private async stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Promise<CsvEditState> {
+  private async stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Promise<CsvSchemaEditState> {
     return this.withWorkingCsvMutation(workingCsvId, async (state) => {
       const table = this.tableFor(state);
       const replay = (entry: CsvEditCommand) => runEditCommand(table, entry, direction);
       const command = direction === 'undo' ? await state.history.undo(replay) : await state.history.redo(replay);
+      if (command.type === 'rename-column') {
+        const from = direction === 'redo' ? command.from : command.to;
+        const to = direction === 'redo' ? command.to : command.from;
+        state.metadata.columns = renameCsvColumns(state.metadata.columns, from, to);
+      }
       this.commitDataChange(state, rowCountDelta(command, direction));
-      return buildEditState(state);
+      return buildSchemaEditState(state);
     });
   }
 
@@ -809,6 +846,26 @@ function buildEditState(state: WorkingCsvState): CsvEditState {
     canUndo: state.history.canUndo,
     canRedo: state.history.canRedo,
   };
+}
+
+function buildSchemaEditState(state: WorkingCsvState): CsvSchemaEditState {
+  return {
+    ...buildEditState(state),
+    columns: state.metadata.columns.map((column) => ({ ...column })),
+  };
+}
+
+function isReservedCsvColumnName(name: string): boolean {
+  return name === csvInternalRowIdField || name === csvSourceOrderField || name === csvDeletedField;
+}
+
+function hasConflictingColumnName(
+  columns: WorkingCsvState['metadata']['columns'],
+  name: string,
+  except: string,
+): boolean {
+  const needle = name.toLowerCase();
+  return columns.some((column) => column.name !== except && column.name.toLowerCase() === needle);
 }
 
 function buildWorkingCsvView(state: WorkingCsvState): WorkingCsvView {

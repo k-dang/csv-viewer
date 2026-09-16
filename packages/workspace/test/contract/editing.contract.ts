@@ -180,6 +180,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -199,6 +200,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
@@ -394,6 +396,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -401,6 +404,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterUndo.rows)).toEqual(['1', '2', '3']);
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
@@ -705,6 +709,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterInsert.rows)).toEqual(['1', '3', '2']);
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -712,11 +717,127 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterUndo.rows)).toEqual(['1', '2']);
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
       });
       expect(rowIds(afterRedo.rows)).toEqual(['1', '3', '2']);
+    });
+
+    it('renames a column header, rejects blank and duplicate names, and restores the name on undo', async () => {
+      const workingCsv = await fixture.openSource('rename.csv', ['name,code', 'Ada,001'].join('\n'));
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const renamedColumns = [
+        { name: 'name', type: workingCsv.columns[0].type },
+        { name: 'sku', type: workingCsv.columns[1].type },
+      ];
+
+      const renamed = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'sku',
+      });
+      const renamedWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+
+      expect(renamed).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: renamedColumns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      expect(renamedWindow.rows[0]).toMatchObject({ name: 'Ada', sku: '001' });
+      expect(renamedWindow.rows[0]).not.toHaveProperty('code');
+
+      const undone = await workspace().call({ operation: 'csv.undo', ...request });
+      const undoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(undone).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: true,
+      });
+      expect(undoneWindow.rows[0]).toMatchObject({ name: 'Ada', code: '001' });
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      expect(redone.columns.map((column) => column.name)).toEqual(['name', 'sku']);
+
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '   ',
+        }),
+      ).rejects.toThrow('CSV column name cannot be blank.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: 'name',
+        }),
+      ).rejects.toThrow('CSV column name already exists.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: 'Name',
+        }),
+      ).rejects.toThrow('CSV column name already exists.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '__csvViewerRowId',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'missing',
+          name: 'other',
+        }),
+      ).rejects.toThrow('Unknown CSV column: missing');
+
+      const sameName = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'sku',
+        name: 'sku',
+      });
+      expect(sameName).toEqual(redone);
+    });
+
+    it('exports renamed column headers', async () => {
+      const workingCsv = await fixture.openSource('rename-export.csv', ['name,code', 'Ada,001'].join('\n'));
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const readExported = fixture.captureNextExport('renamed-export.csv');
+
+      await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'sku',
+      });
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(['name,sku', 'Ada,001', ''].join('\n'));
     });
 
     it('exports literal bytes for headers, quoting, null and empty cells, edits, row order, and deletions', async () => {

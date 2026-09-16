@@ -57,6 +57,10 @@ export function buildCellValueQuery(
   };
 }
 
+export function buildRenameColumnStatement(tableName: string, from: string, to: string): string {
+  return `ALTER TABLE ${quoteIdentifier(tableName)} RENAME COLUMN ${quoteIdentifier(from)} TO ${quoteIdentifier(to)}`;
+}
+
 export function buildCellUpdateStatement(
   tableName: string,
   rowId: string,

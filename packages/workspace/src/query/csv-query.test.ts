@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildExistingRowIdsQuery, buildRowDeletionStatement } from './csv-query';
+import { buildExistingRowIdsQuery, buildRenameColumnStatement, buildRowDeletionStatement } from './csv-query';
 
 describe('CSV row identifier statements', () => {
   it('rejects an empty row list rather than emitting IN ()', () => {
@@ -16,5 +16,13 @@ describe('CSV row identifier statements', () => {
       values: [true, '1', '2'],
     });
     expect(buildExistingRowIdsQuery('csv_working_1', ['1', '2']).sql).toContain('IN (?, ?)');
+  });
+});
+
+describe('CSV column rename statements', () => {
+  it('quotes table and column identifiers including embedded quotes', () => {
+    expect(buildRenameColumnStatement('csv"working', 'quote"name', 'new"name')).toBe(
+      'ALTER TABLE "csv""working" RENAME COLUMN "quote""name" TO "new""name"',
+    );
   });
 });
