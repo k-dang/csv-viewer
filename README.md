@@ -148,7 +148,7 @@ The web runtime keeps each selected CSV Source only for the current page lifetim
 
 - Export CSV is the only output-delivery path. A Working CSV's CSV Source is never overwritten.
 - Cell values are edited as text. Numeric, date, and boolean validation is not enforced.
-- Column insertion, deletion, renaming, and reordering are not supported.
+- Column insertion, deletion, and reordering are not supported. Column headers can be renamed on the Working CSV.
 - Row insertion is disabled while sort, filter, or search is active.
 - A CSV Source whose identity can be established opens in at most one CSV Tab; opening it again focuses the existing Tab rather than creating a second one.
 - Aligned Comparison requires both Working CSVs to have exactly the same set of column names, and a Comparison Key whose combined value is present and unique in every row of both sides.

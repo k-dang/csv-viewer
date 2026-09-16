@@ -113,7 +113,7 @@ A Tab that presents one Working CSV and retains its query, edit, and Stats Panel
 _Avoid_: File view, temporary CSV view
 
 **Working CSV**:
-The CSV data of one CSV Tab, including cell edits, inserted rows, and deleted rows. Each CSV Tab has its own Working CSV, independent of other Tabs. Column Value Counts are calculated from the Working CSV, not from its CSV Source.
+The CSV data of one CSV Tab, including cell edits, inserted rows, deleted rows, and renamed column headers. Each CSV Tab has its own Working CSV, independent of other Tabs. Column Value Counts are calculated from the Working CSV, not from its CSV Source.
 _Avoid_: Original CSV, source file
 
 **Active Tab**:

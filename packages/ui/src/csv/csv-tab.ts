@@ -1,10 +1,12 @@
 import type { QueryState } from './query-status-badge';
 import type {
+  CsvColumn,
   CsvColumnValueCounts,
   CsvEditState,
   CsvFilterDescriptor,
   CsvInsertRowPlacement,
   CsvRowWindow,
+  CsvSchemaEditState,
   CsvSortDescriptor,
   CsvViewer,
   WorkingCsvView,
@@ -222,6 +224,19 @@ export class CsvTab {
     );
   }
 
+  renameFocusedColumn(name: string): Promise<boolean> {
+    const column = this.state.focusedColumn;
+    if (!column) return Promise.resolve(false);
+    return this.mutate('Unable to rename column.', () =>
+      this.viewer.call({
+        operation: 'csv.rename-column',
+        workingCsvId: this.workingCsvId,
+        column,
+        name,
+      }),
+    );
+  }
+
   /**
    * Copies the focused column under the current query to the clipboard, one value per line, nulls
    * as empty lines. No-op without a focused column; a failure is shown like an edit error.
@@ -267,11 +282,18 @@ export class CsvTab {
   private async mutate(fallback: string, operation: () => Promise<CsvEditState>): Promise<boolean> {
     this.set({ editError: null });
     try {
-      const editState = await operation();
+      const result = await operation();
       if (this.disposed) return true;
       this.queryVersion += 1;
+      const columns = schemaColumns(result);
+      const workingCsv = columns
+        ? { ...this.state.workingCsv, columns }
+        : this.state.workingCsv;
+      const remapped = columns ? remapColumnNames(this.state, columns) : {};
       this.set({
-        editState,
+        workingCsv,
+        ...remapped,
+        editState: toEditState(result),
         revision: this.state.revision + 1,
         selectedRowIds: [],
         exportConfirmation: null,
@@ -352,6 +374,68 @@ function freshState(workingCsv: WorkingCsvView): CsvTabState {
     focusedColumn: null,
     stats: { open: false, column: workingCsv.columns[0]?.name ?? '', result: null },
   };
+}
+
+function toEditState(result: CsvEditState): CsvEditState {
+  return {
+    workingCsvId: result.workingCsvId,
+    hasUnexportedChanges: result.hasUnexportedChanges,
+    canUndo: result.canUndo,
+    canRedo: result.canRedo,
+  };
+}
+
+function schemaColumns(result: CsvEditState): CsvColumn[] | undefined {
+  if (!isSchemaEditState(result)) return undefined;
+  return result.columns;
+}
+
+function isSchemaEditState(result: CsvEditState): result is CsvSchemaEditState {
+  return 'columns' in result;
+}
+
+function remapColumnNames(
+  state: CsvTabState,
+  columns: CsvColumn[],
+): Pick<CsvTabState, 'focusedColumn' | 'query' | 'hasActiveQuery' | 'stats'> {
+  const known = new Set(columns.map((column) => column.name));
+  const renamed = renamedColumn(state.workingCsv.columns, columns);
+  const remap = (name: string): string | null => {
+    if (known.has(name)) return name;
+    if (renamed && renamed.from === name) return renamed.to;
+    return null;
+  };
+  const focused = state.focusedColumn === null ? null : remap(state.focusedColumn);
+  const statsColumn = remap(state.stats.column) ?? columns[0]?.name ?? '';
+  const query = {
+    ...state.query,
+    sort: state.query.sort.flatMap((descriptor) => {
+      const column = remap(descriptor.column);
+      return column ? [{ ...descriptor, column }] : [];
+    }),
+    filters: state.query.filters.flatMap((descriptor) => {
+      const column = remap(descriptor.column);
+      return column ? [{ ...descriptor, column }] : [];
+    }),
+  };
+  return {
+    focusedColumn: focused,
+    query,
+    hasActiveQuery: query.sort.length > 0 || query.filters.length > 0 || query.search.trim().length > 0,
+    stats: { ...state.stats, column: statsColumn },
+  };
+}
+
+function renamedColumn(
+  previous: CsvColumn[],
+  next: CsvColumn[],
+): { from: string; to: string } | null {
+  const previousNames = previous.map((column) => column.name);
+  const nextNames = next.map((column) => column.name);
+  const removed = previousNames.filter((name) => !nextNames.includes(name));
+  const added = nextNames.filter((name) => !previousNames.includes(name));
+  if (removed.length !== 1 || added.length !== 1) return null;
+  return { from: removed[0], to: added[0] };
 }
 
 function sameJson<T>(left: T, right: T): boolean {
