@@ -38,6 +38,9 @@ export function CsvColumnBar({ tab }: { tab: CsvTab }) {
                 void commitRename();
               }}
             >
+              <label className="sr-only" htmlFor="column-name">
+                Column name
+              </label>
               <Input
                 id="column-name"
                 aria-label="Column name"
@@ -55,11 +58,9 @@ export function CsvColumnBar({ tab }: { tab: CsvTab }) {
               />
             </form>
           ) : (
-            <>
-              <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
-              <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
-            </>
+            <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
           )}
+          <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
               type="button"

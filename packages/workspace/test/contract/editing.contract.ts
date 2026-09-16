@@ -733,6 +733,20 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         { name: 'sku', type: workingCsv.columns[1].type },
       ];
 
+      const sameClean = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'code',
+      });
+      expect(sameClean).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: false,
+      });
+
       const renamed = await workspace().call({
         operation: 'csv.rename-column',
         ...request,
@@ -773,8 +787,30 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(undoneWindow.rows[0]).toMatchObject({ name: 'Ada', code: '001' });
 
       const redone = await workspace().call({ operation: 'csv.redo', ...request });
-      expect(redone.columns.map((column) => column.name)).toEqual(['name', 'sku']);
+      const redoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(redone).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: renamedColumns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      expect(redoneWindow.rows[0]).toMatchObject({ name: 'Ada', sku: '001' });
+      expect(redoneWindow.rows[0]).not.toHaveProperty('code');
 
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '',
+        }),
+      ).rejects.toThrow('CSV column name cannot be blank.');
       await expect(
         workspace().call({
           operation: 'csv.rename-column',

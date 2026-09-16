@@ -504,8 +504,8 @@ export class WorkingCsvStore {
       }
 
       await applyColumnRename(this.tableFor(state), request.column, name);
-      state.metadata.columns = renameCsvColumns(state.metadata.columns, request.column, name);
       state.history.record({ type: 'rename-column', from: request.column, to: name });
+      state.metadata.columns = renameCsvColumns(state.metadata.columns, request.column, name);
       this.commitDataChange(state);
       return buildSchemaEditState(state);
     });

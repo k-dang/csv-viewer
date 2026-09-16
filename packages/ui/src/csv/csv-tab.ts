@@ -391,7 +391,7 @@ function schemaColumns(result: CsvEditState): CsvColumn[] | undefined {
 }
 
 function isSchemaEditState(result: CsvEditState): result is CsvSchemaEditState {
-  return 'columns' in result;
+  return 'columns' in result && Array.isArray(result.columns);
 }
 
 function remapColumnNames(
