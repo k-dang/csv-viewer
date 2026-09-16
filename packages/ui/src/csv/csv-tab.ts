@@ -36,7 +36,7 @@ export type CsvTabState = {
   /** The runtime's own wording after a successful Export CSV. Cleared by the next change. */
   exportConfirmation: string | null;
   query: CsvTabQuery;
-  /** True while sort, filters, or search shape the row window. Row insertion is blocked then. */
+  /** True while sort, filters, or search shape the row window. Appending is blocked then. */
   hasActiveQuery: boolean;
   queryStatus: QueryState;
   filteredRowCount: number;

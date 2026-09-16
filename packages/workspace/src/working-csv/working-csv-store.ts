@@ -453,13 +453,12 @@ export class WorkingCsvStore {
 
   async insertRow(request: CsvInsertRowRequest): Promise<CsvEditState> {
     return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
-      if (request.hasActiveQuery) {
-        throw new Error('CSV rows cannot be inserted while sort, filter, or search is active.');
-      }
-
       const rowIds = normalizeRowIds(request.rowIds);
 
       if (request.placement === 'append') {
+        if (request.hasActiveQuery) {
+          throw new Error('CSV rows cannot be inserted while sort, filter, or search is active.');
+        }
         if (rowIds.length !== 0) {
           throw new Error('Append row requires no selected CSV rows.');
         }

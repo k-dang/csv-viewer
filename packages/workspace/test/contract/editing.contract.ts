@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField } from '../../src/csv-viewer';
+import { csvInternalRowIdField, type CsvFilterDescriptor } from '../../src/csv-viewer';
 import {
   expectVisibleRows,
   rowIds,
@@ -475,6 +475,124 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       );
     });
 
+    it('inserts relative to the selected source row from a sorted window', async () => {
+      const workingCsv = await fixture.openSource(
+        'insert-sorted.csv',
+        ['name,score', 'Ada,10', 'Grace,30', 'Linus,20'].join('\n'),
+      );
+      const sorted = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 3,
+        sort: [{ column: 'score', direction: 'desc' }],
+      });
+
+      await workspace().call({
+        operation: 'csv.insert-row',
+        workingCsvId: workingCsv.workingCsvId,
+        placement: 'below',
+        rowIds: [sorted.rows[0][csvInternalRowIdField]],
+        hasActiveQuery: true,
+      });
+      const sourceOrder = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 4,
+      });
+
+      expect(rowIds(sorted.rows)).toEqual(['2', '3', '1']);
+      expect(rowIds(sourceOrder.rows)).toEqual(['1', '2', '4', '3']);
+      expectVisibleRows(sourceOrder.rows).toEqual([
+        { name: 'Ada', score: '10' },
+        { name: 'Grace', score: '30' },
+        { name: '', score: '' },
+        { name: 'Linus', score: '20' },
+      ]);
+    });
+
+    it('inserts relative to the selected source row from a filtered window', async () => {
+      const workingCsv = await fixture.openSource(
+        'insert-filtered.csv',
+        ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,compiler'].join('\n'),
+      );
+      const filters: CsvFilterDescriptor[] = [
+        { column: 'team', kind: 'text', operator: 'equals', value: 'compiler' },
+      ];
+      const filtered = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 3,
+        filters,
+      });
+
+      await workspace().call({
+        operation: 'csv.insert-row',
+        workingCsvId: workingCsv.workingCsvId,
+        placement: 'above',
+        rowIds: [filtered.rows[1][csvInternalRowIdField]],
+        hasActiveQuery: true,
+      });
+      const sourceOrder = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 4,
+      });
+      const filteredAgain = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 4,
+        filters,
+      });
+
+      expect(rowIds(filtered.rows)).toEqual(['1', '3']);
+      expect(rowIds(sourceOrder.rows)).toEqual(['1', '2', '4', '3']);
+      expect(rowIds(filteredAgain.rows)).toEqual(['1', '3']);
+    });
+
+    it('inserts relative to the selected source row from a searched window', async () => {
+      const workingCsv = await fixture.openSource(
+        'insert-searched.csv',
+        ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n'),
+      );
+      const searched = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 3,
+        search: 'navy',
+      });
+
+      await workspace().call({
+        operation: 'csv.insert-row',
+        workingCsvId: workingCsv.workingCsvId,
+        placement: 'below',
+        rowIds: [searched.rows[0][csvInternalRowIdField]],
+        hasActiveQuery: true,
+      });
+      const sourceOrder = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 4,
+      });
+      const searchedAgain = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 0,
+        limit: 4,
+        search: 'navy',
+      });
+
+      expect(rowIds(searched.rows)).toEqual(['2']);
+      expect(rowIds(sourceOrder.rows)).toEqual(['1', '2', '4', '3']);
+      expect(rowIds(searchedAgain.rows)).toEqual(['2']);
+    });
+
     it('appends an empty row when no row is selected', async () => {
       const workingCsv = await fixture.openSource('insert-append.csv', ['name,code', 'Ada,001'].join('\n'));
       const result = await workspace().call({
@@ -512,8 +630,8 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         workspace().call({
           operation: 'csv.insert-row',
           ...request,
-          placement: 'above',
-          rowIds: ['1'],
+          placement: 'append',
+          rowIds: [],
           hasActiveQuery: true,
         }),
       ).rejects.toThrow('cannot be inserted while sort, filter, or search is active');

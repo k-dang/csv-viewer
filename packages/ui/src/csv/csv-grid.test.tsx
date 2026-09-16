@@ -32,6 +32,18 @@ describe('CsvGrid', () => {
     expect(screen.getByText('Unexported Changes')).toBeDefined();
   });
 
+  it('allows relative row insertion with one selected row while a query is active', () => {
+    const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
+    tab.setSearch('ada');
+    tab.setSelection(['row-1']);
+
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+
+    expect(screen.getByRole('button', { name: 'Insert row above' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Insert row below' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Append row' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('opens the Stats Panel through the CSV Tab and shows its Column Value Counts', async () => {
     const workingCsv = workingCsvFixture();
     const tab = new CsvTab(
