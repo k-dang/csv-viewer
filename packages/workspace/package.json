@@ -18,5 +18,8 @@
   },
   "devDependencies": {
     "typescript": "catalog:"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.115"
   }
 }

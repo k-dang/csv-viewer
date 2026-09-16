@@ -901,7 +901,8 @@ async function locate(session, options) {
 }
 
 async function dispatchMouseClick(session, x, y, clickCount) {
-  await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  // Press/release carry coordinates. Awaiting mouseMoved can stall for five seconds in an
+  // occluded Electron window, leaving time-sensitive controls stale before the press arrives.
   for (let count = 1; count <= clickCount; count += 1) {
     await session.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',

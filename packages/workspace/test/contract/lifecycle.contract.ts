@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { databaseEffect } from '../../src/comparison/comparison-effects';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
@@ -26,6 +28,14 @@ class ControlledExecutor implements ComparisonExecutor {
   private rejectSnapshot: ((error: Error) => void) | null = null;
   private readonly snapshotStarted = Promise.withResolvers<void>();
 
+  openAttempt() {
+    return Effect.succeed({
+      validateKey: () => databaseEffect(() => this.validateKey()),
+      // Wait for releaseCancellation() before finishing interruption.
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => databaseEffect(() => this.createSnapshot(request)).pipe(Effect.uninterruptible),
+    });
+  }
+
   async validateKey(): Promise<SourceKeyDiagnostics> {
     return validDiagnostics;
   }
@@ -38,10 +48,6 @@ class ControlledExecutor implements ComparisonExecutor {
   }
 
   activateSnapshot(_artifactId: ComparisonOperationId): void {}
-
-  cancel(): void {}
-
-  async release(): Promise<void> {}
 
   releaseCancellation(): void {
     if (this.rejectSnapshot === null) {

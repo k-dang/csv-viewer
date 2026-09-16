@@ -1,3 +1,5 @@
+import type { Effect, Scope } from 'effect';
+import type { DataEngineError } from '../database';
 import type {
   ComparisonId,
   ComparisonOperationId,
@@ -31,16 +33,18 @@ export type StoredComparisonWindow = {
   rows: ComparisonRow[];
 };
 
-export interface ComparisonExecutor {
+export interface ComparisonAttemptExecutor {
   validateKey(
-    operationId: ComparisonOperationId,
     workingCsvId: WorkingCsvId,
     key: string[],
-  ): Promise<SourceKeyDiagnostics>;
-  createSnapshot(request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary>;
+  ): Effect.Effect<SourceKeyDiagnostics, DataEngineError>;
+  createSnapshot(request: CreateComparisonSnapshotRequest): Effect.Effect<ComparisonSummary, DataEngineError>;
+}
+
+export interface ComparisonExecutor {
+  /** Acquires the dedicated connection in the calling attempt's scope. */
+  openAttempt(): Effect.Effect<ComparisonAttemptExecutor, DataEngineError, Scope.Scope>;
   activateSnapshot(artifactId: ComparisonOperationId): void;
-  cancel(operationId: ComparisonOperationId): void;
-  release(operationId: ComparisonOperationId): Promise<void>;
   readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow>;
   dropSnapshot(artifactId: ComparisonOperationId): Promise<void>;
   dispose(): Promise<void>;
