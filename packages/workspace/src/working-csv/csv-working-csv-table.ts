@@ -152,10 +152,6 @@ export async function readExportRows(
   }
 }
 
-/**
- * Replays an edit in either direction. Redo restores the command's new value and its deletions;
- * undo restores the old value and reverses them - the same cases with the sense flipped.
- */
 export async function runEditCommand(
   table: CsvTable,
   command: CsvEditCommand,

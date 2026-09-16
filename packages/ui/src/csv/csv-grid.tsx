@@ -186,8 +186,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   }, [state.revision, query.search]);
 
   // Reopen CSV starts the Tab's query over; the grid's own sort and filter state follows.
-  // workingCsv object identity also changes when columns are patched after rename, so depend on
-  // workingCsvId and dataRevision, which only move on open and Reopen CSV.
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;

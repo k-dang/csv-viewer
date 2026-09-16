@@ -9,7 +9,7 @@ import { copyColumn } from './copy-column';
 /**
  * The strip between the toolbar and the row grid that names the focused column and copies it.
  * The row grid highlights the same column, so the copy target is visible before the click, and
- * Ctrl+C on a focused cell runs the same Tab command. Rename uses the same focused column.
+ * Ctrl+C on a focused cell runs the same Tab command.
  */
 export function CsvColumnBar({ tab }: { tab: CsvTab }) {
   const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
