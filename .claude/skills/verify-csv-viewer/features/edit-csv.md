@@ -9,7 +9,7 @@ Editing changes the in-memory Working CSV. Cell values stay text. Insert, append
 - `edit-append` appends an empty row when no rows are selected and no query is active.
 - `edit-delete` deletes selected rows.
 - `edit-undo-redo` restores and re-applies those changes.
-- `edit-rename` renames the focused column header, rejects blank and duplicate names, and is undone like other edits.
+- `edit-rename` renames the focused column header in place, rejects blank and duplicate names, and is undone like other edits.
 - `edit-blocked-insert` keeps insert/append disabled under search, sort, or filter.
 - `edit-export` is the Export CSV path. Unattended runs cannot finish the OS dialog.
 
@@ -37,7 +37,7 @@ Count your edits as you go. Each bullet below records exactly one command, and t
 - **Edit a cell.** Run `click --role gridcell --name "Ada Lovelace" --double`, then `fill --focused --value "Ada Lovelace Edited"`, then `press --key Enter`. Wait for `Ada Lovelace Edited` and `Unexported Changes`. `Undo edit` enables. `Export CSV` stays enabled whether or not the tab is dirty.
 - **Undo.** Run `click --role button --name "Undo edit"`. Read `text`: `Ada Lovelace` is back without `Edited`. `Redo edit` enables.
 - **Redo.** Run `click --role button --name "Redo edit"`. `Unexported Changes` and `Ada Lovelace Edited` return.
-- **Rename.** Click `gridcell` `grace@example.com` so the Column Bar shows `email`. Run `click --role button --name "Rename column"`, then `fill --role textbox --name "Column name" --value "work_email"`, then `press --key Enter`. Wait for `work_email` in the Column Bar. `Unexported Changes` remains. Duplicate: rename again to `name` and wait for `CSV column name already exists.` Blank: rename to ` ` and wait for `CSV column name cannot be blank.` Undo once to restore `email`.
+- **Rename.** Click `gridcell` `grace@example.com` so the Column Bar shows `email`. Run `click --role button --name "Rename column"`, then `fill --role textbox --name "Column name" --value "work_email"`, then `press --key Enter`. Wait for `work_email` in the Column Bar. The header stays between `name` and `status`. `Unexported Changes` remains. Duplicate: rename again to `name` and wait for `CSV column name already exists.` Blank: rename to ` ` and wait for `CSV column name cannot be blank.` Undo once to restore `email`.
 - **Append.** A cell edit clears the selection, so `Append row` is enabled. Run `click --role button --name "Append row"`. Wait for `6 visible of 6 rows`.
 - **Insert.** Click a grid cell to select one source row, then `click --role button --name "Insert row above"`. Wait for `7 visible of 7 rows`. Insert deselects rows.
 - **Delete.** Run `click --role gridcell --name "Grace Hopper"` to reselect, then `click --role button --name "Delete selected rows"`. Wait for `6 visible of 6 rows` and confirm Grace is gone.

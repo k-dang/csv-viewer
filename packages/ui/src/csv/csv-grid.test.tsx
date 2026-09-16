@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
+import type { AgGridReactProps } from 'ag-grid-react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
@@ -96,6 +98,53 @@ describe('CsvGrid', () => {
     expect(screen.getByRole('status').textContent).toBe('Download started');
   });
 
+  it('keeps grid column fields in Working CSV order after renaming a middle header', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+        { name: 'status', type: 'VARCHAR' },
+      ],
+    });
+    const renamedColumns = [
+      { name: 'id', type: 'VARCHAR' },
+      { name: 'work_email', type: 'VARCHAR' },
+      { name: 'status', type: 'VARCHAR' },
+    ];
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.rename-column': async () => ({
+            workingCsvId: workingCsv.workingCsvId,
+            columns: renamedColumns,
+            hasUnexportedChanges: true,
+            canUndo: true,
+            canRedo: false,
+          }),
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('email');
+    let latest: AgGridReactProps<CsvRow> | undefined;
+    const CaptureGrid = (props: AgGridReactProps<CsvRow>) => {
+      latest = props;
+      return null;
+    };
+
+    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={CaptureGrid} />));
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'email', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+
+    await act(async () => {
+      await tab.renameFocusedColumn('work_email');
+    });
+    rerender(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={CaptureGrid} />));
+
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'work_email', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+  });
+
   it('offers Rename column for the focused column', async () => {
     const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
     tab.setFocusedColumn('id');
@@ -118,3 +167,8 @@ describe('CsvGrid', () => {
     expect(isCopyColumnShortcut(key({ ctrlKey: true, shiftKey: true }))).toBe(false);
   });
 });
+
+function fieldNames(columnDefs: AgGridReactProps<CsvRow>['columnDefs']): string[] {
+  if (!columnDefs) return [];
+  return columnDefs.flatMap((column) => ('field' in column && column.field ? [String(column.field)] : []));
+}

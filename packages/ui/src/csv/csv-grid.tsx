@@ -441,7 +441,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             enableCellTextSelection
             ensureDomOrder
             suppressDragLeaveHidesColumns
-            maintainColumnOrder
             onGridReady={onGridReady}
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}

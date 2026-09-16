@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField, type CsvFilterDescriptor } from '../../src/csv-viewer';
+import { csvInternalRowIdField, type CsvFilterDescriptor, type CsvRow } from '../../src/csv-viewer';
 import {
   expectVisibleRows,
   rowIds,
@@ -859,6 +859,63 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         name: 'sku',
       });
       expect(sameName).toEqual(redone);
+    });
+
+    it('keeps column order when renaming a middle header', async () => {
+      const workingCsv = await fixture.openSource(
+        'rename-order.csv',
+        ['id,email,status', '1,ada@example.com,active'].join('\n'),
+      );
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const names = (columns: { name: string }[]) => columns.map((column) => column.name);
+      const visibleKeys = (row: CsvRow) => Object.keys(row).filter((key) => key !== csvInternalRowIdField);
+      const middleRenamed = [
+        { name: 'id', type: workingCsv.columns[0].type },
+        { name: 'work_email', type: workingCsv.columns[1].type },
+        { name: 'status', type: workingCsv.columns[2].type },
+      ];
+
+      expect(names(workingCsv.columns)).toEqual(['id', 'email', 'status']);
+
+      const renamed = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'email',
+        name: 'work_email',
+      });
+      const renamedWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(renamed.columns)).toEqual(['id', 'work_email', 'status']);
+      expect(renamed.columns).toEqual(middleRenamed);
+      expect(visibleKeys(renamedWindow.rows[0])).toEqual(['id', 'work_email', 'status']);
+
+      const undone = await workspace().call({ operation: 'csv.undo', ...request });
+      const undoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(undone.columns)).toEqual(['id', 'email', 'status']);
+      expect(visibleKeys(undoneWindow.rows[0])).toEqual(['id', 'email', 'status']);
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      const redoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(redone.columns)).toEqual(['id', 'work_email', 'status']);
+      expect(visibleKeys(redoneWindow.rows[0])).toEqual(['id', 'work_email', 'status']);
+
+      const readExported = fixture.captureNextExport('renamed-order-export.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(['id,work_email,status', '1,ada@example.com,active', ''].join('\n'));
     });
 
     it('exports renamed column headers', async () => {
