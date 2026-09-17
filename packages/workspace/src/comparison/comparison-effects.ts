@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
 
-class ComparisonCleanupError extends DataEngineError {
+export class ComparisonCleanupError extends DataEngineError {
   override name = 'ComparisonCleanupError';
 }
 

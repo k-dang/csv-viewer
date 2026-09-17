@@ -1,4 +1,4 @@
-import { Effect, type Scope } from 'effect';
+import { Effect, Exit, Cause, type Scope } from 'effect';
 import { cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
 import type {
   ComparisonRow,
@@ -9,7 +9,6 @@ import type {
   WorkingCsvId,
 } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
-import { toError } from '../errors';
 import type {
   ComparisonExecutor,
   ComparisonAttemptExecutor,
@@ -17,7 +16,7 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import type { DataEngineError, WorkspaceDatabaseConnection } from '../database';
+import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
 import {
   assertKnownColumn,
   buildDropTableSql,
@@ -45,7 +44,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private readonly failedSources = new Set<ComparisonSource>();
   private readonly readCounts = new Map<ComparisonOperationId, number>();
   private readonly readWaiters = new Map<ComparisonOperationId, Array<() => void>>();
-  private readonly retirements = new Map<ComparisonOperationId, Promise<void>>();
+  private readonly retirements = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
 
   constructor(
     private readonly database: DuckDbComparisonAccess,
@@ -230,106 +229,102 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this.artifactRegistry.transition(buildComparisonTableName(artifactId), 'active');
   }
 
-  async readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
+  readonly readWindow = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+    request: ReadComparisonSnapshotWindowRequest,
+  ): Effect.fn.Return<StoredComparisonWindow, DataEngineError, Scope.Scope> {
     if (!isValidRowWindow(request.offset, request.limit)) {
       throw new Error(
         'Comparison window requires a non-negative offset and a limit of at most 1,000.',
       );
     }
-    this.acquireRead(request.artifactId);
-    try {
-      const connection = await this.database.getOwnerConnection();
-      const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
-      const where = request.differencesOnly ? ` WHERE classification <> 'unchanged'` : '';
-      const order = Array.from({ length: request.keyCount }, (_value, index) =>
-        `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
-      ).join(', ');
-      const countRows = await connection.readObjects(
-        `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
-      );
-      const resultRows = await connection.readObjects(
-        `SELECT * FROM ${table}${where}${order ? ` ORDER BY ${order} ASC` : ''} LIMIT ${request.limit} OFFSET ${request.offset}`,
-      );
-      const rows = resultRows.map((row): ComparisonRow => {
-        const classification = parseClassification(row.classification);
-        const baselineSide =
-          row.baseline_row_id == null
-            ? null
-            : {
-                rowId: String(row.baseline_row_id),
-                values: request.columnIndexes.map((index) =>
-                  normalizeCellValue(row[`baseline_${index}`]),
-                ),
-              };
-        const candidateSide =
-          row.candidate_row_id == null
-            ? null
-            : {
-                rowId: String(row.candidate_row_id),
-                values: request.columnIndexes.map((index) =>
-                  normalizeCellValue(row[`candidate_${index}`]),
-                ),
-              };
-        return {
-          classification: request.swapped ? flipClassification(classification) : classification,
-          keyValues: Array.from({ length: request.keyCount }, (_value, index) =>
-            String(row[`key_${index}`]),
-          ),
-          baseline: request.swapped ? candidateSide : baselineSide,
-          candidate: request.swapped ? baselineSide : candidateSide,
-          changed: request.columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
-        };
-      });
-      return { totalRowCount: normalizeCount(countRows[0].count), rows };
-    } finally {
-      this.releaseRead(request.artifactId);
-    }
-  }
+    yield* Effect.acquireRelease(
+      Effect.try({ try: () => this.acquireRead(request.artifactId), catch: (cause) => new DataEngineError(cause) }),
+      () => Effect.sync(() => this.releaseRead(request.artifactId)),
+    );
+    const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
+    const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
+    const where = request.differencesOnly ? ` WHERE classification <> 'unchanged'` : '';
+    const order = Array.from({ length: request.keyCount }, (_value, index) =>
+      `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
+    ).join(', ');
+    const countRows = yield* databaseEffect(() => connection.readObjects(
+      `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
+    ));
+    const resultRows = yield* databaseEffect(() => connection.readObjects(
+      `SELECT * FROM ${table}${where}${order ? ` ORDER BY ${order} ASC` : ''} LIMIT ${request.limit} OFFSET ${request.offset}`,
+    ));
+    const rows = resultRows.map((row): ComparisonRow => {
+      const classification = parseClassification(row.classification);
+      const baselineSide =
+        row.baseline_row_id == null
+          ? null
+          : {
+              rowId: String(row.baseline_row_id),
+              values: request.columnIndexes.map((index) =>
+                normalizeCellValue(row[`baseline_${index}`]),
+              ),
+            };
+      const candidateSide =
+        row.candidate_row_id == null
+          ? null
+          : {
+              rowId: String(row.candidate_row_id),
+              values: request.columnIndexes.map((index) =>
+                normalizeCellValue(row[`candidate_${index}`]),
+              ),
+            };
+      return {
+        classification: request.swapped ? flipClassification(classification) : classification,
+        keyValues: Array.from({ length: request.keyCount }, (_value, index) =>
+          String(row[`key_${index}`]),
+        ),
+        baseline: request.swapped ? candidateSide : baselineSide,
+        candidate: request.swapped ? baselineSide : candidateSide,
+        changed: request.columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
+      };
+    });
+    return { totalRowCount: normalizeCount(countRows[0].count), rows };
+  }, Effect.scoped, Effect.uninterruptible);
 
-  async dropSnapshot(artifactId: ComparisonOperationId): Promise<void> {
+  readonly dropSnapshot = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+    artifactId: ComparisonOperationId,
+  ): Effect.fn.Return<void, DataEngineError> {
     const existing = this.retirements.get(artifactId);
-    if (existing) return existing;
+    if (existing) return yield* existing;
     if (!this.hasSnapshot(artifactId)) return;
-    const retirement = this.retireSnapshot(artifactId);
+    const retirement = yield* Effect.cached(this.retireSnapshot(artifactId).pipe(
+      Effect.ensuring(Effect.sync(() => this.retirements.delete(artifactId))),
+    ));
     this.retirements.set(artifactId, retirement);
-    return retirement;
-  }
+    yield* retirement;
+  }, Effect.uninterruptible);
 
-  async dispose(): Promise<void> {
-    const failures: Error[] = [];
+  readonly dispose = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+  ): Effect.fn.Return<void, DataEngineError> {
+    const failures: Cause.Cause<DataEngineError>[] = [];
     for (const source of [...this.failedSources]) {
-      try {
-        await source.release();
-        this.failedSources.delete(source);
-      } catch (error) {
-        failures.push(toError(error));
-      }
+      const result = yield* Effect.exit(databaseEffect(() => source.release()));
+      if (Exit.isFailure(result)) failures.push(result.cause);
+      else this.failedSources.delete(source);
     }
     for (const connection of [...this.failedWorkers]) {
-      try {
-        await connection.close();
-        this.failedWorkers.delete(connection);
-      } catch (error) {
-        failures.push(toError(error));
-      }
+      const result = yield* Effect.exit(databaseEffect(() => connection.close()));
+      if (Exit.isFailure(result)) failures.push(result.cause);
+      else this.failedWorkers.delete(connection);
     }
     for (const artifact of this.artifactRegistry.list()) {
       if (artifact.owner.kind !== 'comparison') continue;
-      try {
-        await this.dropSnapshot(artifact.owner.operationId);
-      } catch (error) {
-        failures.push(toError(error));
-      }
-    }
-    try {
-      this.artifactRegistry.assertNoArtifactsOwnedBy('comparison');
-    } catch (error) {
-      failures.push(toError(error));
+      const result = yield* Effect.exit(this.dropSnapshot(artifact.owner.operationId));
+      if (Exit.isFailure(result)) failures.push(result.cause);
     }
     if (failures.length > 0) {
-      throw new AggregateError(failures, 'Unable to dispose all Comparison executor resources.');
+      return yield* Effect.failCause(failures.reduce((combined, cause) => Cause.combine(combined, cause), Cause.empty));
     }
-  }
+    this.artifactRegistry.assertNoArtifactsOwnedBy('comparison');
+  }, Effect.uninterruptible);
 
   private acquireRead(artifactId: ComparisonOperationId): void {
     if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
@@ -350,27 +345,29 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     waiters.forEach((resolve) => resolve());
   }
 
-  private async waitForReaders(artifactId: ComparisonOperationId): Promise<void> {
-    if ((this.readCounts.get(artifactId) ?? 0) === 0) return;
-    await new Promise<void>((resolve) => {
+  private waitForReaders(artifactId: ComparisonOperationId): Effect.Effect<void> {
+    return Effect.callback((resume) => {
+      if ((this.readCounts.get(artifactId) ?? 0) === 0) {
+        resume(Effect.void);
+        return;
+      }
       const waiters = this.readWaiters.get(artifactId) ?? [];
-      waiters.push(resolve);
+      waiters.push(() => resume(Effect.void));
       this.readWaiters.set(artifactId, waiters);
     });
   }
 
-  private async retireSnapshot(artifactId: ComparisonOperationId): Promise<void> {
-    try {
-      const tableName = buildComparisonTableName(artifactId);
-      this.artifactRegistry.transition(tableName, 'retired');
-      await this.waitForReaders(artifactId);
-      const connection = await this.database.getOwnerConnection();
-      await connection.run(buildDropTableSql(tableName));
-      this.artifactRegistry.remove(tableName);
-    } finally {
-      this.retirements.delete(artifactId);
-    }
-  }
+  private readonly retireSnapshot = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+    artifactId: ComparisonOperationId,
+  ): Effect.fn.Return<void, DataEngineError> {
+    const tableName = buildComparisonTableName(artifactId);
+    this.artifactRegistry.transition(tableName, 'retired');
+    yield* this.waitForReaders(artifactId);
+    const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
+    yield* databaseEffect(() => connection.run(buildDropTableSql(tableName)));
+    this.artifactRegistry.remove(tableName);
+  });
 
   private hasSnapshot(artifactId: ComparisonOperationId): boolean {
     return this.artifactRegistry.get(buildComparisonTableName(artifactId)) !== null;

@@ -1,5 +1,5 @@
-import { Cause, Effect, Exit, Fiber, type Scope } from 'effect';
-import type { DataEngineError } from '../database';
+import { Cause, Deferred, Effect, Exit, Fiber, type Scope } from 'effect';
+import { DataEngineError } from '../database';
 import type {
   BeginComparisonRequest,
   CancelComparisonRequest,
@@ -24,7 +24,6 @@ import type {
   OpenComparisonRequest,
 } from '../csv-viewer';
 import { orderComparisonValueColumns } from './comparison-presentation';
-import { toError } from '../errors';
 import { isValidRowWindow } from '../query/csv-query';
 import type { ComparisonExecutor } from './comparison-executor';
 import {
@@ -36,6 +35,7 @@ import {
   validateKeySelection,
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
+import { ComparisonCleanupError } from './comparison-effects';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -72,7 +72,7 @@ type ComparisonActivity =
       kind: 'running';
       operation: Operation;
       fiber: Fiber.Fiber<AttemptResult, DataEngineError>;
-      completion: Promise<ComparisonAttemptOutcome>;
+      completion: Effect.Effect<ComparisonAttemptOutcome>;
     };
 
 export type ComparisonAttemptOutcome =
@@ -98,7 +98,7 @@ export type BeginComparisonAttempt =
   | {
       status: 'accepted';
       operationId: ComparisonOperationId;
-      completion: Promise<ComparisonAttemptOutcome>;
+      completion: Effect.Effect<ComparisonAttemptOutcome>;
     }
   | { status: 'busy'; activeOperationId: string }
   | { status: 'rejected'; fault: ComparisonFault };
@@ -117,7 +117,7 @@ export class CsvComparisonService {
   private readonly pairIndex = new Map<string, ComparisonId>();
   private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
-  private readonly closing = new Map<ComparisonId, Promise<CloseComparisonResult>>();
+  private readonly closing = new Map<ComparisonId, Effect.Effect<CloseComparisonResult>>();
   private readonly pendingRetirements = new Set<string>();
   private readonly unsubscribeFromDataChanges: () => void;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
@@ -125,6 +125,7 @@ export class CsvComparisonService {
   constructor(
     private readonly csvs: ComparisonCsvStore,
     private readonly executor: ComparisonExecutor,
+    private readonly workspaceScope: Scope.Scope,
   ) {
     this.unsubscribeFromDataChanges = csvs.subscribeToDataChanges((workingCsvId) => {
       this.markSourceChanged(workingCsvId);
@@ -199,7 +200,10 @@ export class CsvComparisonService {
     return entity ? this.project(entity) : null;
   }
 
-  begin(request: BeginComparisonRequest): BeginComparisonAttempt {
+  readonly begin = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    request: BeginComparisonRequest,
+  ): Effect.fn.Return<BeginComparisonAttempt> {
     if (this.lifecycle !== 'active') {
       return rejected('source-not-found', 'The CSV workspace is closing.');
     }
@@ -231,16 +235,25 @@ export class CsvComparisonService {
       changedSides: [],
       invalidKeyDiagnostics: null,
     };
-    const fiber = Effect.runFork(Effect.scoped(this.compute(entity, operation, [...key])));
-    const completion = Effect.runPromise(Fiber.await(fiber)).then((result) =>
-      this.finishAttempt(entity, operation, result),
+    const completed = yield* Deferred.make<ComparisonAttemptOutcome>();
+    const fiber = yield* Effect.forkIn(
+      Effect.scoped(this.compute(entity, operation, [...key])).pipe(
+        Effect.onExit((result) => Deferred.succeed(completed, this.finishAttempt(entity, operation, result))),
+      ),
+      this.workspaceScope,
+      // Install settlement before a running-state subscriber can request cancellation.
+      { startImmediately: true },
     );
+    const completion = Deferred.await(completed);
     entity.activity = { kind: 'running', operation, fiber, completion };
     this.publishChange(entity);
     return { status: 'accepted', operationId: operation.operationId, completion };
-  }
+  }, Effect.uninterruptible);
 
-  async cancel(request: CancelComparisonRequest): Promise<CancelComparisonResult> {
+  readonly cancel = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    request: CancelComparisonRequest,
+  ): Effect.fn.Return<CancelComparisonResult> {
     const entity = this.entities.get(request.comparisonId);
     if (!entity) return { status: 'comparison-not-found' };
     if (entity.activity.kind === 'idle') return { status: 'already-finished' };
@@ -248,11 +261,14 @@ export class CsvComparisonService {
     if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
     if (operation.cancelRequested) return { status: 'already-requested' };
     operation.cancelRequested = true;
-    Effect.runFork(Fiber.interrupt(entity.activity.fiber));
+    yield* Effect.forkIn(Fiber.interrupt(entity.activity.fiber), this.workspaceScope);
     return { status: 'requested' };
-  }
+  });
 
-  async getWindow(request: ComparisonWindowRequest): Promise<ComparisonWindowOutcome> {
+  readonly getWindow = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    request: ComparisonWindowRequest,
+  ): Effect.fn.Return<ComparisonWindowOutcome, DataEngineError> {
     if (this.lifecycle !== 'active') {
       return rejected('source-not-found', 'The CSV workspace is closing.');
     }
@@ -281,9 +297,7 @@ export class CsvComparisonService {
       snapshot.summary.changedColumns.map((column) => [column.name, column.changedRowCount]),
     );
     const indexes = valueColumns.map((column) => snapshot.valueColumns.indexOf(column));
-    let stored;
-    try {
-      stored = await this.executor.readWindow({
+    const read = yield* Effect.exit(this.executor.readWindow({
         artifactId: snapshot.artifactId,
         keyCount: snapshot.key.length,
         columnIndexes: indexes,
@@ -291,19 +305,14 @@ export class CsvComparisonService {
         limit: request.limit,
         differencesOnly: request.rows === 'differences',
         swapped: snapshot.swapped,
-      });
-    } catch (error) {
-      const current = this.entities.get(request.comparisonId)?.snapshot;
-      if (!current || current.resultToken !== request.resultToken) {
-        return { status: 'result-replaced', currentResultToken: current?.resultToken ?? null };
-      }
-      throw error;
-    }
+      }));
     const current = this.entities.get(request.comparisonId)?.snapshot;
     if (!current || current.resultToken !== request.resultToken) {
       return { status: 'result-replaced', currentResultToken: current?.resultToken ?? null };
     }
 
+    if (Exit.isFailure(read)) return yield* Effect.failCause(read.cause);
+    const stored = read.value;
     return {
       status: 'ready',
       window: {
@@ -319,7 +328,7 @@ export class CsvComparisonService {
         rows: stored.rows,
       },
     };
-  }
+  }, Effect.uninterruptible);
 
   swap(comparisonId: ComparisonId): ComparisonMutationOutcome {
     if (this.lifecycle !== 'active') {
@@ -357,38 +366,45 @@ export class CsvComparisonService {
     return { status: 'changed', comparison: this.project(entity) };
   }
 
-  async close(comparisonId: ComparisonId): Promise<CloseComparisonResult> {
+  readonly close = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    comparisonId: ComparisonId,
+  ): Effect.fn.Return<CloseComparisonResult> {
     const pending = this.closing.get(comparisonId);
-    if (pending) return pending;
+    if (pending) return yield* pending;
     const entity = this.entities.get(comparisonId);
     if (!entity) return { status: 'closed', comparisonId };
-    const completion = Promise.resolve().then(() => this.closeEntity(entity)).finally(() => {
-      this.closing.delete(comparisonId);
-    });
+    const completion = yield* Effect.cached(this.closeEntity(entity).pipe(
+      Effect.ensuring(Effect.sync(() => this.closing.delete(comparisonId))),
+    ));
     this.closing.set(comparisonId, completion);
-    return completion;
-  }
+    return yield* completion;
+  }, Effect.uninterruptible);
 
-  private async closeEntity(entity: ComparisonRecord): Promise<CloseComparisonResult> {
+  private readonly closeEntity = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    entity: ComparisonRecord,
+  ): Effect.fn.Return<CloseComparisonResult> {
     const { comparisonId } = entity;
     if (entity.activity.kind === 'running') {
-      const { operation, completion } = entity.activity;
+      const { operation, fiber, completion } = entity.activity;
       operation.cancelRequested = true;
-      Effect.runFork(Fiber.interrupt(entity.activity.fiber));
-      await completion;
+      yield* Fiber.interrupt(fiber);
+      yield* completion;
     }
-    try {
-      if (entity.snapshot) await this.executor.dropSnapshot(entity.snapshot.artifactId);
-    } catch (error) {
-      console.error(`Failed to clean up Comparison ${comparisonId}.`, error);
-      return {
-        status: 'failed',
-        failure: {
-          code: 'cleanup-failed',
-          message: 'Unable to clean up the Comparison snapshot.',
-          retryable: true,
-        },
-      };
+    if (entity.snapshot) {
+      const result = yield* Effect.exit(this.executor.dropSnapshot(entity.snapshot.artifactId));
+      if (Exit.isFailure(result)) {
+        console.error(`Failed to clean up Comparison ${comparisonId}.`, result.cause);
+        return {
+          status: 'failed',
+          failure: {
+            code: 'cleanup-failed',
+            message: 'Unable to clean up the Comparison snapshot.',
+            retryable: true,
+          },
+        };
+      }
     }
     this.entities.delete(comparisonId);
     this.pairIndex.delete(pairKey(entity.baselineId, entity.candidateId));
@@ -396,18 +412,21 @@ export class CsvComparisonService {
     this.removeDependency(entity.candidateId, comparisonId);
     this.emit({ kind: 'closed', comparisonId });
     return { status: 'closed', comparisonId };
-  }
+  });
 
   dependentComparisonIds(workingCsvId: WorkingCsvId): ComparisonId[] {
     return [...(this.dependencyIndex.get(workingCsvId) ?? [])];
   }
 
-  async closeDependents(workingCsvId: WorkingCsvId): Promise<void> {
+  readonly closeDependents = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    workingCsvId: WorkingCsvId,
+  ): Effect.fn.Return<void, DataEngineError> {
     for (const comparisonId of this.dependentComparisonIds(workingCsvId)) {
-      const result = await this.close(comparisonId);
-      if (result.status === 'failed') throw new Error(result.failure.message);
+      const result = yield* this.close(comparisonId);
+      if (result.status === 'failed') return yield* Effect.fail(new DataEngineError(result.failure));
     }
-  }
+  });
 
   subscribe(listener: (event: ComparisonEvent) => void): () => void {
     if (this.lifecycle !== 'active') return () => undefined;
@@ -415,31 +434,27 @@ export class CsvComparisonService {
     return () => this.listeners.delete(listener);
   }
 
-  async dispose(): Promise<void> {
+  readonly dispose = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+  ): Effect.fn.Return<void, DataEngineError> {
     this.beginDisposal();
     this.unsubscribeFromDataChanges();
-    const failures: Error[] = [];
+    const failures: Cause.Cause<DataEngineError>[] = [];
     for (const comparisonId of [...this.entities.keys()]) {
-      try {
-        const result = await this.close(comparisonId);
-        if (result.status === 'failed') failures.push(new Error(result.failure.message));
-      } catch (error) {
-        failures.push(toError(error));
+      const closed = yield* Effect.exit(this.close(comparisonId));
+      if (Exit.isFailure(closed)) failures.push(closed.cause);
+      else if (closed.value.status === 'failed') {
+        failures.push(Cause.fail(new DataEngineError(closed.value.failure)));
       }
     }
-    try {
-      await this.executor.dispose();
-    } catch (error) {
-      failures.push(toError(error));
-    }
+    const disposed = yield* Effect.exit(this.executor.dispose());
+    if (Exit.isFailure(disposed)) failures.push(disposed.cause);
     this.listeners.clear();
-    if (failures.length > 0) {
-      throw new AggregateError(failures, 'Unable to dispose all Comparison resources.');
-    }
+    if (failures.length > 0) return yield* Effect.failCause(failures.reduce((combined, cause) => Cause.combine(combined, cause), Cause.empty));
     this.lifecycle = 'disposed';
-  }
+  }, Effect.uninterruptible);
 
-  // Settle outside the fiber so cancellation cannot interrupt settlement.
+  // onExit settles after the attempt scope closes, even when its fiber was interrupted.
   private finishAttempt(
     entity: ComparisonRecord,
     operation: Operation,
@@ -477,7 +492,7 @@ export class CsvComparisonService {
   ): Effect.fn.Return<AttemptResult, DataEngineError, Scope.Scope> {
     // Let begin() record the attempt before subscribers can close it.
     yield* Effect.sleep(0);
-    yield* Effect.promise(() => this.retryPendingRetirements()).pipe(Effect.uninterruptible);
+    yield* this.retryPendingRetirements();
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);
     if (!baseline || !candidate) {
@@ -511,9 +526,13 @@ export class CsvComparisonService {
     yield* Effect.sleep(0);
     const valueColumns = baseline.columns.map((column) => column.name).filter((column) => !key.includes(column));
     // Retire partial snapshots unless publication transferred ownership to the tab.
-    yield* Effect.addFinalizer(() => Effect.promise(async () => {
-      if (entity.snapshot?.artifactId !== operation.operationId) await this.retireSnapshot(operation.operationId);
-    }));
+    yield* Effect.addFinalizer(() => Effect.suspend(() =>
+      entity.snapshot?.artifactId !== operation.operationId
+        ? this.retireSnapshot(operation.operationId).pipe(
+            Effect.mapError((cause) => new ComparisonCleanupError(cause)), Effect.orDie,
+          )
+        : Effect.void,
+    ));
     const summary = yield* executor.createSnapshot({
       artifactId: operation.operationId,
       comparisonId: entity.comparisonId,
@@ -527,9 +546,13 @@ export class CsvComparisonService {
     yield* Effect.sleep(0);
     const previousArtifactId = entity.snapshot?.artifactId;
     if (previousArtifactId) {
-      yield* Effect.addFinalizer(() => Effect.promise(async () => {
-        if (entity.snapshot?.artifactId === operation.operationId) await this.retireSnapshot(previousArtifactId);
-      }));
+      yield* Effect.addFinalizer(() => Effect.suspend(() =>
+        entity.snapshot?.artifactId === operation.operationId
+          ? this.retireSnapshot(previousArtifactId).pipe(
+              Effect.mapError((cause) => new ComparisonCleanupError(cause)), Effect.orDie,
+            )
+          : Effect.void,
+      ));
     }
     return yield* Effect.sync((): AttemptResult => {
       const changedSides = changedComparisonSides(
@@ -559,21 +582,27 @@ export class CsvComparisonService {
     }).pipe(Effect.uninterruptible);
   });
 
-  private async retireSnapshot(artifactId: ComparisonOperationId): Promise<void> {
-    try {
-      await this.executor.dropSnapshot(artifactId);
-      this.pendingRetirements.delete(artifactId);
-    } catch (error) {
+  private readonly retireSnapshot = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+    artifactId: ComparisonOperationId,
+  ): Effect.fn.Return<void, DataEngineError> {
+    const retired = yield* Effect.exit(this.executor.dropSnapshot(artifactId));
+    if (Exit.isFailure(retired)) {
       this.pendingRetirements.add(artifactId);
-      console.error(`Failed to retire Comparison snapshot ${artifactId}.`, error);
+      console.error(`Failed to retire Comparison snapshot ${artifactId}.`, retired.cause);
+      return yield* Effect.failCause(retired.cause);
     }
-  }
+    this.pendingRetirements.delete(artifactId);
+  });
 
-  private async retryPendingRetirements(): Promise<void> {
+  private readonly retryPendingRetirements = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+  ) {
     for (const artifactId of [...this.pendingRetirements]) {
-      await this.retireSnapshot(artifactId);
+      // Keep failed retirements for the next attempt or executor disposal.
+      yield* Effect.exit(this.retireSnapshot(artifactId));
     }
-  }
+  }, Effect.uninterruptible);
 
   private finishCancelled(entity: ComparisonRecord, operation: Operation): ComparisonAttemptOutcome {
     return this.settle(entity, operation, {
@@ -621,7 +650,9 @@ export class CsvComparisonService {
       if (entity.activity.kind === 'running') {
         const { operation } = entity.activity;
         if (!operation.changedSides.includes(side)) operation.changedSides.push(side);
-        Effect.runFork(Fiber.interrupt(entity.activity.fiber));
+        // Data changes arrive from the unmigrated store callback. Request interruption only;
+        // the workspace-owned fiber still runs its finalizers and terminal projection.
+        entity.activity.fiber.interruptUnsafe();
       }
       if (!entity.snapshot) continue;
       const changedSides = entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
