@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { Copy, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,13 +13,34 @@ import { copyColumn } from './copy-column';
  */
 export function CsvColumnBar({ tab }: { tab: CsvTab }) {
   const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState('');
 
-  useEffect(() => {
-    setRenaming(false);
-    setDraft(focusedColumn ?? '');
-  }, [focusedColumn]);
+  return (
+    <div className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
+      {focusedColumn ? (
+        <FocusedColumnBar
+          key={focusedColumn}
+          tab={tab}
+          focusedColumn={focusedColumn}
+          filteredRowCount={filteredRowCount}
+        />
+      ) : (
+        <span className="text-muted-foreground">Select a cell to copy its column.</span>
+      )}
+    </div>
+  );
+}
+
+function FocusedColumnBar({
+  tab,
+  focusedColumn,
+  filteredRowCount,
+}: {
+  tab: CsvTab;
+  focusedColumn: string;
+  filteredRowCount: number;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(focusedColumn);
 
   async function commitRename(): Promise<void> {
     const ok = await tab.renameFocusedColumn(draft);
@@ -27,75 +48,69 @@ export function CsvColumnBar({ tab }: { tab: CsvTab }) {
   }
 
   return (
-    <div className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
-      {focusedColumn ? (
-        <>
-          {renaming ? (
-            <form
-              className="flex min-w-0 flex-1 items-center gap-2"
-              onSubmit={(event) => {
+    <>
+      {renaming ? (
+        <form
+          className="flex min-w-0 flex-1 items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void commitRename();
+          }}
+        >
+          <label className="sr-only" htmlFor="column-name">
+            Column name
+          </label>
+          <Input
+            id="column-name"
+            aria-label="Column name"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
                 event.preventDefault();
-                void commitRename();
-              }}
-            >
-              <label className="sr-only" htmlFor="column-name">
-                Column name
-              </label>
-              <Input
-                id="column-name"
-                aria-label="Column name"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    setRenaming(false);
-                    setDraft(focusedColumn);
-                  }
-                }}
-                className="h-8 max-w-xs"
-                autoFocus
-              />
-            </form>
-          ) : (
-            <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
-          )}
-          <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              title="Rename column"
-              aria-pressed={renaming}
-              onClick={() => {
-                if (renaming) {
-                  setRenaming(false);
-                  setDraft(focusedColumn);
-                  return;
-                }
+                setRenaming(false);
                 setDraft(focusedColumn);
-                setRenaming(true);
-              }}
-            >
-              <Pencil />
-              Rename column
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              title="Copy column (Ctrl+C on a cell)"
-              onClick={() => void copyColumn(tab)}
-            >
-              <Copy />
-              Copy column
-            </Button>
-          </div>
-        </>
+              }
+            }}
+            className="h-8 max-w-xs"
+            autoFocus
+          />
+        </form>
       ) : (
-        <span className="text-muted-foreground">Select a cell to copy its column.</span>
+        <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
       )}
-    </div>
+      <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          title="Rename column"
+          aria-pressed={renaming}
+          onClick={() => {
+            if (renaming) {
+              setRenaming(false);
+              setDraft(focusedColumn);
+              return;
+            }
+            setDraft(focusedColumn);
+            setRenaming(true);
+          }}
+        >
+          <Pencil />
+          Rename column
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          title="Copy column (Ctrl+C on a cell)"
+          onClick={() => void copyColumn(tab)}
+        >
+          <Copy />
+          Copy column
+        </Button>
+      </div>
+    </>
   );
 }

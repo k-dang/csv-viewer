@@ -158,6 +158,31 @@ describe('CsvGrid', () => {
     expect(screen.getByRole('textbox', { name: 'Column name' })).toBeDefined();
   });
 
+  it('closes Rename column when the focused column changes', async () => {
+    const tab = new CsvTab(
+      createTestCsvViewer(),
+      workingCsvFixture({
+        columns: [
+          { name: 'id', type: 'VARCHAR' },
+          { name: 'email', type: 'VARCHAR' },
+        ],
+      }),
+    );
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    await act(async () => {
+      screen.getByRole('button', { name: 'Rename column' }).click();
+    });
+    expect(screen.getByRole('textbox', { name: 'Column name' })).toBeDefined();
+
+    await act(async () => {
+      tab.setFocusedColumn('email');
+    });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).toBeNull();
+    expect(screen.getByText('email')).toBeDefined();
+  });
+
   it('treats Ctrl+C or Cmd+C alone as the Copy column shortcut', () => {
     const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', { key: 'c', ...init });
 
