@@ -988,6 +988,22 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       await refresh(value, comparison.comparisonId);
 
       await value.viewer.call({
+        operation: 'csv.rename-column',
+        workingCsvId: baseline.workingCsvId,
+        column: 'value',
+        name: 'label',
+      });
+      expect((await comparisonState(value, comparison.comparisonId)).applied?.freshness).toEqual({
+        kind: 'outdated',
+        changedSides: ['baseline'],
+      });
+      await value.viewer.call({
+        operation: 'csv.undo',
+        workingCsvId: baseline.workingCsvId,
+      });
+      await refresh(value, comparison.comparisonId);
+
+      await value.viewer.call({
         operation: 'csv.delete-rows',
         workingCsvId: baseline.workingCsvId,
         rowIds: ['1'],

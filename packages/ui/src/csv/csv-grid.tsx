@@ -186,12 +186,14 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   }, [state.revision, query.search]);
 
   // Reopen CSV starts the Tab's query over; the grid's own sort and filter state follows.
+  // Column patches reuse the Working CSV id and the open-time dataRevision, so those two keys
+  // change on open and Reopen CSV only.
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     api.applyColumnState({ defaultState: { sort: null } });
     api.setFilterModel(null);
-  }, [workingCsv]);
+  }, [workingCsv.workingCsvId, workingCsv.dataRevision]);
 
   // The Tab clears its selection after every mutation; the grid drops its highlighted rows too.
   useEffect(() => {
@@ -439,7 +441,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             enableCellTextSelection
             ensureDomOrder
             suppressDragLeaveHidesColumns
-            maintainColumnOrder
             onGridReady={onGridReady}
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}
