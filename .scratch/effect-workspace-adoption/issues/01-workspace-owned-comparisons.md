@@ -33,4 +33,4 @@ This is the first slice of the parent spec, "Effect adoption for workspace opera
 
 ### Implementation completed 2026-09-17
 
-Workspace-owned runtime and complete Comparison Effect orchestration implemented on desktop and web. See [implementation evidence](../implementation-evidence.md) for checks, UI artifacts, and the two-axis review. Issues 02 and 03 remain separate.
+Workspace-owned runtime and complete Comparison Effect orchestration implemented on desktop and web. Issues 02 and 03 remain separate.
