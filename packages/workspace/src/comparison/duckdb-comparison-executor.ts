@@ -1,4 +1,4 @@
-import { Effect, Exit, Cause, type Scope } from 'effect';
+import { Deferred, Effect, Exit, Cause, type Scope } from 'effect';
 import { cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
 import type {
   ComparisonRow,
@@ -42,8 +42,10 @@ export type DuckDbComparisonAccess = {
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private readonly failedWorkers = new Set<WorkspaceDatabaseConnection>();
   private readonly failedSources = new Set<ComparisonSource>();
-  private readonly readCounts = new Map<ComparisonOperationId, number>();
-  private readonly readWaiters = new Map<ComparisonOperationId, Array<() => void>>();
+  private readonly readers = new Map<ComparisonOperationId, {
+    count: number;
+    drained: Deferred.Deferred<void>;
+  }>();
   private readonly retirements = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
 
   constructor(
@@ -229,6 +231,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this.artifactRegistry.transition(buildComparisonTableName(artifactId), 'active');
   }
 
+  // Owner-connection queries cannot be cancelled. Keep the lease until they settle.
   readonly readWindow = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     request: ReadComparisonSnapshotWindowRequest,
@@ -239,8 +242,8 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       );
     }
     yield* Effect.acquireRelease(
-      Effect.try({ try: () => this.acquireRead(request.artifactId), catch: (cause) => new DataEngineError(cause) }),
-      () => Effect.sync(() => this.releaseRead(request.artifactId)),
+      this.acquireRead(request.artifactId),
+      () => this.releaseRead(request.artifactId),
     );
     const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
     const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
@@ -287,6 +290,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     return { totalRowCount: normalizeCount(countRows[0].count), rows };
   }, Effect.scoped, Effect.uninterruptible);
 
+  // A shared retirement must finish waiting and dropping even if a caller is interrupted.
   readonly dropSnapshot = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     artifactId: ComparisonOperationId,
@@ -301,6 +305,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     yield* retirement;
   }, Effect.uninterruptible);
 
+  // Attempt all independent cleanup before reporting disposal failure.
   readonly dispose = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
   ): Effect.fn.Return<void, DataEngineError> {
@@ -326,34 +331,40 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this.artifactRegistry.assertNoArtifactsOwnedBy('comparison');
   }, Effect.uninterruptible);
 
-  private acquireRead(artifactId: ComparisonOperationId): void {
-    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
-      throw new Error('Comparison snapshot is no longer available.');
-    }
-    this.readCounts.set(artifactId, (this.readCounts.get(artifactId) ?? 0) + 1);
-  }
+  private readonly acquireRead = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+    artifactId: ComparisonOperationId,
+  ): Effect.fn.Return<void, DataEngineError> {
+    const drained = yield* Deferred.make<void>();
+    yield* Effect.try({
+      try: () => {
+        if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
+          throw new Error('Comparison snapshot is no longer available.');
+        }
+        const readers = this.readers.get(artifactId);
+        if (readers) readers.count += 1;
+        else this.readers.set(artifactId, { count: 1, drained });
+      },
+      catch: (cause) => new DataEngineError(cause),
+    });
+  });
 
-  private releaseRead(artifactId: ComparisonOperationId): void {
-    const next = (this.readCounts.get(artifactId) ?? 1) - 1;
-    if (next > 0) {
-      this.readCounts.set(artifactId, next);
-      return;
-    }
-    this.readCounts.delete(artifactId);
-    const waiters = this.readWaiters.get(artifactId) ?? [];
-    this.readWaiters.delete(artifactId);
-    waiters.forEach((resolve) => resolve());
-  }
+  private readonly releaseRead = Effect.fnUntraced(function* (
+    this: DuckDbComparisonExecutor,
+    artifactId: ComparisonOperationId,
+  ): Effect.fn.Return<void> {
+    const readers = this.readers.get(artifactId);
+    if (!readers) throw new Error('Comparison reader lease is missing.');
+    readers.count -= 1;
+    if (readers.count > 0) return;
+    this.readers.delete(artifactId);
+    yield* Deferred.succeed(readers.drained, undefined);
+  });
 
   private waitForReaders(artifactId: ComparisonOperationId): Effect.Effect<void> {
-    return Effect.callback((resume) => {
-      if ((this.readCounts.get(artifactId) ?? 0) === 0) {
-        resume(Effect.void);
-        return;
-      }
-      const waiters = this.readWaiters.get(artifactId) ?? [];
-      waiters.push(() => resume(Effect.void));
-      this.readWaiters.set(artifactId, waiters);
+    return Effect.suspend(() => {
+      const readers = this.readers.get(artifactId);
+      return readers ? Deferred.await(readers.drained) : Effect.void;
     });
   }
 

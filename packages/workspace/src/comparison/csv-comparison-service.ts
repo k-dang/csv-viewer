@@ -200,6 +200,7 @@ export class CsvComparisonService {
     return entity ? this.project(entity) : null;
   }
 
+  // Admission must record ownership and open the gate even if its caller is interrupted.
   readonly begin = Effect.fnUntraced(function* (
     this: CsvComparisonService,
     request: BeginComparisonRequest,
@@ -235,9 +236,14 @@ export class CsvComparisonService {
       changedSides: [],
       invalidKeyDiagnostics: null,
     };
+    const ready = yield* Deferred.make<void>();
     const completed = yield* Deferred.make<ComparisonAttemptOutcome>();
     const fiber = yield* Effect.forkIn(
-      Effect.scoped(this.compute(entity, operation, [...key])).pipe(
+      Effect.scoped(Deferred.await(ready).pipe(
+        // Return from admission before starting database work.
+        Effect.andThen(Effect.yieldNow),
+        Effect.andThen(this.compute(entity, operation, [...key])),
+      )).pipe(
         Effect.onExit((result) => Deferred.succeed(completed, this.finishAttempt(entity, operation, result))),
       ),
       this.workspaceScope,
@@ -247,6 +253,7 @@ export class CsvComparisonService {
     const completion = Deferred.await(completed);
     entity.activity = { kind: 'running', operation, fiber, completion };
     this.publishChange(entity);
+    yield* Deferred.succeed(ready, undefined);
     return { status: 'accepted', operationId: operation.operationId, completion };
   }, Effect.uninterruptible);
 
@@ -328,7 +335,7 @@ export class CsvComparisonService {
         rows: stored.rows,
       },
     };
-  }, Effect.uninterruptible);
+  });
 
   swap(comparisonId: ComparisonId): ComparisonMutationOutcome {
     if (this.lifecycle !== 'active') {
@@ -366,6 +373,7 @@ export class CsvComparisonService {
     return { status: 'changed', comparison: this.project(entity) };
   }
 
+  // Shared close must finish cleanup even when one caller stops waiting.
   readonly close = Effect.fnUntraced(function* (
     this: CsvComparisonService,
     comparisonId: ComparisonId,
@@ -434,6 +442,7 @@ export class CsvComparisonService {
     return () => this.listeners.delete(listener);
   }
 
+  // Finish every admitted close and cleanup attempt before disposal can settle.
   readonly dispose = Effect.fnUntraced(function* (
     this: CsvComparisonService,
   ): Effect.fn.Return<void, DataEngineError> {
@@ -490,8 +499,6 @@ export class CsvComparisonService {
     operation: Operation,
     key: string[],
   ): Effect.fn.Return<AttemptResult, DataEngineError, Scope.Scope> {
-    // Let begin() record the attempt before subscribers can close it.
-    yield* Effect.sleep(0);
     yield* this.retryPendingRetirements();
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);
@@ -523,7 +530,7 @@ export class CsvComparisonService {
 
     operation.phase = 'comparing';
     this.publishChange(entity);
-    yield* Effect.sleep(0);
+    yield* Effect.yieldNow;
     const valueColumns = baseline.columns.map((column) => column.name).filter((column) => !key.includes(column));
     // Retire partial snapshots unless publication transferred ownership to the tab.
     yield* Effect.addFinalizer(() => Effect.suspend(() =>
@@ -543,7 +550,7 @@ export class CsvComparisonService {
     });
     operation.phase = 'summarizing';
     this.publishChange(entity);
-    yield* Effect.sleep(0);
+    yield* Effect.yieldNow;
     const previousArtifactId = entity.snapshot?.artifactId;
     if (previousArtifactId) {
       yield* Effect.addFinalizer(() => Effect.suspend(() =>
@@ -579,7 +586,7 @@ export class CsvComparisonService {
       };
       this.publishChange(entity);
       return { attemptId: operation.operationId, status: 'applied' };
-    }).pipe(Effect.uninterruptible);
+    });
   });
 
   private readonly retireSnapshot = Effect.fnUntraced(function* (
@@ -602,7 +609,7 @@ export class CsvComparisonService {
       // Keep failed retirements for the next attempt or executor disposal.
       yield* Effect.exit(this.retireSnapshot(artifactId));
     }
-  }, Effect.uninterruptible);
+  });
 
   private finishCancelled(entity: ComparisonRecord, operation: Operation): ComparisonAttemptOutcome {
     return this.settle(entity, operation, {

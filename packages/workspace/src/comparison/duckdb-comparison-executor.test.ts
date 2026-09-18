@@ -208,15 +208,17 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     expect(dropped).toHaveLength(1);
   });
 
-  it('keeps a published snapshot until its active reader completes', async () => {
+  it('keeps a published snapshot until all its active readers complete', async () => {
     const readStarted = Promise.withResolvers<void>();
-    const read = Promise.withResolvers<EngineRow[]>();
+    const reads = [Promise.withResolvers<EngineRow[]>(), Promise.withResolvers<EngineRow[]>()];
+    let readCount = 0;
     let dropped = false;
     let workerClosed = false;
     const owner = stubConnection({
       readObjects: (sql) => {
         if (sql.includes('count(*)')) {
-          readStarted.resolve();
+          const read = reads[readCount++];
+          if (readCount === reads.length) readStarted.resolve();
           return read.promise;
         }
         return Promise.resolve([]);
@@ -241,7 +243,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       executor.activateSnapshot('attempt');
     })));
     expect(workerClosed).toBe(true);
-    const window = Effect.runPromise(executor.readWindow({
+    const windows = reads.map(() => Effect.runPromise(executor.readWindow({
       artifactId: 'attempt',
       keyCount: 1,
       columnIndexes: [0],
@@ -249,12 +251,15 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       limit: 10,
       differencesOnly: false,
       swapped: false,
-    }));
+    })));
     await readStarted.promise;
     const retirement = Effect.runPromise(executor.dropSnapshot('attempt'));
     expect(dropped).toBe(false);
-    read.resolve([{ count: 0n }]);
-    await expect(window).resolves.toEqual({ totalRowCount: 0, rows: [] });
+    reads[0].resolve([{ count: 0n }]);
+    await expect(windows[0]).resolves.toEqual({ totalRowCount: 0, rows: [] });
+    expect(dropped).toBe(false);
+    reads[1].resolve([{ count: 0n }]);
+    await expect(windows[1]).resolves.toEqual({ totalRowCount: 0, rows: [] });
     await retirement;
     expect(dropped).toBe(true);
     await Effect.runPromise(executor.dispose());
