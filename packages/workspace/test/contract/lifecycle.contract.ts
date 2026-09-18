@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { databaseEffect } from '../../src/comparison/comparison-effects';
+import { cleanupEffect, databaseEffect } from '../../src/comparison/comparison-effects';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
@@ -27,13 +27,19 @@ const validDiagnostics: SourceKeyDiagnostics = {
 class ControlledExecutor implements ComparisonExecutor {
   private rejectSnapshot: ((error: Error) => void) | null = null;
   private readonly snapshotStarted = Promise.withResolvers<void>();
+  readonly cleanupStarted = Promise.withResolvers<void>();
+  readonly cleanupAllowed = Promise.withResolvers<void>();
+  holdCleanup = false;
 
   openAttempt() {
-    return Effect.succeed({
+    return Effect.acquireRelease(Effect.succeed({
       validateKey: () => databaseEffect(() => this.validateKey()),
       // Wait for releaseCancellation() before finishing interruption.
       createSnapshot: (request: CreateComparisonSnapshotRequest) => databaseEffect(() => this.createSnapshot(request)).pipe(Effect.uninterruptible),
-    });
+    }), () => cleanupEffect(async () => {
+      this.cleanupStarted.resolve();
+      if (this.holdCleanup) await this.cleanupAllowed.promise;
+    }));
   }
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
@@ -61,15 +67,19 @@ class ControlledExecutor implements ComparisonExecutor {
     return this.snapshotStarted.promise;
   }
 
-  async readWindow(_request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow> {
-    return { totalRowCount: 0, rows: [] };
+  readWindow(_request: ReadComparisonSnapshotWindowRequest) {
+    return Effect.succeed<StoredComparisonWindow>({ totalRowCount: 0, rows: [] });
   }
 
-  async dropSnapshot(): Promise<void> {}
+  dropSnapshot() {
+    return Effect.void;
+  }
 
-  async dispose(): Promise<void> {
-    this.rejectSnapshot?.(new Error('cancelled'));
-    this.rejectSnapshot = null;
+  dispose() {
+    return Effect.sync(() => {
+      this.rejectSnapshot?.(new Error('cancelled'));
+      this.rejectSnapshot = null;
+    });
   }
 }
 
@@ -559,6 +569,13 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         fault: { message: 'The CSV workspace is closing.' },
       });
       await disposal;
+      await expect(workspace.call({
+        operation: 'comparison.begin', kind: 'apply-key', comparisonId: 'closed', key: ['id'],
+      })).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
+      await expect(workspace.call({
+        operation: 'comparison.get-window', comparisonId: 'closed', resultToken: 'old',
+        offset: 0, limit: 10, rows: 'all', columns: 'csv-order',
+      })).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
       await expect(workspace.call({ operation: 'csv.open-recent', sourceId: lateSourceId, })).resolves.toMatchObject({
         status: 'failed',
         message: 'The CSV workspace is closing.',
@@ -649,6 +666,40 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         undefined,
         undefined,
       ]);
+    });
+
+    it('keeps an accepted comparison alive until disposal settles its query and attempt cleanup', async () => {
+      const value = await createControlledFixture();
+      executor.holdCleanup = true;
+      const baseline = await value.openSource('baseline.csv', 'id,value\n1,a\n');
+      const candidate = await value.openSource('candidate.csv', 'id,value\n1,b\n');
+      const opened = await value.viewer.call({
+        operation: 'comparison.open', baselineId: baseline.workingCsvId, candidateId: candidate.workingCsvId,
+      });
+      if (opened.status === 'rejected') throw new Error('Comparison open was rejected.');
+      const comparisonId = opened.comparison.comparisonId;
+      const started = await value.viewer.call({
+        operation: 'comparison.begin', kind: 'apply-key', comparisonId, key: ['id'],
+      });
+      if (started.status !== 'accepted') throw new Error('Comparison was not accepted.');
+      await executor.waitForSnapshotStart();
+      const terminal = value.awaitComparisonOutcome(started.operationId);
+      let disposed = false;
+      const disposal = value.disposeWorkspace().then(() => { disposed = true; });
+      try {
+        executor.releaseCancellation();
+        await executor.cleanupStarted.promise;
+        expect(disposed).toBe(false);
+        expect(value.latestComparison(comparisonId)?.operation?.operationId).toBe(started.operationId);
+      } finally {
+        executor.cleanupAllowed.resolve();
+        await disposal;
+      }
+      await expect(terminal).resolves.toMatchObject({ status: 'cancelled' });
+      expect(value.latestComparison(comparisonId)).toBeNull();
+      await expect(value.viewer.call({
+        operation: 'csv.get-rows', workingCsvId: baseline.workingCsvId, offset: 0, limit: 10,
+      })).rejects.toThrow('CSV workspace is disposing.');
     });
   });
 }

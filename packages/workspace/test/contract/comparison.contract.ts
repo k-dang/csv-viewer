@@ -627,6 +627,32 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       });
     });
 
+    it('finishes an admitted result window before closing its comparison', async () => {
+      const baseline = await value.openSource('baseline.csv', 'id,value\n1,old\n');
+      const candidate = await value.openSource('candidate.csv', 'id,value\n1,new\n');
+      const comparison = await openComparison(value, baseline, candidate);
+      const applied = await applyKey(value, comparison.comparisonId, ['id']);
+      const completed: string[] = [];
+      // call() admits the window before close can begin retiring its snapshot.
+      const reading = readWindow(value, applied).then((window) => {
+        completed.push('read');
+        return window;
+      });
+      const closing = value.viewer.call({
+        operation: 'comparison.close', comparisonId: comparison.comparisonId,
+      }).then((result) => {
+        completed.push('close');
+        return result;
+      });
+      const [window, closed] = await Promise.all([reading, closing]);
+      expect(window.rows.map(observableRow)).toEqual([{
+        classification: 'changed', keyValues: ['1'], baseline: ['old'], candidate: ['new'], changed: [true],
+      }]);
+      expect(closed).toEqual({ status: 'closed', comparisonId: comparison.comparisonId });
+      expect(completed).toEqual(['read', 'close']);
+      expect(value.latestComparison(comparison.comparisonId)).toBeNull();
+    });
+
     it('cancels before publication without publishing a result', async () => {
       const [baseline, candidate] = await Promise.all([
         value.openSource('baseline.csv', 'id,value\n1,old\n'),

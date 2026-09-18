@@ -176,7 +176,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     ]);
     releaseFails = false;
     closeFails = false;
-    await executor.dispose();
+    await Effect.runPromise(executor.dispose());
     expect(sourceReleased).toBe(true);
     expect(workerClosed).toBe(true);
   });
@@ -204,19 +204,21 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       yield* attempt.createSnapshot(snapshotRequest);
       executor.activateSnapshot('attempt');
     })));
-    await expect(executor.dispose()).rejects.toThrow('Unable to dispose all Comparison executor resources');
+    await expect(Effect.runPromise(executor.dispose())).rejects.toThrow('The data engine could not complete the operation.');
     expect(dropped).toHaveLength(1);
   });
 
-  it('keeps a published snapshot until its active reader completes', async () => {
+  it('keeps a published snapshot until all its active readers complete', async () => {
     const readStarted = Promise.withResolvers<void>();
-    const read = Promise.withResolvers<EngineRow[]>();
+    const reads = [Promise.withResolvers<EngineRow[]>(), Promise.withResolvers<EngineRow[]>()];
+    let readCount = 0;
     let dropped = false;
     let workerClosed = false;
     const owner = stubConnection({
       readObjects: (sql) => {
         if (sql.includes('count(*)')) {
-          readStarted.resolve();
+          const read = reads[readCount++];
+          if (readCount === reads.length) readStarted.resolve();
           return read.promise;
         }
         return Promise.resolve([]);
@@ -241,7 +243,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       executor.activateSnapshot('attempt');
     })));
     expect(workerClosed).toBe(true);
-    const window = executor.readWindow({
+    const windows = reads.map(() => Effect.runPromise(executor.readWindow({
       artifactId: 'attempt',
       keyCount: 1,
       columnIndexes: [0],
@@ -249,14 +251,63 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       limit: 10,
       differencesOnly: false,
       swapped: false,
-    });
+    })));
     await readStarted.promise;
-    const retirement = executor.dropSnapshot('attempt');
+    const retirement = Effect.runPromise(executor.dropSnapshot('attempt'));
     expect(dropped).toBe(false);
-    read.resolve([{ count: 0n }]);
-    await expect(window).resolves.toEqual({ totalRowCount: 0, rows: [] });
+    reads[0].resolve([{ count: 0n }]);
+    await expect(windows[0]).resolves.toEqual({ totalRowCount: 0, rows: [] });
+    expect(dropped).toBe(false);
+    reads[1].resolve([{ count: 0n }]);
+    await expect(windows[1]).resolves.toEqual({ totalRowCount: 0, rows: [] });
     await retirement;
     expect(dropped).toBe(true);
-    await executor.dispose();
+    await Effect.runPromise(executor.dispose());
+  });
+
+  it('settles a non-cancellable result read before interruption can release its snapshot', async () => {
+    const readStarted = Promise.withResolvers<void>();
+    const read = Promise.withResolvers<EngineRow[]>();
+    let settled = false;
+    let dropped = false;
+    let cancellationRequested = false;
+    const owner = stubConnection({
+      readObjects: (sql) => {
+        if (!sql.includes('count(*)')) return Promise.resolve([]);
+        readStarted.resolve();
+        return read.promise;
+      },
+      cancelRunning: async () => { cancellationRequested = true; },
+      run: async () => { dropped = true; },
+    });
+    const executor = new DuckDbComparisonExecutor({
+      connectWorker: async () => stubConnection({ readObjectsCancellable: async () => summary }),
+      getOwnerConnection: async () => owner,
+      acquireSource: async () => source(),
+    });
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const attempt = yield* executor.openAttempt();
+      yield* attempt.createSnapshot(snapshotRequest);
+      executor.activateSnapshot('attempt');
+    })));
+    const reading = Effect.runFork(executor.readWindow({
+      artifactId: 'attempt', keyCount: 1, columnIndexes: [0], offset: 0, limit: 10,
+      differencesOnly: false, swapped: false,
+    }).pipe(Effect.ensuring(Effect.sync(() => { settled = true; }))));
+    await readStarted.promise;
+    const interruption = Effect.runPromise(Fiber.interrupt(reading));
+    const retirement = Effect.runPromise(executor.dropSnapshot('attempt'));
+    try {
+      await Effect.runPromise(Effect.yieldNow);
+      expect(settled).toBe(false);
+      expect(dropped).toBe(false);
+      expect(cancellationRequested).toBe(false);
+    } finally {
+      read.resolve([{ count: 0n }]);
+      await Promise.all([interruption, retirement]);
+      await Effect.runPromise(executor.dispose());
+    }
+    expect(settled).toBe(true);
+    expect(dropped).toBe(true);
   });
 });
