@@ -856,7 +856,12 @@ function buildSchemaEditState(state: WorkingCsvState): CsvSchemaEditState {
 }
 
 function isReservedCsvColumnName(name: string): boolean {
-  return name === csvInternalRowIdField || name === csvSourceOrderField || name === csvDeletedField;
+  const needle = name.toLowerCase();
+  return (
+    needle === csvInternalRowIdField.toLowerCase() ||
+    needle === csvSourceOrderField.toLowerCase() ||
+    needle === csvDeletedField.toLowerCase()
+  );
 }
 
 function hasConflictingColumnName(

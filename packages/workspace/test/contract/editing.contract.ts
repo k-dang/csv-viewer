@@ -847,6 +847,22 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         workspace().call({
           operation: 'csv.rename-column',
           ...request,
+          column: 'sku',
+          name: '__CSVVIEWERROWID',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '__csvViewerSourceOrder',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
           column: 'missing',
           name: 'other',
         }),

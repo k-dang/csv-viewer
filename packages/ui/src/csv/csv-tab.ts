@@ -227,6 +227,7 @@ export class CsvTab {
   renameFocusedColumn(name: string): Promise<boolean> {
     const column = this.state.focusedColumn;
     if (!column) return Promise.resolve(false);
+    if (name.trim() === column) return Promise.resolve(true);
     return this.mutate('Unable to rename column.', () =>
       this.viewer.call({
         operation: 'csv.rename-column',

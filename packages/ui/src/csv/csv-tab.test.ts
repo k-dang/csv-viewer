@@ -283,6 +283,21 @@ describe('CsvTab', () => {
     expect(state.revision).toBe(0);
   });
 
+  it('does not mutate when the focused column keeps its name', async () => {
+    const renameColumn = vi.fn();
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.rename-column': renameColumn } }), workingCsv);
+    tab.setFocusedColumn('name');
+    tab.setSelection(['row-1']);
+    const revision = tab.snapshot().revision;
+
+    await expect(tab.renameFocusedColumn('name')).resolves.toBe(true);
+    await expect(tab.renameFocusedColumn('  name  ')).resolves.toBe(true);
+
+    expect(renameColumn).not.toHaveBeenCalled();
+    expect(tab.snapshot().revision).toBe(revision);
+    expect(tab.snapshot().selectedRowIds).toEqual(['row-1']);
+  });
+
   it('does not rename when no column is focused', async () => {
     const renameColumn = vi.fn();
     const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.rename-column': renameColumn } }), workingCsv);
