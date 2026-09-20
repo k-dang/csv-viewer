@@ -35,8 +35,8 @@ None. Global search, the empty-match overlay, and Clear query all live in the sh
 
 ## Gotchas
 
-- `5 visible of 5 rows` reappears optimistically right after Clear query, before the refetch lands. Pair that wait with both grid names via `text`; the count alone is not proof.
-- Insert and append buttons disable while search is active. That is expected. Only `Append row` proves it, though: `Insert row above` and `Insert row below` also require exactly one selected row, so they are already disabled with the default empty selection.
+- The count line keeps the filtered value (`1 visible of 5 rows`) until the refetch after Clear query lands, so `5 visible of 5 rows` is itself proof the refetch happened. Still pair it with both grid names via `text`.
+- Only `Append row` disables while search, sort, or filter is active. `Insert row above` and `Insert row below` need exactly one selected row and ignore the query: with `Ada` searched, click `Ada Lovelace` and `Insert row above` reports `"disabled": false` and inserts. The new empty row does not match the search, so the count line stays `1 visible of 5 rows` until Clear query, which then reads `6 visible of 6 rows`.
 - Read the disabled claim from `click`'s `"disabled"` JSON field. The `snapshot` AX dump does not carry disabled state.
 - `No rows match the current query.` is the global-search overlay only. A column header filter that matches nothing shows AG Grid's own `No Matching Rows` instead.
 - Do not wait a fixed 1500ms for global search. That debounce belongs to column filters. Global search has no debounce; `fill` replaces the whole value in one input event. Wait for the visible-row line.
