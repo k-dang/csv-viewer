@@ -1,7 +1,10 @@
+import { Cause, Effect, Exit } from 'effect';
+import { rejected } from './comparison/comparison-key-rules';
+import { Comparisons, WorkingCsv, makeWorkspaceRuntime } from './workspace-runtime';
 import type { ComparisonExecutor } from './comparison/comparison-executor';
 import type { WorkspaceDatabase } from './database';
 import { CsvComparisonService } from './comparison/csv-comparison-service';
-import { WorkingCsvStore } from './working-csv/working-csv-store';
+import type { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 import type {
   BeginComparisonResult,
@@ -35,17 +38,16 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
   private disposal: Promise<void> | null = null;
+  private readonly runtime: ReturnType<typeof makeWorkspaceRuntime>;
 
   constructor(
     private readonly host: CsvWorkspaceHost,
     database: WorkspaceDatabase,
     executor?: ComparisonExecutor,
   ) {
-    this.csvStore = new WorkingCsvStore(host, database);
-    this.comparisonStore = new CsvComparisonService(
-      this.csvStore,
-      executor ?? this.csvStore.createComparisonExecutor(),
-    );
+    this.runtime = makeWorkspaceRuntime(host, database, executor);
+    this.csvStore = this.runtime.runSync(WorkingCsv);
+    this.comparisonStore = this.runtime.runSync(Comparisons);
   }
 
   get capabilities() {
@@ -93,6 +95,9 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private callComparison(request: ComparisonRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
+    if (this.disposal && (request.operation === 'comparison.begin' || request.operation === 'comparison.get-window')) {
+      return Promise.resolve(rejected('source-not-found', 'The CSV workspace is closing.'));
+    }
     switch (request.operation) {
       case 'comparison.get-candidates':
         return Promise.resolve(this.comparisonStore.candidatesFor(request.baselineId));
@@ -101,16 +106,33 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       case 'comparison.begin':
         return this.beginComparison(request);
       case 'comparison.cancel':
-        return Promise.resolve(this.comparisonStore.cancel(request));
+        if (!this.comparisonStore.getState(request.comparisonId)) return Promise.resolve({ status: 'comparison-not-found' });
+        return this.runEffect(this.comparisonStore.cancel(request));
       case 'comparison.get-window':
-        return this.comparisonStore.getWindow(request);
+        return this.runEffect(this.comparisonStore.getWindow(request));
       case 'comparison.swap':
         return Promise.resolve(this.comparisonStore.swap(request.comparisonId));
       case 'comparison.close':
-        return this.comparisonStore.close(request.comparisonId);
+        if (!this.comparisonStore.getState(request.comparisonId)) {
+          return Promise.resolve({ status: 'closed', comparisonId: request.comparisonId });
+        }
+        return this.runEffect(this.comparisonStore.close(request.comparisonId));
       default:
         return unsupportedOperation(request);
     }
+  }
+
+  /** The shared promise boundary retains all causes when operation and cleanup both fail. */
+  private async runEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+    const result = await this.runtime.runPromiseExit(effect);
+    if (Exit.isSuccess(result)) return result.value;
+    console.error('Workspace operation failed.', result.cause);
+    if (result.cause.reasons.length > 1) {
+      throw new AggregateError(Cause.prettyErrors(result.cause), 'Unable to complete all workspace operations.', {
+        cause: result.cause,
+      });
+    }
+    throw Cause.squash(result.cause);
   }
 
   onEvent(listener: (event: CsvViewerEvent) => void): () => void {
@@ -192,12 +214,11 @@ export class CsvWorkspaceImplementation implements CsvViewer {
    * Comparison events, so nothing live crosses the seam.
    */
   private async beginComparison(request: BeginComparisonRequest): Promise<BeginComparisonResult> {
-    const result = this.comparisonStore.begin(request);
-    if (result.status !== 'accepted') return result;
-    void result.completion.catch((error) => {
-      console.error(`Comparison operation ${result.operationId} failed unexpectedly.`, error);
-    });
-    return { status: 'accepted', operationId: result.operationId };
+    return this.runEffect(this.comparisonStore.begin(request).pipe(
+      Effect.map((result): BeginComparisonResult => result.status === 'accepted'
+        ? { status: 'accepted', operationId: result.operationId }
+        : result),
+    ));
   }
 
   private async closeCsv(request: CloseWorkingCsvRequest): Promise<CloseWorkingCsvOutcome> {
@@ -228,7 +249,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return { status: 'confirmation-required', impact };
       }
       const closedComparisonIds = impact.dependentComparisons.map((comparison) => comparison.comparisonId);
-      await this.comparisonStore.closeDependents(workingCsvId);
+      await this.runEffect(this.comparisonStore.closeDependents(workingCsvId));
       await this.csvStore.closeWorkingCsv(workingCsvId);
       return {
         status: 'closed',
@@ -319,8 +340,9 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private async disposeWorkspace(): Promise<void> {
-    await this.comparisonStore.dispose();
+    await this.runEffect(this.comparisonStore.dispose());
     await this.csvStore.disposeStore();
+    await this.runtime.dispose();
   }
 }
 

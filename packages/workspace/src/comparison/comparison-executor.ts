@@ -1,4 +1,4 @@
-import type { Effect, Scope } from 'effect';
+import { Context, type Effect, type Scope } from 'effect';
 import type { DataEngineError } from '../database';
 import type {
   ComparisonId,
@@ -45,7 +45,9 @@ export interface ComparisonExecutor {
   /** Acquires the dedicated connection in the calling attempt's scope. */
   openAttempt(): Effect.Effect<ComparisonAttemptExecutor, DataEngineError, Scope.Scope>;
   activateSnapshot(artifactId: ComparisonOperationId): void;
-  readWindow(request: ReadComparisonSnapshotWindowRequest): Promise<StoredComparisonWindow>;
-  dropSnapshot(artifactId: ComparisonOperationId): Promise<void>;
-  dispose(): Promise<void>;
+  readWindow(request: ReadComparisonSnapshotWindowRequest): Effect.Effect<StoredComparisonWindow, DataEngineError>;
+  dropSnapshot(artifactId: ComparisonOperationId): Effect.Effect<void, DataEngineError>;
+  dispose(): Effect.Effect<void, DataEngineError>;
 }
+
+export const ComparisonExecutor = Context.Service<ComparisonExecutor>('csv-viewer/ComparisonExecutor');

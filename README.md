@@ -54,6 +54,18 @@ Workspace composition, the public product contract, and runtime adapter interfac
 - Vite consumes the `packages/workspace` TypeScript source in the Electron main, renderer, and web bundles.
 - Tailwind source discovery lives in `packages/ui/src/styles.css` and explicitly scans the shared UI plus both application roots. Keep those paths current when moving files.
 
+### Comparison execution and ownership
+
+Each workspace constructs one Effect `ManagedRuntime` from its host, database, Working CSV store, and Comparison executor services. Desktop and web use the same composition and promise entry adapter in `CsvWorkspaceImplementation`. Internal Comparison operations compose Effects. Tests can supply a controlled executor through the same service definition without changing execution ownership.
+
+The workspace layer scope owns background Comparison fibers. Admission records and publishes the running attempt before opening its startup `Deferred`; a scheduler yield lets the begin request return before computation starts. Each attempt has a separate scope for its worker connection, source leases, and staging cleanup. Settlement runs after that scope closes, including after interruption, and emits the terminal event with the original operation identifier.
+
+Publication activates the staging artifact and assigns it to the Comparison in one synchronous step. This transfers ownership out of the attempt: its finalizer retires the artifact only if publication did not occur. A published result survives attempt cleanup and unsuccessful refreshes. Replacement or close retires it after admitted result readers finish. Each group of concurrent readers shares a `Deferred` that the last reader completes. Shared-table leases and the artifact registry retain their ownership roles.
+
+Cancellation acknowledges the request separately from completion. Cancellable driver work receives a cancellation request and must settle before its resources are released. Result reads and retirement use non-cancellable owner queries and therefore settle without interruption. Failed releases retain their resource records for retry; finalizer failures carry a `ComparisonCleanupError` in the Effect cause alongside the original failure. Ordinary query and retirement failures remain typed `DataEngineError` values until event or transport projection.
+
+Disposal stops admission, interrupts and awaits Comparisons, disposes their executor, and then lets the Working CSV store settle admitted opens, reads, and edits before closing the database. Only then does it dispose the runtime. A failed Comparison cleanup leaves the runtime and database available for disposal retry. Existing console failure reporting remains in place; structured diagnostics are a separate increment.
+
 ## Requirements
 
 - Node.js 24 or newer
