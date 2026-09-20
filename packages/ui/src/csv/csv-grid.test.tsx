@@ -105,6 +105,7 @@ describe('CsvGrid', () => {
     const shiftC = new KeyboardEvent('keydown', { key: 'C', ctrlKey: true, shiftKey: true });
 
     expect(isCopyCellShortcut(cell)).toBe(true);
+    expect(isCopyCellShortcut(new KeyboardEvent('keydown', { key: 'C', ctrlKey: true }))).toBe(true);
     expect(isCopyColumnShortcut(cell)).toBe(false);
     expect(isCopyColumnShortcut(column)).toBe(true);
     expect(isCopyColumnShortcut(cmdColumn)).toBe(true);

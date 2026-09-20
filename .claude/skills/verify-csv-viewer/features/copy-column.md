@@ -26,7 +26,7 @@ Preconditions:
 - **Copy.** Run `click --role button --name "Copy column"`. Wait for `Copied 5`.
 - **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, `email 5 values`, `Copied 5`, and the tinted column.
 - **Shortcut.** Run `click --role button --name "Close toast" --nth 0` to clear the earlier toast, then `click --role gridcell --name "Ada Lovelace"` and `press --key "Control+Shift+a"`. Wait for `Copied 5` and `From name`.
-- **Cell copy.** Close that toast, then with the cell still focused `press --key "Control+c"`. Wait for `Copied 1 value`: plain Ctrl+C copies only the focused cell.
+- **Cell copy.** Run `click --role button --name "Close toast" --nth 0`, then `click --role gridcell --name "Ada Lovelace"` to put focus back on the cell (closing the toast moves it away), then `press --key "Control+c"`. Wait for `Copied 1 value`: plain Ctrl+C copies only the focused cell.
 - **Editing keeps its own copy.** Close every earlier toast with `click --role button --name "Close toast" --nth 0` and confirm `text` has no `Copied`. Run `click --role gridcell --name "Grace Hopper" --double`, then `press --key "Control+Shift+a"`. `text` still contains no `Copied`. Run `press --key Escape`.
 - **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --role gridcell --name "Ada Lovelace"` then `click --role button --name "Copy column"`. Wait for `name 4 values` and `Copied 4`.
 - **Source.** `fixtures/phase-2-sample.csv` is unchanged.

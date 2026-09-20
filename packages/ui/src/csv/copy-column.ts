@@ -3,10 +3,10 @@ import { toast } from '@/components/ui/toast';
 import { formatNumber } from './csv-format';
 import type { CsvTab } from './csv-tab';
 
-/** Ctrl+C or Cmd+C with no other modifier. */
+/** Ctrl+C or Cmd+C with no other modifier; Caps Lock reports `C`, so the key is lowercased. */
 export function isCopyCellShortcut(event: Event): boolean {
   if (!(event instanceof KeyboardEvent)) return false;
-  return event.key === 'c' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+  return event.key.toLowerCase() === 'c' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
 }
 
 /** Ctrl+Shift+A or Cmd+Shift+A. */
