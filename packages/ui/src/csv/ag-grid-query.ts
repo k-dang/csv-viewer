@@ -46,10 +46,13 @@ export function renamedColumnName(
   return { from: removed[0], to: added[0] };
 }
 
-export function remapAgFilterModel(model: AgFilterModel, from: string, to: string): AgFilterModel {
+export function remapAgFilterModel(model: AgFilterModel, from: string, to: string) {
   if (from === to || !(from in model)) return model;
-  const { [from]: value, ...rest } = model;
-  return { ...rest, [to]: value };
+  const next = { ...model };
+  const value = next[from];
+  delete next[from];
+  next[to] = value;
+  return next;
 }
 
 export function remapAgColumnState<T extends { colId?: string | null }>(state: T[], from: string, to: string): T[] {

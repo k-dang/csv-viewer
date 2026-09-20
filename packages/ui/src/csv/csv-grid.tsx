@@ -180,11 +180,13 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   const columnNames = workingCsv.columns.map((column) => column.name);
   const renamed = renamedColumnName(columnNamesRef.current, columnNames);
   if (renamed && gridApiRef.current) {
+    const rawFilterModel = gridApiRef.current.getFilterModel() ?? {};
     pendingColumnRenameRef.current = {
       from: renamed.from,
       to: renamed.to,
       columnState: gridApiRef.current.getColumnState(),
-      filterModel: (gridApiRef.current.getFilterModel() ?? {}) as AgFilterModel,
+      // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
+      filterModel: rawFilterModel as AgFilterModel,
     };
   }
   columnNamesRef.current = columnNames;

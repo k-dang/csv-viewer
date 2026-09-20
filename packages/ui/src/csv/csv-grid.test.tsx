@@ -192,7 +192,12 @@ describe('CsvGrid', () => {
     );
     const ReadyGrid = (props: AgGridReactProps<CsvRow>) => {
       useEffect(() => {
-        props.onGridReady?.({ api } as unknown as GridReadyEvent<CsvRow>);
+        // SAFETY: CsvGrid onGridReady only stores event.api.
+        props.onGridReady?.({
+          api,
+          context: {},
+          type: 'gridReady',
+        } as GridReadyEvent<CsvRow>);
       }, [props]);
       return null;
     };
