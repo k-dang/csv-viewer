@@ -43,7 +43,7 @@ import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
 import { copyCell, isCopyCellShortcut } from './copy-column';
-import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
+import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
@@ -182,18 +182,29 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
     [tab],
   );
 
+  // A header rename is a new AG Grid colId. After AG Grid accepts the new defs, push the Tab's
+  // already-remapped sort and filter onto that id, then refetch.
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.applyColumnState({ state: toAgSortState(query.sort), defaultState: { sort: null } });
+    api.setFilterModel(toAgFilterModel(query.filters));
+  }, [workingCsv.columns]);
+
   // Edits, history steps, search changes, and Reopen CSV all change what the loaded blocks hold.
   useEffect(() => {
     gridApiRef.current?.refreshInfiniteCache();
   }, [state.revision, query.search]);
 
   // Reopen CSV starts the Tab's query over; the grid's own sort and filter state follows.
+  // Column patches reuse the Working CSV id and the open-time dataRevision, so those two keys
+  // change on open and Reopen CSV only.
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     api.applyColumnState({ defaultState: { sort: null } });
     api.setFilterModel(null);
-  }, [workingCsv]);
+  }, [workingCsv.workingCsvId, workingCsv.dataRevision]);
 
   // The Tab clears its selection after every mutation; the grid drops its highlighted rows too.
   useEffect(() => {
@@ -442,7 +453,6 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
             enableCellTextSelection
             ensureDomOrder
             suppressDragLeaveHidesColumns
-            maintainColumnOrder
             onGridReady={onGridReady}
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}

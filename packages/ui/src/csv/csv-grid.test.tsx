@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
+import type { AgGridReactProps } from 'ag-grid-react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
@@ -97,6 +99,91 @@ describe('CsvGrid', () => {
     expect(screen.getByRole('status').textContent).toBe('Download started');
   });
 
+  it('keeps grid column fields in Working CSV order after renaming a middle header', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+        { name: 'status', type: 'VARCHAR' },
+      ],
+    });
+    const renamedColumns = [
+      { name: 'id', type: 'VARCHAR' },
+      { name: 'work_email', type: 'VARCHAR' },
+      { name: 'status', type: 'VARCHAR' },
+    ];
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.rename-column': async () => ({
+            workingCsvId: workingCsv.workingCsvId,
+            columns: renamedColumns,
+            hasUnexportedChanges: true,
+            canUndo: true,
+            canRedo: false,
+          }),
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('email');
+    let latest: AgGridReactProps<CsvRow> | undefined;
+    const CaptureGrid = (props: AgGridReactProps<CsvRow>) => {
+      latest = props;
+      return null;
+    };
+
+    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={CaptureGrid} />));
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'email', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+
+    await act(async () => {
+      await tab.renameFocusedColumn('work_email');
+    });
+    rerender(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={CaptureGrid} />));
+
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'work_email', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+  });
+
+  it('offers Rename column for the focused column', async () => {
+    const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+
+    expect(screen.getByRole('button', { name: 'Rename column' })).toBeDefined();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Rename column' }).click();
+    });
+    expect(screen.getByRole('textbox', { name: 'Column name' })).toBeDefined();
+  });
+
+  it('closes Rename column when the focused column changes', async () => {
+    const tab = new CsvTab(
+      createTestCsvViewer(),
+      workingCsvFixture({
+        columns: [
+          { name: 'id', type: 'VARCHAR' },
+          { name: 'email', type: 'VARCHAR' },
+        ],
+      }),
+    );
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    await act(async () => {
+      screen.getByRole('button', { name: 'Rename column' }).click();
+    });
+    expect(screen.getByRole('textbox', { name: 'Column name' })).toBeDefined();
+
+    await act(async () => {
+      tab.setFocusedColumn('email');
+    });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).toBeNull();
+    expect(screen.getByText('email')).toBeDefined();
+  });
+
   it('splits Ctrl+C (copy cell) from Ctrl+Shift+A (copy column)', () => {
     const cell = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true });
     const column = new KeyboardEvent('keydown', { key: 'A', ctrlKey: true, shiftKey: true });
@@ -116,3 +203,8 @@ describe('CsvGrid', () => {
     expect(isCopyCellShortcut(shiftC)).toBe(false);
   });
 });
+
+function fieldNames(columnDefs: AgGridReactProps<CsvRow>['columnDefs']): string[] {
+  if (!columnDefs) return [];
+  return columnDefs.flatMap((column) => ('field' in column && column.field ? [String(column.field)] : []));
+}

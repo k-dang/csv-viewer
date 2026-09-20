@@ -207,4 +207,102 @@ describe('CsvTab', () => {
     expect(writeText).toHaveBeenCalledWith('30\n\n41');
     vi.unstubAllGlobals();
   });
+
+  it('renames the focused column and remaps query, stats, and focus to the new name', async () => {
+    const columns = [
+      { name: 'full_name', type: 'VARCHAR' },
+      { name: 'age', type: 'BIGINT' },
+    ];
+    const renameColumn = vi.fn(async () => ({
+      ...editedState,
+      columns,
+    }));
+    const getCounts = vi.fn(async () => ({
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'full_name',
+      scopeRowCount: 250,
+      values: [],
+    }));
+    const tab = new CsvTab(
+      createTestCsvViewer({ handlers: { 'csv.rename-column': renameColumn, 'csv.get-column-value-counts': getCounts } }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('name');
+    tab.setGridQuery([{ column: 'name', direction: 'asc' }], [{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }]);
+    tab.toggleStats();
+    const revision = tab.snapshot().revision;
+
+    await expect(tab.renameFocusedColumn('full_name')).resolves.toBe(true);
+
+    expect(renameColumn).toHaveBeenCalledWith({
+      operation: 'csv.rename-column',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'name',
+      name: 'full_name',
+    });
+    const state = tab.snapshot();
+    expect(state.workingCsv.columns).toEqual(columns);
+    expect(state.focusedColumn).toBe('full_name');
+    expect(state.query.sort).toEqual([{ column: 'full_name', direction: 'asc' }]);
+    expect(state.query.filters).toEqual([{ column: 'full_name', kind: 'text', operator: 'contains', value: 'a' }]);
+    expect(state.stats.column).toBe('full_name');
+    expect(state.editState).toEqual(editedState);
+    expect(state.revision).toBe(revision + 1);
+    await vi.waitFor(() =>
+      expect(tab.snapshot().stats.result).toEqual({
+        status: 'ready',
+        counts: {
+          workingCsvId: workingCsv.workingCsvId,
+          column: 'full_name',
+          scopeRowCount: 250,
+          values: [],
+        },
+      }),
+    );
+  });
+
+  it('reports a rejected rename and keeps the previous columns', async () => {
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.rename-column': async () => {
+            throw new Error('CSV column name already exists.');
+          },
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('name');
+
+    await expect(tab.renameFocusedColumn('age')).resolves.toBe(false);
+
+    const state = tab.snapshot();
+    expect(state.editError).toBe('CSV column name already exists.');
+    expect(state.workingCsv.columns).toEqual(workingCsv.columns);
+    expect(state.focusedColumn).toBe('name');
+    expect(state.revision).toBe(0);
+  });
+
+  it('does not mutate when the focused column keeps its name', async () => {
+    const renameColumn = vi.fn();
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.rename-column': renameColumn } }), workingCsv);
+    tab.setFocusedColumn('name');
+    tab.setSelection(['row-1']);
+    const revision = tab.snapshot().revision;
+
+    await expect(tab.renameFocusedColumn('name')).resolves.toBe(true);
+    await expect(tab.renameFocusedColumn('  name  ')).resolves.toBe(true);
+
+    expect(renameColumn).not.toHaveBeenCalled();
+    expect(tab.snapshot().revision).toBe(revision);
+    expect(tab.snapshot().selectedRowIds).toEqual(['row-1']);
+  });
+
+  it('does not rename when no column is focused', async () => {
+    const renameColumn = vi.fn();
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.rename-column': renameColumn } }), workingCsv);
+
+    await expect(tab.renameFocusedColumn('sku')).resolves.toBe(false);
+    expect(renameColumn).not.toHaveBeenCalled();
+  });
 });

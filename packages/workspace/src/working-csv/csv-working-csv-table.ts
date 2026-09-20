@@ -17,6 +17,7 @@ import {
   buildExistingRowIdsQuery,
   buildExportRowsSql,
   buildNextRowIdSql,
+  buildRenameColumnStatement,
   buildRowCountSql,
   buildRowDeletionStatement,
   buildRowSourceOrderQuery,
@@ -78,6 +79,21 @@ export async function applyCellValue(
   await table.database.run(statement.sql, statement.values);
 }
 
+export async function applyColumnRename(table: CsvTable, from: string, to: string): Promise<void> {
+  await table.database.run(buildRenameColumnStatement(table.tableName, from, to));
+}
+
+export function renameCsvColumns(columns: CsvColumn[], from: string, to: string): CsvColumn[] {
+  let renamed = false;
+  const next = columns.map((column) => {
+    if (column.name !== from) return { ...column };
+    renamed = true;
+    return { ...column, name: to };
+  });
+  if (!renamed) throw new Error(`Unknown CSV column: ${from}`);
+  return next;
+}
+
 export async function applyRowDeletion(
   table: CsvTable,
   rowIds: string[],
@@ -136,30 +152,39 @@ export async function readExportRows(
   }
 }
 
-/**
- * Replays an edit in either direction. Redo restores the command's new value and its deletions;
- * undo restores the old value and reverses them - the same three cases with the sense flipped.
- */
 export async function runEditCommand(
   table: CsvTable,
   command: CsvEditCommand,
   direction: 'undo' | 'redo',
 ): Promise<void> {
   const redoing = direction === 'redo';
-  if (command.type === 'cell-edit') {
-    await applyCellValue(
-      table,
-      command.rowId,
-      command.column,
-      redoing ? command.newValue : command.oldValue,
-    );
-    return;
+  switch (command.type) {
+    case 'cell-edit':
+      await applyCellValue(
+        table,
+        command.rowId,
+        command.column,
+        redoing ? command.newValue : command.oldValue,
+      );
+      return;
+    case 'delete-rows':
+      await applyRowDeletion(table, command.rowIds, redoing);
+      return;
+    case 'insert-row':
+      await applyRowDeletion(table, [command.rowId], !redoing);
+      return;
+    case 'rename-column':
+      await applyColumnRename(
+        table,
+        redoing ? command.from : command.to,
+        redoing ? command.to : command.from,
+      );
+      return;
+    default: {
+      const exhaustive: never = command;
+      throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
+    }
   }
-  if (command.type === 'delete-rows') {
-    await applyRowDeletion(table, command.rowIds, redoing);
-    return;
-  }
-  await applyRowDeletion(table, [command.rowId], !redoing);
 }
 
 async function nextRowId(table: CsvTable): Promise<string> {
