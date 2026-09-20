@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
-import { CsvGrid, isCopyColumnShortcut } from './csv-grid';
+import { CsvGrid } from './csv-grid';
+import { isCopyCellShortcut, isCopyColumnShortcut } from './copy-column';
 
 const DataGrid = () => null;
 
@@ -16,7 +17,7 @@ describe('CsvGrid', () => {
     workingCsv.source.sizeBytes = 100_000_000;
     const tab = new CsvTab(createTestCsvViewer(), workingCsv);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
 
     expect(screen.getByText('100.0 MB')).toBeDefined();
   });
@@ -27,7 +28,7 @@ describe('CsvGrid', () => {
     });
     const tab = new CsvTab(createTestCsvViewer(), workingCsv);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
 
     expect(screen.getByText('Unexported Changes')).toBeDefined();
   });
@@ -37,7 +38,7 @@ describe('CsvGrid', () => {
     tab.setSearch('ada');
     tab.setSelection(['row-1']);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
 
     expect(screen.getByRole('button', { name: 'Insert row above' }).hasAttribute('disabled')).toBe(false);
     expect(screen.getByRole('button', { name: 'Insert row below' }).hasAttribute('disabled')).toBe(false);
@@ -60,7 +61,7 @@ describe('CsvGrid', () => {
       workingCsv,
     );
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
     await act(async () => {
       screen.getByRole('button', { name: 'Open stats panel' }).click();
     });
@@ -87,7 +88,7 @@ describe('CsvGrid', () => {
       workingCsv,
     );
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
 
     await act(async () => {
       screen.getByRole('button', { name: 'Export CSV' }).click();
@@ -96,12 +97,21 @@ describe('CsvGrid', () => {
     expect(screen.getByRole('status').textContent).toBe('Download started');
   });
 
-  it('treats Ctrl+C or Cmd+C alone as the Copy column shortcut', () => {
-    const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', { key: 'c', ...init });
+  it('splits Ctrl+C (copy cell) from Ctrl+Shift+A (copy column)', () => {
+    const cell = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true });
+    const column = new KeyboardEvent('keydown', { key: 'A', ctrlKey: true, shiftKey: true });
+    const cmdColumn = new KeyboardEvent('keydown', { key: 'A', metaKey: true, shiftKey: true });
+    const alt = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, altKey: true });
+    const shiftC = new KeyboardEvent('keydown', { key: 'C', ctrlKey: true, shiftKey: true });
 
-    expect(isCopyColumnShortcut(key({ ctrlKey: true }))).toBe(true);
-    expect(isCopyColumnShortcut(key({ metaKey: true }))).toBe(true);
-    expect(isCopyColumnShortcut(key({}))).toBe(false);
-    expect(isCopyColumnShortcut(key({ ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(isCopyCellShortcut(cell)).toBe(true);
+    expect(isCopyColumnShortcut(cell)).toBe(false);
+    expect(isCopyColumnShortcut(column)).toBe(true);
+    expect(isCopyColumnShortcut(cmdColumn)).toBe(true);
+    expect(isCopyCellShortcut(column)).toBe(false);
+    expect(isCopyCellShortcut(alt)).toBe(false);
+    expect(isCopyColumnShortcut(alt)).toBe(false);
+    expect(isCopyColumnShortcut(shiftC)).toBe(false);
+    expect(isCopyCellShortcut(shiftC)).toBe(false);
   });
 });
