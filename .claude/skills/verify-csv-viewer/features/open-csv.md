@@ -21,7 +21,7 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 
 - Drop one or more CSV, TSV, or TXT files anywhere in the window.
 - Choose Open CSV in the header or empty card and select a file.
-- On desktop, choose a Recent CSV Source on the empty window, File > Open CSV, or Ctrl+O.
+- On desktop, choose a Recent CSV Source on the empty window, File > Open CSV..., or Ctrl+O.
 - Use Reopen to reload the active source. Desktop also supports File > Reopen CSV and Ctrl+R.
 - Select a tab or use Ctrl+Tab and Ctrl+Shift+Tab.
 - Close with the tab close button. Desktop also supports File > Close Tab and Ctrl+W.
@@ -57,9 +57,11 @@ Preconditions:
 
 - Native desktop Open/Export dialogs are not driveable over CDP. File drops provide a separate entry point; they do not verify those dialogs.
 - The empty screen has two Open CSV buttons. Use `--nth 0`.
+- The Recent list heading reads `RECENT CSV SOURCES` in `text` and `wait` (CSS uppercase). `wait --text "Recent CSV Sources"` times out. The seeded buttons keep their file names.
 - Wait for grid values after metadata appears. The row count can paint before the cells.
 - An edited tab's accessible name includes Unexported Changes. An exact filename match can select a different tab when names repeat.
 - A drop during loading is declined, not queued. Retry after loading completes.
+- A drop while any dialog is open is declined silently, and the Copy column toast counts as one (`role="dialog"`). Close toasts with `click --role button --name "Close toast" --nth 0` before dropping.
 - Folders are rejected even when their names end in .csv. Text and in-app grid drags must retain their normal behavior.
 - Mixed-drop errors remain visible after successful files open. The last successful open receives focus, including an already-open desktop source.
 - Desktop dirty reopen uses a native confirmation. Finish verification before invoking it without a human.
