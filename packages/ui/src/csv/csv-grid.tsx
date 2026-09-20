@@ -17,7 +17,6 @@ import {
   themeQuartz,
   type CellValueChangedEvent,
   type ColDef,
-  type ColumnState,
   type GridApi,
   type GridReadyEvent,
   type IDatasource,
@@ -44,14 +43,7 @@ import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
 import { copyColumn } from './copy-column';
-import {
-  remapAgColumnState,
-  remapAgFilterModel,
-  renamedColumnName,
-  toCsvFilterDescriptors,
-  toCsvSortDescriptors,
-  type AgFilterModel,
-} from './ag-grid-query';
+import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
@@ -147,13 +139,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
   } = state;
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const revertingCellRef = useRef(false);
-  const columnNamesRef = useRef(workingCsv.columns.map((column) => column.name));
-  const pendingColumnRenameRef = useRef<{
-    from: string;
-    to: string;
-    columnState: ColumnState[];
-    filterModel: AgFilterModel;
-  } | null>(null);
 
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
@@ -177,20 +162,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     [workingCsv.columns],
   );
 
-  const columnNames = workingCsv.columns.map((column) => column.name);
-  const renamed = renamedColumnName(columnNamesRef.current, columnNames);
-  if (renamed && gridApiRef.current) {
-    const rawFilterModel = gridApiRef.current.getFilterModel() ?? {};
-    pendingColumnRenameRef.current = {
-      from: renamed.from,
-      to: renamed.to,
-      columnState: gridApiRef.current.getColumnState(),
-      // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
-      filterModel: rawFilterModel as AgFilterModel,
-    };
-  }
-  columnNamesRef.current = columnNames;
-
   // The grid's models are handed to the Tab right before each fetch, so the Tab's query is always
   // the one the visible rows were loaded with, and the Stats Panel follows the same query.
   const datasource = useMemo<IDatasource>(
@@ -209,15 +180,13 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     [tab],
   );
 
-  // A header rename is a new AG Grid colId. Reapply the previous sort and filter under the new id
-  // before the infinite cache refetches, so setGridQuery does not overwrite the Tab's remapped query.
+  // A header rename is a new AG Grid colId. Push the Tab's already-remapped sort and filter onto
+  // the new id before the infinite cache refetches, so setGridQuery does not overwrite the Tab.
   useLayoutEffect(() => {
-    const pending = pendingColumnRenameRef.current;
-    pendingColumnRenameRef.current = null;
     const api = gridApiRef.current;
-    if (!pending || !api) return;
-    api.applyColumnState({ state: remapAgColumnState(pending.columnState, pending.from, pending.to) });
-    api.setFilterModel(remapAgFilterModel(pending.filterModel, pending.from, pending.to));
+    if (!api) return;
+    api.applyColumnState({ state: toAgSortState(query.sort), defaultState: { sort: null } });
+    api.setFilterModel(toAgFilterModel(query.filters));
   }, [workingCsv.columns]);
 
   // Edits, history steps, search changes, and Reopen CSV all change what the loaded blocks hold.

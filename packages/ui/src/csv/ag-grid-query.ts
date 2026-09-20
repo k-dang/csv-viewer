@@ -60,6 +60,55 @@ export function remapAgColumnState<T extends { colId?: string | null }>(state: T
   return state.map((column) => (column.colId === from ? { ...column, colId: to } : column));
 }
 
+export function toAgSortState(sort: CsvSortDescriptor[]) {
+  return sort.map((item, sortIndex) => ({
+    colId: item.column,
+    sort: item.direction,
+    sortIndex,
+  }));
+}
+
+export function toAgFilterModel(filters: CsvFilterDescriptor[]) {
+  const grouped = new Map<string, CsvFilterDescriptor[]>();
+  for (const filter of filters) {
+    const list = grouped.get(filter.column) ?? [];
+    list.push(filter);
+    grouped.set(filter.column, list);
+  }
+
+  const model: AgFilterModel = {};
+  for (const [column, list] of grouped) {
+    const conditions = list.map(toAgFilterCondition);
+    model[column] = conditions.length === 1 ? conditions[0] : { operator: 'AND', conditions };
+  }
+  return model;
+}
+
+function toAgFilterCondition(filter: CsvFilterDescriptor): AgFilterCondition {
+  switch (filter.kind) {
+    case 'text':
+      return { filterType: 'text', type: filter.operator, filter: filter.value ?? '' };
+    case 'number':
+      return {
+        filterType: 'number',
+        type: filter.operator,
+        filter: filter.value,
+        filterTo: filter.valueTo,
+      };
+    case 'date':
+      return {
+        filterType: 'date',
+        type: filter.operator,
+        dateFrom: filter.value ?? null,
+        dateTo: filter.valueTo ?? null,
+      };
+    default: {
+      const exhaustive: never = filter;
+      throw new Error(`Unsupported CSV filter kind: ${String(exhaustive)}`);
+    }
+  }
+}
+
 /**
  * OR-combined conditions have no CsvViewer descriptor and are dropped for the whole column, so an
  * OR filter narrows neither the row window nor the Count Scope. AND conditions map one to one.
