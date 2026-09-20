@@ -201,7 +201,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
                       {activeDialectError}
                     </FieldError>
                   ) : null}
-                  <CsvGrid tab={tab.tab} themeMode={themeMode} />
+                  <CsvGrid tab={tab.tab} themeMode={themeMode} active={isActive} />
                 </section>
               );
             })}
