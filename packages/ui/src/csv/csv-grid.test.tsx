@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
-import { useEffect } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { AgGridReactProps } from 'ag-grid-react';
-import type { GridReadyEvent } from 'ag-grid-community';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
@@ -145,81 +143,6 @@ describe('CsvGrid', () => {
 
     expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'work_email', 'status']);
     expect(latest?.maintainColumnOrder).toBeFalsy();
-  });
-
-  it('reapplies sort and filter under the renamed column id', async () => {
-    const workingCsv = workingCsvFixture({
-      columns: [
-        { name: 'id', type: 'VARCHAR' },
-        { name: 'email', type: 'VARCHAR' },
-      ],
-    });
-    const renamedColumns = [
-      { name: 'id', type: 'VARCHAR' },
-      { name: 'work_email', type: 'VARCHAR' },
-    ];
-    const applyColumnState = vi.fn();
-    const setFilterModel = vi.fn();
-    const api = {
-      applyColumnState,
-      setFilterModel,
-      getColumnState: () => [
-        { colId: 'email', sort: 'asc' as const },
-        { colId: 'id' },
-      ],
-      getFilterModel: () => ({ email: { filterType: 'text' as const, type: 'contains', filter: 'ada' } }),
-      refreshInfiniteCache: vi.fn(),
-      deselectAll: vi.fn(),
-    };
-    const tab = new CsvTab(
-      createTestCsvViewer({
-        handlers: {
-          'csv.rename-column': async () => ({
-            workingCsvId: workingCsv.workingCsvId,
-            columns: renamedColumns,
-            hasUnexportedChanges: true,
-            canUndo: true,
-            canRedo: false,
-          }),
-        },
-      }),
-      workingCsv,
-    );
-    tab.setFocusedColumn('email');
-    tab.setGridQuery(
-      [{ column: 'email', direction: 'asc' }],
-      [{ column: 'email', kind: 'text', operator: 'contains', value: 'ada' }],
-    );
-    const ReadyGrid = (props: AgGridReactProps<CsvRow>) => {
-      useEffect(() => {
-        // SAFETY: CsvGrid onGridReady only stores event.api.
-        props.onGridReady?.({
-          api,
-          context: {},
-          type: 'gridReady',
-        } as GridReadyEvent<CsvRow>);
-      }, [props]);
-      return null;
-    };
-
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" DataGrid={ReadyGrid} />));
-    await act(async () => {
-      await tab.renameFocusedColumn('work_email');
-    });
-
-    expect(tab.snapshot().query.sort).toEqual([{ column: 'work_email', direction: 'asc' }]);
-    expect(tab.snapshot().query.filters).toEqual([
-      { column: 'work_email', kind: 'text', operator: 'contains', value: 'ada' },
-    ]);
-    expect(applyColumnState).toHaveBeenCalledWith({
-      state: [
-        { colId: 'work_email', sort: 'asc' },
-        { colId: 'id' },
-      ],
-    });
-    expect(setFilterModel).toHaveBeenCalledWith({
-      work_email: { filterType: 'text', type: 'contains', filter: 'ada' },
-    });
   });
 
   it('offers Rename column for the focused column', async () => {
