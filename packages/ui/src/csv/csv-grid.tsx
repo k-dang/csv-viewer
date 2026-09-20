@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType } from 'react';
 import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
@@ -180,9 +180,9 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     [tab],
   );
 
-  // A header rename is a new AG Grid colId. Push the Tab's already-remapped sort and filter onto
-  // the new id before the infinite cache refetches, so setGridQuery does not overwrite the Tab.
-  useLayoutEffect(() => {
+  // A header rename is a new AG Grid colId. After AG Grid accepts the new defs, push the Tab's
+  // already-remapped sort and filter onto that id, then refetch.
+  useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     api.applyColumnState({ state: toAgSortState(query.sort), defaultState: { sort: null } });
