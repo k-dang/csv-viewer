@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
@@ -92,22 +92,23 @@ type ShortcutsHelpDialogProps = {
 };
 
 export function ShortcutsHelpDialog({ onClose }: ShortcutsHelpDialogProps) {
-  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
-  useEffect(() => {
+  const bindDialog = useCallback((node: HTMLElement | null) => {
+    if (!node) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
     const focusable = () => [
-      ...(dialog?.querySelectorAll<HTMLElement>(
+      ...node.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      ) ?? []),
+      ),
     ];
     focusable()[0]?.focus();
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -130,7 +131,7 @@ export function ShortcutsHelpDialog({ onClose }: ShortcutsHelpDialogProps) {
       window.removeEventListener('keydown', handleKeyDown, true);
       previouslyFocused?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
@@ -141,7 +142,7 @@ export function ShortcutsHelpDialog({ onClose }: ShortcutsHelpDialogProps) {
       }}
     >
       <section
-        ref={dialogRef}
+        ref={bindDialog}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-help-title"

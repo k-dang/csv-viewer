@@ -44,6 +44,11 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isHelpToggle(event)) {
+        event.preventDefault();
+        setHelpOpen((open) => !open);
+        return;
+      }
       if (event.key === 'Tab' && event.ctrlKey) {
         event.preventDefault();
         workspace.cycle(event.shiftKey ? -1 : 1);
@@ -52,16 +57,6 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspace]);
-
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (!isHelpToggle(event)) return;
-      event.preventDefault();
-      setHelpOpen((open) => !open);
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   useEffect(() => {
     if (!viewer.capabilities.warnOnPageUnload) return;
