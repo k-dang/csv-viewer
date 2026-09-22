@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { Copy, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,34 +18,39 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
   // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
   if (headerRename && headerRename.column !== focusedColumn) setHeaderRename(null);
 
-  // Copy stays on bubble so text fields keep their own keystrokes. Header F2 is capture so it runs before AG Grid.
-  useEffect(() => {
+  const onKeyDownRef = useRef<(event: KeyboardEvent, capture: boolean) => void>(() => {});
+  onKeyDownRef.current = (event, capture) => {
     if (!active) return;
-    const onCopy = (event: KeyboardEvent) => {
-      if (!focusedColumn || !isCopyColumnShortcut(event) || isTextField(event.target)) return;
-      event.preventDefault();
-      void copyColumn(tab);
-    };
-    const onHeaderRename = (event: KeyboardEvent) => {
+    if (capture) {
       const column = headerColumnForF2(event, tab);
       if (!column) return;
       event.preventDefault();
       event.stopPropagation();
       tab.setFocusedColumn(column);
       setHeaderRename((current) => ({ column, serial: (current?.serial ?? 0) + 1 }));
-    };
+      return;
+    }
+    // Bubble, not capture: text fields keep their own keystrokes, and cell F2 still edits.
+    if (!focusedColumn || !isCopyColumnShortcut(event) || isTextField(event.target)) return;
+    event.preventDefault();
+    void copyColumn(tab);
+  };
+  const bindKeys = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const onCopy = (event: KeyboardEvent) => onKeyDownRef.current(event, false);
+    const onHeaderRename = (event: KeyboardEvent) => onKeyDownRef.current(event, true);
     window.addEventListener('keydown', onCopy);
     window.addEventListener('keydown', onHeaderRename, true);
     return () => {
       window.removeEventListener('keydown', onCopy);
       window.removeEventListener('keydown', onHeaderRename, true);
     };
-  }, [tab, active, focusedColumn]);
+  }, []);
 
   const f2Rename = headerRename?.column === focusedColumn ? headerRename : null;
 
   return (
-    <div className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
+    <div ref={bindKeys} className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
       {focusedColumn ? (
         <FocusedColumnBar
           key={f2Rename ? `header-rename:${f2Rename.serial}:${focusedColumn}` : `focused-column:${focusedColumn}`}
