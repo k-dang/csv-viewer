@@ -15,23 +15,18 @@ import { copyColumn, isCopyColumnShortcut } from './copy-column';
 export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) {
   const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const [headerRename, setHeaderRename] = useState<{ column: string; serial: number } | null>(null);
+  // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
+  if (headerRename && headerRename.column !== focusedColumn) setHeaderRename(null);
 
-  // Text fields (global search, an open cell editor) keep their own keystrokes.
+  // Copy stays on bubble so text fields keep their own keystrokes. Header F2 is capture so it runs before AG Grid.
   useEffect(() => {
-    if (!active || !focusedColumn) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!isCopyColumnShortcut(event) || isTextField(event.target)) return;
+    if (!active) return;
+    const onCopy = (event: KeyboardEvent) => {
+      if (!focusedColumn || !isCopyColumnShortcut(event) || isTextField(event.target)) return;
       event.preventDefault();
       void copyColumn(tab);
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [tab, active, focusedColumn]);
-
-  // Capture so a header F2 is taken before AG Grid. Cell F2 is left alone and still starts editing.
-  useEffect(() => {
-    if (!active) return;
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onHeaderRename = (event: KeyboardEvent) => {
       const column = headerColumnForF2(event, tab);
       if (!column) return;
       event.preventDefault();
@@ -39,15 +34,13 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
       tab.setFocusedColumn(column);
       setHeaderRename((current) => ({ column, serial: (current?.serial ?? 0) + 1 }));
     };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [tab, active]);
-
-  // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
-  useEffect(() => {
-    if (!headerRename || headerRename.column === focusedColumn) return;
-    setHeaderRename(null);
-  }, [focusedColumn, headerRename]);
+    window.addEventListener('keydown', onCopy);
+    window.addEventListener('keydown', onHeaderRename, true);
+    return () => {
+      window.removeEventListener('keydown', onCopy);
+      window.removeEventListener('keydown', onHeaderRename, true);
+    };
+  }, [tab, active, focusedColumn]);
 
   const f2Rename = headerRename?.column === focusedColumn ? headerRename : null;
 
