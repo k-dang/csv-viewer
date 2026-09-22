@@ -43,6 +43,12 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [tab, active]);
 
+  // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
+  useEffect(() => {
+    if (!headerRename || headerRename.column === focusedColumn) return;
+    setHeaderRename(null);
+  }, [focusedColumn, headerRename]);
+
   const f2Rename = headerRename?.column === focusedColumn ? headerRename : null;
 
   return (

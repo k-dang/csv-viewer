@@ -194,6 +194,36 @@ describe('CsvGrid', () => {
     emailHeader.remove();
   });
 
+  it('does not reopen rename when focus returns to the column F2 started', async () => {
+    const tab = new CsvTab(
+      createTestCsvViewer(),
+      workingCsvFixture({
+        columns: [
+          { name: 'id', type: 'VARCHAR' },
+          { name: 'email', type: 'VARCHAR' },
+        ],
+      }),
+    );
+    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    const header = columnHeader('id');
+    await act(async () => {
+      header.dispatchEvent(keydown('F2'));
+    });
+    expect(columnNameValue()).toBe('id');
+    header.remove();
+
+    await act(async () => {
+      tab.setFocusedColumn('email');
+    });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).toBeNull();
+
+    await act(async () => {
+      tab.setFocusedColumn('id');
+    });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).toBeNull();
+    expect(screen.getByText('id')).toBeDefined();
+  });
+
   it('does not start rename when F2 is pressed away from a column header', async () => {
     const tab = new CsvTab(
       createTestCsvViewer(),
