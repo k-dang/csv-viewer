@@ -312,4 +312,95 @@ describe('App', () => {
       expect(screen.queryByRole('button', { name: 'Open CSV' })).toBeNull();
     },
   );
+
+  it('opens the keyboard shortcuts panel on Ctrl+/ and closes it on a second Ctrl+/', () => {
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-recent-sources': async () => [] },
+    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App workspace={createWorkspace(viewer)} />
+      </CsvViewerProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
+    expect(dialog.textContent).toContain('F2');
+    expect(dialog.textContent).toContain(
+      'Rename the column whose header is focused. F2 on a cell edits the cell.',
+    );
+
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+  });
+
+  it('opens the keyboard shortcuts panel on Cmd+/ and closes it when Escape is pressed on the dialog', () => {
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-recent-sources': async () => [] },
+    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App workspace={createWorkspace(viewer)} />
+      </CsvViewerProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: '/', metaKey: true });
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Keyboard shortcuts' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+  });
+
+  it('leaves the candidate picker open when Escape closes keyboard shortcuts', async () => {
+    const baseline = workingCsvFixture({ workingCsvId: 'baseline' });
+    const candidate = workingCsvFixture({ workingCsvId: 'candidate' });
+    const openedCsvs = [baseline, candidate];
+    let receiveEvent: ((event: CsvViewerEvent) => void) | undefined;
+    const viewer = createTestCsvViewer({
+      handlers: {
+        ...tabHandlers(candidate),
+        'csv.open': async () => ({ status: 'opened', workingCsv: openedCsvs.shift() ?? candidate }),
+        'comparison.get-candidates': async () => [
+          { workingCsv: baseline, compatibility: { kind: 'compatible' } },
+        ],
+      },
+      onEvent: (listener) => {
+        receiveEvent = listener;
+        return () => {};
+      },
+    });
+
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App workspace={createWorkspace(viewer)} />
+      </CsvViewerProvider>,
+    );
+    if (!receiveEvent) throw new Error('App did not subscribe to CsvViewer events.');
+
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+    await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
+
+    await act(async () => {
+      screen.getByRole('button', { name: /Compare/ }).click();
+    });
+
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Keyboard shortcuts' }), { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Choose a Candidate' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+  });
+
+  it('does not open keyboard shortcuts for Shift+/ or Alt+/', () => {
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-recent-sources': async () => [] },
+    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App workspace={createWorkspace(viewer)} />
+      </CsvViewerProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { key: '/', altKey: true, ctrlKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+  });
 });

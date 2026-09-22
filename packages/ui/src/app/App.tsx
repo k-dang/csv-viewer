@@ -11,6 +11,7 @@ import { CsvGrid } from '@/csv/csv-grid';
 import { DialectControls } from '@/csv/dialect-controls';
 import { EmptyCsvState } from '@/csv/empty-csv-state';
 import { TabStrip } from '@/app/tab-strip';
+import { isHelpToggle, ShortcutsHelpDialog } from '@/app/shortcuts-help-dialog';
 import { FileDropZone } from './file-drop-zone';
 import type { ComparisonCandidate, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import type { RendererWorkspace } from './renderer-workspace';
@@ -26,6 +27,8 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   } | null>(null);
   const { delimiter, headerMode, dialectError } = workspaceState;
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const closeShortcutsHelp = useCallback(() => setHelpOpen(false), []);
 
   const { tabs: openTabs, activeTabId, isOpening, error: openError, fatalError } = workspaceState;
   const csvTabs = openTabs.filter((tab) => tab.kind === 'csv');
@@ -49,6 +52,16 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspace]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!isHelpToggle(event)) return;
+      event.preventDefault();
+      setHelpOpen((open) => !open);
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!viewer.capabilities.warnOnPageUnload) return;
@@ -233,6 +246,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
           onClose={closeCandidatePicker}
         />
       ) : null}
+      {helpOpen ? <ShortcutsHelpDialog onClose={closeShortcutsHelp} /> : null}
       <Toaster timeout={3000} />
       <FileDropZone workspace={workspace} />
     </main>
