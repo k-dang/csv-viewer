@@ -29,7 +29,7 @@ Preconditions:
 
 Open both fixtures on either runtime with `drop --files '["fixtures/phase-2-sample.csv","fixtures/phase-2-sample-edited.csv"]'`, then select the baseline with `click --role tab --name "phase-2-sample.csv"`. Web also supports two `upload` calls. Verify the picker through the UI.
 
-- **Open picker.** Run `click --role button --name "Compare…"`. Wait for `Choose a Candidate` and `Baseline · phase-2-sample.csv`. Candidate `phase-2-sample-edited.csv` shows `Comparison-Compatible`.
+- **Open picker.** Run `click --role button --name "Compare…"`. Wait for `Choose a Candidate` and `BASELINE · PHASE-2-SAMPLE.CSV` (the header is CSS-uppercased, so `wait` must match the uppercase form). Candidate `phase-2-sample-edited.csv` shows `Comparison-Compatible`.
 - **Cancel once.** Run `click --role button --name "Cancel"`. The dialog is gone. CSV tabs remain.
 - **Choose candidate.** Open the picker again, then click the candidate by its subtitle: `click --role button --name "This browser session"` on web, or the source path on desktop. The bare file name also matches the tab and its close button. Wait for heading `Choose a Comparison Key`. Tab label contains `phase-2-sample.csv ⇄ phase-2-sample-edited.csv`.
 - **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait for `Applied key: id` and the badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `. For these fixtures expect `Changed 1`, `Baseline-only 0`, `Candidate-only 0`, `Unchanged 4`: the only difference is row `id` 4, whose `total_spend` is `1.5` in the baseline and `1.0` in the candidate.
@@ -49,7 +49,8 @@ Both runtimes support this recipe through file drops. Web also supports `upload`
 - `Compare…` is rendered only while a CSV tab is active. It is absent on the empty window, disabled with a single CSV tab, and absent again once the Comparison Tab is active. Click back to a CSV tab before reopening the picker.
 - Do not pass `--exact` to the key checkbox. Its accessible name includes the input `value`, so it reads `id on` and an exact match finds nothing.
 - After `Swap sides` the tab title changes too. A wait on the pre-swap title hangs.
-- The fixtures differ in exactly one cell. Do not expect Ada's row to differ; it is byte-identical in both files.
+- The fixtures differ in exactly one cell. Do not expect Ada's row to differ; it is byte-identical in both files. Comparison reads Working CSVs, so an unexported edit on either side changes the counts (an edited Ada cell gives `Changed 2`, `Unchanged 3`).
+- While a comparison runs, the progress banner has its own `Cancel` button, and a cancelled run shows `Comparison cancelled. No result was applied.` with a `Dismiss` button. These fixtures finish too fast to reach it; do not click a `Cancel` you did not open the picker for.
 - An empty key draft leaves `Apply key` disabled, so `compare-invalid` needs a key column with blank or duplicated values, not an empty selection.
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.

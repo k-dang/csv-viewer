@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { AlertTriangle, ArrowLeftRight, FolderOpen, Keyboard, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { FieldError } from '@/components/ui/field';
@@ -11,6 +11,7 @@ import { CsvGrid } from '@/csv/csv-grid';
 import { DialectControls } from '@/csv/dialect-controls';
 import { EmptyCsvState } from '@/csv/empty-csv-state';
 import { TabStrip } from '@/app/tab-strip';
+import { isHelpToggle, ShortcutsHelpDialog } from '@/app/shortcuts-help-dialog';
 import { FileDropZone } from './file-drop-zone';
 import type { ComparisonCandidate, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import type { RendererWorkspace } from './renderer-workspace';
@@ -26,6 +27,8 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   } | null>(null);
   const { delimiter, headerMode, dialectError } = workspaceState;
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const closeShortcutsHelp = useCallback(() => setHelpOpen(false), []);
 
   const { tabs: openTabs, activeTabId, isOpening, error: openError, fatalError } = workspaceState;
   const csvTabs = openTabs.filter((tab) => tab.kind === 'csv');
@@ -33,33 +36,42 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   const activeTab = openTabs.find((tab) => tab.id === activeTabId);
   const activeCsvTab = activeTab?.kind === 'csv' ? activeTab.tab : null;
 
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const warnOnPageUnloadRef = useRef(viewer.capabilities.warnOnPageUnload);
+  warnOnPageUnloadRef.current = viewer.capabilities.warnOnPageUnload;
+
+  const bindShell = useCallback((node: HTMLElement | null) => {
+    if (!node) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isHelpToggle(event)) {
+        event.preventDefault();
+        setHelpOpen((open) => !open);
+        return;
+      }
+      if (event.key === 'Tab' && event.ctrlKey) {
+        event.preventDefault();
+        workspaceRef.current.cycle(event.shiftKey ? -1 : 1);
+      }
+    }
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      if (!warnOnPageUnloadRef.current || !workspaceRef.current.hasUnexportedChanges()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', warnBeforeUnload);
+    };
+  }, []);
+
   function toggleTheme() {
     const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
     applyTheme(nextTheme);
     setThemeMode(nextTheme);
   }
-
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Tab' && event.ctrlKey) {
-        event.preventDefault();
-        workspace.cycle(event.shiftKey ? -1 : 1);
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [workspace]);
-
-  useEffect(() => {
-    if (!viewer.capabilities.warnOnPageUnload) return;
-    function warnBeforeUnload(event: BeforeUnloadEvent) {
-      if (!workspace.hasUnexportedChanges()) return;
-      event.preventDefault();
-      event.returnValue = '';
-    }
-    window.addEventListener('beforeunload', warnBeforeUnload);
-    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
-  }, [viewer.capabilities.warnOnPageUnload, workspace]);
 
   async function showCandidatePicker() {
     const candidates = await workspace.candidates();
@@ -78,7 +90,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
 
   if (fatalError !== null) {
     return (
-      <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+      <main ref={bindShell} className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
         <section
           className="grid w-full max-w-xl gap-5 rounded-xl border bg-card p-7 shadow-sm"
           role="alert"
@@ -106,7 +118,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   }
 
   return (
-    <main className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
+    <main ref={bindShell} className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-card/92 px-4 py-2 backdrop-blur md:h-14 md:flex-nowrap md:py-0">
         <div className="flex min-w-0 items-center gap-2.5">
           <div
@@ -158,6 +170,16 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
             type="button"
             variant="ghost"
             size="icon-sm"
+            onClick={() => setHelpOpen((open) => !open)}
+            title="Keyboard shortcuts"
+            aria-label="Keyboard shortcuts"
+          >
+            <Keyboard />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             onClick={toggleTheme}
             title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -201,7 +223,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
                       {activeDialectError}
                     </FieldError>
                   ) : null}
-                  <CsvGrid tab={tab.tab} themeMode={themeMode} />
+                  <CsvGrid tab={tab.tab} themeMode={themeMode} active={isActive} />
                 </section>
               );
             })}
@@ -233,6 +255,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
           onClose={closeCandidatePicker}
         />
       ) : null}
+      {helpOpen ? <ShortcutsHelpDialog onClose={closeShortcutsHelp} /> : null}
       <Toaster timeout={3000} />
       <FileDropZone workspace={workspace} />
     </main>

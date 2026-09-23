@@ -679,6 +679,11 @@ async function launchDesktop({ runId, runDir, userDataDir, cdpPort, logPath, log
       `--remote-debugging-port=${cdpPort}`,
       '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
+      // Same as the web target: an occluded, unfocused window otherwise stops painting, so
+      // toast exit animations and other frame-gated UI never settle until something forces a frame.
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-background-timer-throttling',
       desktopAppRoot,
     ],
     { cwd: repoRoot, env, stdio: ['ignore', log.fd, log.fd], windowsHide: false, detached: true },

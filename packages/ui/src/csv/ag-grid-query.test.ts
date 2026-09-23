@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCsvFilterDescriptors, toCsvSortDescriptors } from './ag-grid-query';
+import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors, remapAgColumnState, remapAgFilterModel, renamedColumnName } from './ag-grid-query';
 
 describe('AG Grid query translation', () => {
   it('maps sort and AND-combined filters, and drops OR-combined filters whole', () => {
@@ -28,5 +28,42 @@ describe('AG Grid query translation', () => {
       { column: 'age', kind: 'number', operator: 'greaterThan', value: 30, valueTo: undefined },
       { column: 'age', kind: 'number', operator: 'blank' },
     ]);
+  });
+
+  it('remaps sort and filter keys across a single column rename', () => {
+    expect(renamedColumnName(['id', 'email', 'status'], ['id', 'work_email', 'status'])).toEqual({
+      from: 'email',
+      to: 'work_email',
+    });
+    expect(renamedColumnName(['id', 'email'], ['id', 'email'])).toBeNull();
+    expect(remapAgColumnState([{ colId: 'email', sort: 'asc' as const }, { colId: 'name' }], 'email', 'work_email')).toEqual([
+      { colId: 'work_email', sort: 'asc' },
+      { colId: 'name' },
+    ]);
+    expect(
+      remapAgFilterModel({ email: { filterType: 'text', type: 'contains', filter: 'ada' }, name: { filterType: 'text', type: 'equals', filter: 'Ada' } }, 'email', 'work_email'),
+    ).toEqual({
+      work_email: { filterType: 'text', type: 'contains', filter: 'ada' },
+      name: { filterType: 'text', type: 'equals', filter: 'Ada' },
+    });
+    expect(toAgSortState([{ column: 'work_email', direction: 'asc' }])).toEqual([
+      { colId: 'work_email', sort: 'asc', sortIndex: 0 },
+    ]);
+    expect(
+      toAgFilterModel([
+        { column: 'work_email', kind: 'text', operator: 'contains', value: 'ada' },
+        { column: 'age', kind: 'number', operator: 'greaterThan', value: 30 },
+        { column: 'age', kind: 'number', operator: 'blank' },
+      ]),
+    ).toEqual({
+      work_email: { filterType: 'text', type: 'contains', filter: 'ada' },
+      age: {
+        operator: 'AND',
+        conditions: [
+          { filterType: 'number', type: 'greaterThan', filter: 30, filterTo: undefined },
+          { filterType: 'number', type: 'blank', filter: undefined, filterTo: undefined },
+        ],
+      },
+    });
   });
 });

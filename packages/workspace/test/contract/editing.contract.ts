@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { csvInternalRowIdField, type CsvFilterDescriptor } from '../../src/csv-viewer';
+import { csvInternalRowIdField, type CsvFilterDescriptor, type CsvRow } from '../../src/csv-viewer';
 import {
   expectVisibleRows,
   rowIds,
@@ -180,6 +180,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -199,6 +200,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
@@ -394,6 +396,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
 
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -401,6 +404,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterUndo.rows)).toEqual(['1', '2', '3']);
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
@@ -705,6 +709,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterInsert.rows)).toEqual(['1', '3', '2']);
       expect(undone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: false,
         canUndo: false,
         canRedo: true,
@@ -712,11 +717,236 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(rowIds(afterUndo.rows)).toEqual(['1', '2']);
       expect(redone).toEqual({
         workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
         hasUnexportedChanges: true,
         canUndo: true,
         canRedo: false,
       });
       expect(rowIds(afterRedo.rows)).toEqual(['1', '3', '2']);
+    });
+
+    it('renames a column header, rejects blank and duplicate names, and restores the name on undo', async () => {
+      const workingCsv = await fixture.openSource('rename.csv', ['name,code', 'Ada,001'].join('\n'));
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const renamedColumns = [
+        { name: 'name', type: workingCsv.columns[0].type },
+        { name: 'sku', type: workingCsv.columns[1].type },
+      ];
+
+      const sameClean = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'code',
+      });
+      expect(sameClean).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: false,
+      });
+
+      const renamed = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'sku',
+      });
+      const renamedWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+
+      expect(renamed).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: renamedColumns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      expect(renamedWindow.rows[0]).toMatchObject({ name: 'Ada', sku: '001' });
+      expect(renamedWindow.rows[0]).not.toHaveProperty('code');
+
+      const undone = await workspace().call({ operation: 'csv.undo', ...request });
+      const undoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(undone).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: false,
+        canUndo: false,
+        canRedo: true,
+      });
+      expect(undoneWindow.rows[0]).toMatchObject({ name: 'Ada', code: '001' });
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      const redoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(redone).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: renamedColumns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      expect(redoneWindow.rows[0]).toMatchObject({ name: 'Ada', sku: '001' });
+      expect(redoneWindow.rows[0]).not.toHaveProperty('code');
+
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '',
+        }),
+      ).rejects.toThrow('CSV column name cannot be blank.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '   ',
+        }),
+      ).rejects.toThrow('CSV column name cannot be blank.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: 'name',
+        }),
+      ).rejects.toThrow('CSV column name already exists.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: 'Name',
+        }),
+      ).rejects.toThrow('CSV column name already exists.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '__csvViewerRowId',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '__CSVVIEWERROWID',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'sku',
+          name: '__csvViewerSourceOrder',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
+          column: 'missing',
+          name: 'other',
+        }),
+      ).rejects.toThrow('Unknown CSV column: missing');
+
+      const sameName = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'sku',
+        name: 'sku',
+      });
+      expect(sameName).toEqual(redone);
+    });
+
+    it('keeps column order when renaming a middle header', async () => {
+      const workingCsv = await fixture.openSource(
+        'rename-order.csv',
+        ['id,email,status', '1,ada@example.com,active'].join('\n'),
+      );
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const names = (columns: { name: string }[]) => columns.map((column) => column.name);
+      const visibleKeys = (row: CsvRow) => Object.keys(row).filter((key) => key !== csvInternalRowIdField);
+      const middleRenamed = [
+        { name: 'id', type: workingCsv.columns[0].type },
+        { name: 'work_email', type: workingCsv.columns[1].type },
+        { name: 'status', type: workingCsv.columns[2].type },
+      ];
+
+      expect(names(workingCsv.columns)).toEqual(['id', 'email', 'status']);
+
+      const renamed = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'email',
+        name: 'work_email',
+      });
+      const renamedWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(renamed.columns)).toEqual(['id', 'work_email', 'status']);
+      expect(renamed.columns).toEqual(middleRenamed);
+      expect(visibleKeys(renamedWindow.rows[0])).toEqual(['id', 'work_email', 'status']);
+
+      const undone = await workspace().call({ operation: 'csv.undo', ...request });
+      const undoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(undone.columns)).toEqual(['id', 'email', 'status']);
+      expect(visibleKeys(undoneWindow.rows[0])).toEqual(['id', 'email', 'status']);
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      const redoneWindow = await workspace().call({
+        operation: 'csv.get-rows',
+        ...request,
+        offset: 0,
+        limit: 1,
+      });
+      expect(names(redone.columns)).toEqual(['id', 'work_email', 'status']);
+      expect(visibleKeys(redoneWindow.rows[0])).toEqual(['id', 'work_email', 'status']);
+
+      const readExported = fixture.captureNextExport('renamed-order-export.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(['id,work_email,status', '1,ada@example.com,active', ''].join('\n'));
+    });
+
+    it('exports renamed column headers', async () => {
+      const workingCsv = await fixture.openSource('rename-export.csv', ['name,code', 'Ada,001'].join('\n'));
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const readExported = fixture.captureNextExport('renamed-export.csv');
+
+      await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'code',
+        name: 'sku',
+      });
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(['name,sku', 'Ada,001', ''].join('\n'));
     });
 
     it('exports literal bytes for headers, quoting, null and empty cells, edits, row order, and deletions', async () => {

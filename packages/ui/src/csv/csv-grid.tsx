@@ -42,8 +42,8 @@ import { Input } from '@/components/ui/input';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
-import { copyColumn } from './copy-column';
-import { toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
+import { copyCell, isCopyCellShortcut } from './copy-column';
+import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusBadge } from './query-status-badge';
 import { CsvStatsPanel } from './csv-stats-panel';
@@ -116,6 +116,8 @@ const filterDebounceMs = 1500;
 export type CsvGridProps = {
   tab: CsvTab;
   themeMode: 'light' | 'dark';
+  /** Inactive tabs stay mounted but hidden; only the active one answers window shortcuts. */
+  active: boolean;
   DataGrid?: ComponentType<AgGridReactProps<CsvRow>>;
 };
 
@@ -124,7 +126,7 @@ export type CsvGridProps = {
  * action is a Tab command; this view only translates AG Grid models and keeps the grid's own
  * caches and selection in step with the Tab.
  */
-export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps) {
+export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvGridProps) {
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const {
     workingCsv,
@@ -180,18 +182,29 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     [tab],
   );
 
+  // A header rename is a new AG Grid colId. After AG Grid accepts the new defs, push the Tab's
+  // already-remapped sort and filter onto that id, then refetch.
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.applyColumnState({ state: toAgSortState(query.sort), defaultState: { sort: null } });
+    api.setFilterModel(toAgFilterModel(query.filters));
+  }, [workingCsv.columns]);
+
   // Edits, history steps, search changes, and Reopen CSV all change what the loaded blocks hold.
   useEffect(() => {
     gridApiRef.current?.refreshInfiniteCache();
   }, [state.revision, query.search]);
 
   // Reopen CSV starts the Tab's query over; the grid's own sort and filter state follows.
+  // Column patches reuse the Working CSV id and the open-time dataRevision, so those two keys
+  // change on open and Reopen CSV only.
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
     api.applyColumnState({ defaultState: { sort: null } });
     api.setFilterModel(null);
-  }, [workingCsv]);
+  }, [workingCsv.workingCsvId, workingCsv.dataRevision]);
 
   // The Tab clears its selection after every mutation; the grid drops its highlighted rows too.
   useEffect(() => {
@@ -237,12 +250,13 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
     if (column) tab.setFocusedColumn(column);
   }
 
-  // An open editor and text the user selected across cells keep the browser's own Ctrl+C.
-  function onCellKeyDown({ event, api }: CellKeyDownEvent<CsvRow>) {
-    if (!event || !isCopyColumnShortcut(event)) return;
+  // Ctrl+C copies the focused cell's raw value (null as empty). An open editor and text the user
+  // selected across cells keep the browser's own copy. Ctrl+Shift+A lives on the Column Bar.
+  function onCellKeyDown({ event, api, column, value }: CellKeyDownEvent<CsvRow>) {
+    if (!event || !isCopyCellShortcut(event)) return;
     if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;
     event.preventDefault();
-    void copyColumn(tab);
+    void copyCell(column.getColId(), value);
   }
 
   const canClearQuery = hasActiveQuery || state.filteredRowCount !== workingCsv.rowCount;
@@ -407,7 +421,7 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             </Button>
           </div>
         </div>
-        <CsvColumnBar tab={tab} />
+        <CsvColumnBar tab={tab} active={active} />
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
@@ -439,7 +453,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
             enableCellTextSelection
             ensureDomOrder
             suppressDragLeaveHidesColumns
-            maintainColumnOrder
             onGridReady={onGridReady}
             onCellValueChanged={onCellValueChanged}
             onSelectionChanged={onSelectionChanged}
@@ -452,12 +465,6 @@ export function CsvGrid({ tab, themeMode, DataGrid = AgGridReact }: CsvGridProps
       </div>
     </div>
   );
-}
-
-/** Ctrl+C or Cmd+C with no other modifier. */
-export function isCopyColumnShortcut(event: Event): boolean {
-  if (!(event instanceof KeyboardEvent)) return false;
-  return event.key === 'c' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
 function getColumnFilter(columnType: string): string {

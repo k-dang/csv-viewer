@@ -49,7 +49,7 @@ What launch does:
 1. Installs with `pnpm install` if `node_modules/` is missing.
 2. Runs `pnpm run build:desktop` if `apps/desktop/dist-electron/main.cjs` or `apps/desktop/dist-renderer/index.html` is missing, or if `--rebuild` is set.
 3. Creates `.agents/skills/verify-csv-viewer/runs/<id>/user-data/` and writes `recent-files.json` pointing at `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`.
-4. Starts `apps/desktop` through `apps/desktop/scripts/launch-electron.cjs` with `--user-data-dir`, `--remote-debugging-port`, and `--remote-allow-origins=*`. Vite is not started. `VITE_DEV_SERVER_URL` is unset so the window loads the desktop app's `dist-renderer/index.html`.
+4. Starts `apps/desktop` through `apps/desktop/scripts/launch-electron.cjs` with `--user-data-dir`, `--remote-debugging-port`, `--remote-allow-origins=*`, and the same anti-throttling switches as the web browser (`--disable-backgrounding-occluded-windows` and friends) so an unfocused window keeps painting. Vite is not started. `VITE_DEV_SERVER_URL` is unset so the window loads the desktop app's `dist-renderer/index.html`.
 5. Waits until CDP answers, the renderer shows heading `CSV Viewer`, and a read-only Recent CSV Sources IPC call succeeds.
 6. Writes `.agents/skills/verify-csv-viewer/runs/current.json` (pid, CDP port, userData dir).
 
@@ -156,9 +156,11 @@ Base UI popups (the `Stats Column` select) do not open from a synthetic click. C
 
 On **desktop**, native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through `drop --file <path>` or the seeded Recent CSV Sources list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
 
-On **web** there are no native dialogs. `upload --file` answers the file input, so a second CSV, the comparison feature, and the Export CSV round trip are all provable unattended. Exported bytes land in `runs/<id>/downloads/` (`doctor` prints `downloadDir`); read them to prove the export really contains the edit. Repeated exports of one source overwrite each other there, so copy anything you need into `evidence/` before the next one.
+On **web** there are no native dialogs. `upload --file` answers the file input, so a second CSV, the comparison feature, and the Export CSV round trip are all provable unattended. Exported bytes land in `runs/<id>/downloads/` (`doctor` prints `downloadDir`); read them to prove the export really contains the edit. Chrome uniquifies repeated downloads of one name (`phase-2-sample.csv`, then `phase-2-sample (1).csv`), so read the newest file by modification time, not the fixture name, and copy anything you need into `evidence/` before cleanup.
 
 AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `fill --focused` and `press --key Enter`. The row-count line paints before the rows do, so after opening a file or switching tabs wait for a cell value such as `Ada Lovelace`, not just `5 visible of 5 rows`, before addressing a gridcell. Column header filters use AG Grid's own widgets and a 1500ms filter debounce. Global search is the stable query path. Search is a case-insensitive substring: `active` also matches `inactive`.
+
+`wait` and `text` read `innerText`, which applies CSS `text-transform`. Eyebrow labels therefore read uppercase: the Recent list heading is `RECENT CSV SOURCES` and the candidate picker header is `BASELINE · PHASE-2-SAMPLE.CSV`. A mixed-case `wait --text` on either times out. `--name` matching uses accessible names, which keep the source case.
 
 Wait for observable text. After search or filter, wait for the visible-row line and `Ready`. After opening a file, wait for `#metadata-title` and `Ready`. After Apply key, wait for `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `, or for `This draft is not a Valid Comparison Key.`
 

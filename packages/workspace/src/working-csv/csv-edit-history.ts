@@ -9,7 +9,8 @@ export type CsvEditDraft =
       newValue: CsvCellValue;
     }
   | { type: 'delete-rows'; rowIds: string[] }
-  | { type: 'insert-row'; rowId: string };
+  | { type: 'insert-row'; rowId: string }
+  | { type: 'rename-column'; from: string; to: string };
 
 export type CsvEditCommand = CsvEditDraft & {
   previousRevisionId: number;
@@ -97,7 +98,18 @@ export class CsvEditHistory {
 }
 
 export function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo'): number {
-  if (command.type === 'cell-edit') return 0;
-  const redoDelta = command.type === 'delete-rows' ? -command.rowIds.length : 1;
-  return direction === 'redo' ? redoDelta : -redoDelta;
+  const sign = direction === 'redo' ? 1 : -1;
+  switch (command.type) {
+    case 'cell-edit':
+    case 'rename-column':
+      return 0;
+    case 'delete-rows':
+      return sign * -command.rowIds.length;
+    case 'insert-row':
+      return sign;
+    default: {
+      const exhaustive: never = command;
+      throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
+    }
+  }
 }
