@@ -3,7 +3,7 @@ import { confirmTabClose } from '@csv-viewer/ui/confirm-tab-close';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@csv-viewer/ui/App';
-import { applyTheme, getInitialTheme } from '@csv-viewer/ui/theme';
+import { applyPalette, applyTheme, getInitialPalette, getInitialTheme } from '@csv-viewer/ui/theme';
 import { CsvViewerProvider } from '@csv-viewer/ui/csv-viewer';
 import '@csv-viewer/ui/styles.css';
 import { acquireDroppedCsvSource, electronCsvViewer } from './electron-csv-viewer';
@@ -27,6 +27,7 @@ window.addEventListener('pagehide', dispose, { once: true });
 import.meta.hot?.dispose(dispose);
 
 applyTheme(getInitialTheme());
+applyPalette(getInitialPalette());
 reactRoot.render(
   <StrictMode>
     <CsvViewerProvider viewer={viewer}>

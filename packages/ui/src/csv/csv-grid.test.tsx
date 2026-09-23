@@ -19,7 +19,7 @@ describe('CsvGrid', () => {
     workingCsv.source.sizeBytes = 100_000_000;
     const tab = new CsvTab(createTestCsvViewer(), workingCsv);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     expect(screen.getByText('100.0 MB')).toBeDefined();
   });
@@ -30,7 +30,7 @@ describe('CsvGrid', () => {
     });
     const tab = new CsvTab(createTestCsvViewer(), workingCsv);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     expect(screen.getByText('Unexported Changes')).toBeDefined();
   });
@@ -40,7 +40,7 @@ describe('CsvGrid', () => {
     tab.setSearch('ada');
     tab.setSelection(['row-1']);
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     expect(screen.getByRole('button', { name: 'Insert row above' }).hasAttribute('disabled')).toBe(false);
     expect(screen.getByRole('button', { name: 'Insert row below' }).hasAttribute('disabled')).toBe(false);
@@ -63,7 +63,7 @@ describe('CsvGrid', () => {
       workingCsv,
     );
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
     await act(async () => {
       screen.getByRole('button', { name: 'Open stats panel' }).click();
     });
@@ -90,7 +90,7 @@ describe('CsvGrid', () => {
       workingCsv,
     );
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     await act(async () => {
       screen.getByRole('button', { name: 'Export CSV' }).click();
@@ -133,14 +133,14 @@ describe('CsvGrid', () => {
       return null;
     };
 
-    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={CaptureGrid} />));
+    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
     expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'email', 'status']);
     expect(latest?.maintainColumnOrder).toBeFalsy();
 
     await act(async () => {
       await tab.renameFocusedColumn('work_email');
     });
-    rerender(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={CaptureGrid} />));
+    rerender(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
 
     expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'work_email', 'status']);
     expect(latest?.maintainColumnOrder).toBeFalsy();
@@ -150,7 +150,7 @@ describe('CsvGrid', () => {
     const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
     tab.setFocusedColumn('id');
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     expect(screen.getByRole('button', { name: 'Rename column' })).toBeDefined();
     await act(async () => {
@@ -169,7 +169,7 @@ describe('CsvGrid', () => {
         ],
       }),
     );
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
     const idHeader = columnHeader('id');
     const idLabel = idHeader.querySelector('span');
     if (!idLabel) throw new Error('missing header label');
@@ -204,7 +204,7 @@ describe('CsvGrid', () => {
         ],
       }),
     );
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
     const header = columnHeader('id');
     await act(async () => {
       header.dispatchEvent(keydown('F2'));
@@ -236,7 +236,7 @@ describe('CsvGrid', () => {
     );
     tab.setFocusedColumn('id');
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
     const search = screen.getByRole('searchbox', { name: 'Global search' });
     const searchEvent = keydown('F2');
@@ -281,7 +281,7 @@ describe('CsvGrid', () => {
     shifted.remove();
 
     cleanup();
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active={false} DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active={false} DataGrid={DataGrid} />));
     const inactiveHeader = columnHeader('email');
     await act(async () => {
       inactiveHeader.dispatchEvent(keydown('F2'));
@@ -303,7 +303,7 @@ describe('CsvGrid', () => {
     );
     tab.setFocusedColumn('id');
 
-    render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
     await act(async () => {
       screen.getByRole('button', { name: 'Rename column' }).click();
     });

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest';
 import { RendererWorkspace } from './renderer-workspace';
 import { App } from './App';
-import { applyTheme, getInitialTheme } from './theme';
+import { applyPalette, applyTheme, getInitialPalette, getInitialSidebarCollapsed, getInitialTheme, saveSidebarCollapsed } from './theme';
 import { createTestCsvViewer, withCsvViewer } from '../test-helpers/csv-viewer';
 
 let workspace: RendererWorkspace;
@@ -13,6 +13,7 @@ afterEach(() => {
   window.localStorage.clear();
   document.documentElement.classList.remove('dark');
   document.documentElement.style.colorScheme = '';
+  delete document.documentElement.dataset.palette;
   vi.unstubAllGlobals();
 });
 
@@ -33,6 +34,17 @@ it('applies the system theme at startup, toggles it, and restores the saved choi
   expect(document.documentElement.classList.contains('dark')).toBe(true);
   expect(document.documentElement.style.colorScheme).toBe('dark');
   expect(window.localStorage.getItem('csv-viewer-theme')).toBe('dark');
+});
+
+it('defaults to Studio colors and an expanded sidebar, and restores saved choices', () => {
+  window.localStorage.setItem('csv-viewer-palette', 'unknown');
+  expect(getInitialPalette()).toBe('studio');
+  expect(getInitialSidebarCollapsed()).toBe(false);
+  applyPalette('terminal');
+  saveSidebarCollapsed(true);
+  expect(document.documentElement.dataset.palette).toBe('terminal');
+  expect(getInitialPalette()).toBe('terminal');
+  expect(getInitialSidebarCollapsed()).toBe(true);
 });
 
 it.each(['getItem', 'setItem'] as const)('keeps theme controls working when storage %s is blocked', async (method) => {

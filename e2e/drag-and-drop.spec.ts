@@ -98,11 +98,11 @@ test('declines a second drop while the first source is being acquired', async ({
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'CSV Viewer', exact: true })).toBeVisible();
   await drop(page, [await file('first.csv')]);
-  await expect(page.locator('header').getByRole('button', { name: 'Opening...', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Opening...', exact: true })).toBeDisabled();
   await drop(page, [await file('second.csv')]);
   await expect(page.getByText('Files are still opening. Try again when finished.', { exact: true })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event('release-drop')));
   await expect(page.getByRole('tab', { name: 'first.csv', exact: true })).toBeVisible();
-  await expect(page.locator('header').getByRole('button', { name: 'Open CSV', exact: true })).toBeEnabled();
+  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true })).toBeEnabled();
   await expect(page.getByRole('tab')).toHaveCount(1);
 });

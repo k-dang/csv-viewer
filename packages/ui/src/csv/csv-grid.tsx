@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
@@ -14,7 +14,6 @@ import {
   RowSelectionModule,
   TextEditorModule,
   TextFilterModule,
-  themeQuartz,
   type CellValueChangedEvent,
   type ColDef,
   type GridApi,
@@ -26,26 +25,25 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
-  Database,
   FileDown,
-  HardDrive,
   Plus,
   Redo2,
   RotateCcw,
   Search,
-  Table2,
   Trash2,
   Undo2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import { gridTheme } from '@/lib/grid-theme';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
 import { copyCell, isCopyCellShortcut } from './copy-column';
 import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors, type AgFilterModel } from './ag-grid-query';
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
-import { QueryStatusBadge } from './query-status-badge';
+import { QueryStatusIndicator } from './query-status-indicator';
 import { CsvStatsPanel } from './csv-stats-panel';
 import { CsvColumnBar } from './csv-column-bar';
 
@@ -62,71 +60,23 @@ ModuleRegistry.registerModules([
   TextFilterModule,
 ]);
 
-const csvGridLightTheme = themeQuartz.withParams({
-  accentColor: '#0f766e',
-  backgroundColor: '#ffffff',
-  borderColor: '#d7dee8',
-  browserColorScheme: 'light',
-  cellFontSize: 13,
-  chromeBackgroundColor: '#f8fafc',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontSize: 13,
-  foregroundColor: '#0f172a',
-  headerBackgroundColor: '#f1f5f9',
-  headerFontSize: 13,
-  headerFontWeight: 700,
-  headerTextColor: '#111827',
-  iconSize: 15,
-  oddRowBackgroundColor: '#f8fafc',
-  rowHeight: 38,
-  selectedRowBackgroundColor: 'rgba(15, 118, 110, 0.12)',
-  spacing: 7,
-  wrapperBorder: false,
-  wrapperBorderRadius: 8,
-});
-
-/** Half of each theme's selectedRowBackgroundColor, so a selected row still reads across the focused column. */
-const csvColumnFocusColor = { light: 'rgba(15, 118, 110, 0.06)', dark: 'rgba(94, 234, 212, 0.08)' };
-
-const csvGridDarkTheme = themeQuartz.withParams({
-  accentColor: '#5eead4',
-  backgroundColor: '#171717',
-  borderColor: '#3f3f46',
-  browserColorScheme: 'dark',
-  cellFontSize: 13,
-  chromeBackgroundColor: '#202020',
-  fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontSize: 13,
-  foregroundColor: '#f5f5f5',
-  headerBackgroundColor: '#262626',
-  headerFontSize: 13,
-  headerFontWeight: 700,
-  headerTextColor: '#fafafa',
-  iconSize: 15,
-  oddRowBackgroundColor: '#1f1f1f',
-  rowHeight: 38,
-  selectedRowBackgroundColor: 'rgba(94, 234, 212, 0.16)',
-  spacing: 7,
-  wrapperBorder: false,
-  wrapperBorderRadius: 8,
-});
-
 const filterDebounceMs = 1500;
 
 export type CsvGridProps = {
   tab: CsvTab;
-  themeMode: 'light' | 'dark';
+  /** Workspace commands about this file (Reopen, Compare), shown at the start of its toolbar. */
+  fileActions?: ReactNode;
   /** Inactive tabs stay mounted but hidden; only the active one answers window shortcuts. */
   active: boolean;
   DataGrid?: ComponentType<AgGridReactProps<CsvRow>>;
 };
 
 /**
- * The row grid and toolbar of one CSV Tab. Every fact shown here is read from the Tab, and every
+ * The toolbar, row grid, and status bar of one CSV Tab. Every fact shown here is read from the Tab, and every
  * action is a Tab command; this view only translates AG Grid models and keeps the grid's own
  * caches and selection in step with the Tab.
  */
-export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvGridProps) {
+export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: CsvGridProps) {
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const {
     workingCsv,
@@ -264,57 +214,60 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
   const canAppendRow = !hasActiveQuery && selectedRowIds.length === 0;
 
   return (
-    <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-lg border bg-card shadow-sm">
-      <div>
-        <div className="flex min-h-[64px] flex-col gap-3 border-b bg-card/90 px-[18px] py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <span
-              className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
-              aria-hidden="true"
-            >
-              <Database className="size-4" />
-            </span>
-            <div className="min-w-0">
-              <h2
-                id="metadata-title"
-                className="truncate text-base font-semibold text-foreground"
-                title={workingCsv.source.name}
-              >
-                {workingCsv.source.name}
-              </h2>
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                <span>
-                  {formatNumber(state.filteredRowCount)} visible of {formatNumber(state.totalRowCount)} rows
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <Table2 className="size-3.5" aria-hidden="true" />
-                  {formatNumber(workingCsv.columns.length)} columns
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <HardDrive className="size-3.5" aria-hidden="true" />
-                  {formatFileSize(workingCsv.source.sizeBytes)}
-                </span>
-                {editState.hasUnexportedChanges ? (
-                  <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
-                    Unexported Changes
-                  </span>
-                ) : null}
-              </div>
-              {editError ? <p className="mt-1 text-sm text-destructive">{editError}</p> : null}
-              {exportConfirmation ? (
-                <p className="mt-1 text-sm font-medium text-emerald-700" role="status">
-                  {exportConfirmation}
-                </p>
-              ) : null}
-            </div>
+    <div className="csv-view grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-card">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2">
+        <div className="min-w-0 max-w-72">
+          <h2 id="metadata-title" className="truncate text-sm font-semibold text-foreground" title={workingCsv.source.name}>
+            {workingCsv.source.name}
+          </h2>
+          <div className="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+            <span>{formatNumber(workingCsv.columns.length)} columns</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatFileSize(workingCsv.source.sizeBytes)}</span>
+            {editState.hasUnexportedChanges ? (
+              <span className="ml-1 rounded-sm bg-amber-100 px-1.5 font-medium text-amber-900 dark:bg-amber-400/15 dark:text-amber-200">
+                Unexported Changes
+              </span>
+            ) : null}
           </div>
-          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-            <QueryStatusBadge state={state.queryStatus} />
-            <div className="flex shrink-0 items-center gap-1">
+        </div>
+        <div className="flex min-w-56 flex-1 items-center gap-1">
+          <label className="sr-only" htmlFor="global-search">
+            Global search
+          </label>
+          <div className="relative min-w-0 flex-1 md:max-w-lg">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              id="global-search"
+              className="h-8 w-full min-w-0 bg-background pr-3 pl-8"
+              type="search"
+              value={query.search}
+              onChange={(event) => tab.setSearch(event.target.value)}
+              placeholder="Search all columns"
+            />
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={clearQuery}
+            disabled={!canClearQuery}
+            title="Clear query"
+            aria-label="Clear query"
+          >
+            <RotateCcw />
+          </Button>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {fileActions}
+          {fileActions ? <Separator orientation="vertical" className="mx-1 h-5 self-center" /> : null}
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.insertRow('above')}
                 disabled={!canInsertRelative}
                 title="Insert row above"
@@ -324,8 +277,8 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.insertRow('below')}
                 disabled={!canInsertRelative}
                 title="Insert row below"
@@ -335,8 +288,8 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.insertRow('append')}
                 disabled={!canAppendRow}
                 title="Append row"
@@ -346,8 +299,8 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.deleteSelectedRows()}
                 disabled={selectedRowIds.length === 0}
                 title="Delete selected rows"
@@ -357,18 +310,8 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => void tab.export()}
-                title="Export CSV"
-                aria-label="Export CSV"
-              >
-                <FileDown />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.undo()}
                 disabled={!editState.canUndo}
                 title="Undo edit"
@@ -378,8 +321,8 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                size="icon"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => void tab.redo()}
                 disabled={!editState.canRedo}
                 title="Redo edit"
@@ -387,51 +330,32 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
               >
                 <Redo2 />
               </Button>
-              <Button
-                type="button"
-                variant={stats.open ? 'default' : 'outline'}
-                size="icon"
-                onClick={() => tab.toggleStats()}
-                title={stats.open ? 'Close stats panel' : 'Open stats panel'}
-                aria-label={stats.open ? 'Close stats panel' : 'Open stats panel'}
-              >
-                <BarChart3 />
-              </Button>
-            </div>
-            <label className="sr-only" htmlFor="global-search">
-              Global search
-            </label>
-            <div className="relative min-w-0 sm:w-[270px]">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                id="global-search"
-                className="w-full min-w-0 bg-card pr-3 pl-9"
-                type="search"
-                value={query.search}
-                onChange={(event) => tab.setSearch(event.target.value)}
-                placeholder="Search all columns"
-              />
-            </div>
-            <Button type="button" variant="outline" onClick={clearQuery} disabled={!canClearQuery}>
-              <RotateCcw />
-              Clear query
-            </Button>
-          </div>
+          <Separator orientation="vertical" className="mx-1 h-5 self-center" />
+          <Button type="button" variant="outline" size="sm" onClick={() => void tab.export()} aria-label="Export CSV">
+            <FileDown />
+            Export
+          </Button>
+          <Button
+            type="button"
+            variant={stats.open ? 'default' : 'ghost'}
+            size="icon-sm"
+            onClick={() => tab.toggleStats()}
+            title={stats.open ? 'Close stats panel' : 'Open stats panel'}
+            aria-label={stats.open ? 'Close stats panel' : 'Open stats panel'}
+          >
+            <BarChart3 />
+          </Button>
         </div>
-        <CsvColumnBar tab={tab} active={active} />
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           {focusedColumn ? (
             // Tints the Column Bar's column without rebuilding columnDefs on every focus change.
-            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: ${csvColumnFocusColor[themeMode]}; }`}</style>
+            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: color-mix(in oklch, var(--primary) 7%, transparent); }`}</style>
           ) : null}
           <DataGrid
             key={workingCsv.workingCsvId}
-            theme={themeMode === 'dark' ? csvGridDarkTheme : csvGridLightTheme}
+            theme={gridTheme}
             columnDefs={columnDefs}
             defaultColDef={{
               editable: true,
@@ -462,6 +386,20 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
           />
         </div>
         {stats.open ? <CsvStatsPanel tab={tab} /> : null}
+      </div>
+      <div className="flex h-8 min-w-0 items-center gap-3 border-t bg-muted/40 px-3 text-xs">
+        <QueryStatusIndicator state={state.queryStatus} />
+        <Separator orientation="vertical" className="h-4 self-center" />
+        <CsvColumnBar tab={tab} active={active} />
+        {editError ? <span className="min-w-0 truncate text-destructive">{editError}</span> : null}
+        {exportConfirmation ? (
+          <span className="shrink-0 font-medium text-emerald-700 dark:text-emerald-400" role="status">
+            {exportConfirmation}
+          </span>
+        ) : null}
+        <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+          {formatNumber(state.filteredRowCount)} visible of {formatNumber(state.totalRowCount)} rows
+        </span>
       </div>
     </div>
   );

@@ -15,21 +15,18 @@ const headerModeLabels = {
   no: 'None',
 } satisfies Record<CsvHeaderMode, string>;
 
-/** Parse options for the next open, shown as two labeled compact controls in the header. */
-export function DialectControls({
-  delimiter,
-  headerMode,
-  onDelimiterChange,
-  onHeaderModeChange,
-}: {
+export type DialectControlsProps = {
   delimiter: string;
   headerMode: CsvHeaderMode;
   onDelimiterChange: (value: string) => void;
   onHeaderModeChange: (value: CsvHeaderMode) => void;
-}) {
+};
+
+/** Parse options for the next open, as two labeled compact controls stacked in the Parse options popover. */
+export function DialectControls({ delimiter, headerMode, onDelimiterChange, onHeaderModeChange }: DialectControlsProps) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <div className="flex items-center gap-1.5">
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-1.5">
         <Label htmlFor="csv-delimiter" className="text-xs text-muted-foreground">
           Delimiter
         </Label>
@@ -43,7 +40,7 @@ export function DialectControls({
           title="Delimiter override"
         />
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center justify-between gap-1.5">
         <Label htmlFor="csv-header-mode" className="text-xs text-muted-foreground">
           Headers
         </Label>

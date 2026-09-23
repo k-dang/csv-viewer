@@ -7,7 +7,7 @@ import { formatNumber } from './csv-format';
 import { copyColumn, isCopyColumnShortcut } from './copy-column';
 
 /**
- * The strip between the toolbar and the row grid that names the focused column, renames it, and copies it.
+ * The status bar section that names the focused column, renames it, and copies it.
  * F2 starts rename only while a Working CSV column header has keyboard focus. Focus on a cell, the
  * search box, or any other control leaves F2 to that control, so the grid can still edit a cell.
  * Ctrl+Shift+A copies the focused column from anywhere that is not a text field.
@@ -50,7 +50,7 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
   const f2Rename = headerRename?.column === focusedColumn ? headerRename : null;
 
   return (
-    <div ref={bindKeys} className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
+    <div ref={bindKeys} className="flex min-w-0 flex-1 items-center gap-2">
       {focusedColumn ? (
         <FocusedColumnBar
           key={f2Rename ? `header-rename:${f2Rename.serial}:${focusedColumn}` : `focused-column:${focusedColumn}`}
@@ -60,7 +60,7 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           initialRenaming={f2Rename !== null}
         />
       ) : (
-        <span className="text-muted-foreground">Select a cell to copy its column.</span>
+        <span className="truncate text-muted-foreground">Select a cell to copy its column.</span>
       )}
     </div>
   );
@@ -89,7 +89,7 @@ function FocusedColumnBar({
     <>
       {renaming ? (
         <form
-          className="flex min-w-0 flex-1 items-center gap-2"
+          className="flex min-w-0 items-center gap-1.5"
           onSubmit={(event) => {
             event.preventDefault();
             void commitRename();
@@ -110,19 +110,19 @@ function FocusedColumnBar({
                 setDraft(focusedColumn);
               }
             }}
-            className="h-8 max-w-xs"
+            className="h-6 max-w-56 px-2 text-xs"
             autoFocus
           />
         </form>
       ) : (
-        <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
+        <span className="min-w-0 truncate font-semibold text-foreground">{focusedColumn}</span>
       )}
       <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-0.5">
         <Button
           type="button"
-          variant="outline"
-          size="sm"
+          variant="ghost"
+          size="xs"
           title="Rename column (F2 on the column header)"
           aria-pressed={renaming}
           onClick={() => {
@@ -140,8 +140,8 @@ function FocusedColumnBar({
         </Button>
         <Button
           type="button"
-          variant="outline"
-          size="sm"
+          variant="ghost"
+          size="xs"
           title="Copy column (Ctrl+Shift+A on a cell)"
           onClick={() => void copyColumn(tab)}
         >

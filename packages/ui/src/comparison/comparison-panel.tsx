@@ -16,12 +16,12 @@ import { ComparisonGrid } from './comparison-grid';
  * The header, status banners, and result body of one Comparison Tab. Every part reads the Tab
  * through `useSyncExternalStore` and runs Tab commands directly; only DOM focus is decided here.
  */
-export function ComparisonPanel({ tab, themeMode }: { tab: ComparisonTab; themeMode: 'light' | 'dark' }) {
+export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_1fr]" aria-label="CSV comparison">
       <ComparisonHeader tab={tab} />
       <ComparisonStatus tab={tab} />
-      <ComparisonBody tab={tab} themeMode={themeMode} />
+      <ComparisonBody tab={tab} />
     </section>
   );
 }
@@ -194,14 +194,14 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
   );
 }
 
-function ComparisonBody({ tab, themeMode }: { tab: ComparisonTab; themeMode: 'light' | 'dark' }) {
+function ComparisonBody({ tab }: { tab: ComparisonTab }) {
   const { comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const attempt = comparison.lastAttempt;
   if (comparison.applied) {
     return (
       <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
         <ComparisonSummaryBar tab={tab} summary={comparison.applied.summary} />
-        <ComparisonGrid tab={tab} applied={comparison.applied} themeMode={themeMode} />
+        <ComparisonGrid tab={tab} applied={comparison.applied} />
       </div>
     );
   }
