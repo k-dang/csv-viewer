@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ArrowLeftRight, FolderOpen, Keyboard, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
@@ -36,13 +36,13 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   const activeTab = openTabs.find((tab) => tab.id === activeTabId);
   const activeCsvTab = activeTab?.kind === 'csv' ? activeTab.tab : null;
 
-  function toggleTheme() {
-    const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
-    applyTheme(nextTheme);
-    setThemeMode(nextTheme);
-  }
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const warnOnPageUnloadRef = useRef(viewer.capabilities.warnOnPageUnload);
+  warnOnPageUnloadRef.current = viewer.capabilities.warnOnPageUnload;
 
-  useEffect(() => {
+  const bindShell = useCallback((node: HTMLElement | null) => {
+    if (!node) return;
     function handleKeyDown(event: KeyboardEvent) {
       if (isHelpToggle(event)) {
         event.preventDefault();
@@ -51,23 +51,27 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
       }
       if (event.key === 'Tab' && event.ctrlKey) {
         event.preventDefault();
-        workspace.cycle(event.shiftKey ? -1 : 1);
+        workspaceRef.current.cycle(event.shiftKey ? -1 : 1);
       }
     }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [workspace]);
-
-  useEffect(() => {
-    if (!viewer.capabilities.warnOnPageUnload) return;
     function warnBeforeUnload(event: BeforeUnloadEvent) {
-      if (!workspace.hasUnexportedChanges()) return;
+      if (!warnOnPageUnloadRef.current || !workspaceRef.current.hasUnexportedChanges()) return;
       event.preventDefault();
       event.returnValue = '';
     }
+    window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('beforeunload', warnBeforeUnload);
-    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
-  }, [viewer.capabilities.warnOnPageUnload, workspace]);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', warnBeforeUnload);
+    };
+  }, []);
+
+  function toggleTheme() {
+    const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
+    applyTheme(nextTheme);
+    setThemeMode(nextTheme);
+  }
 
   async function showCandidatePicker() {
     const candidates = await workspace.candidates();
@@ -86,7 +90,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
 
   if (fatalError !== null) {
     return (
-      <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+      <main ref={bindShell} className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
         <section
           className="grid w-full max-w-xl gap-5 rounded-xl border bg-card p-7 shadow-sm"
           role="alert"
@@ -114,7 +118,7 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
   }
 
   return (
-    <main className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
+    <main ref={bindShell} className="app-shell grid min-h-screen min-w-0 grid-rows-[auto_1fr] md:min-w-[720px]">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-card/92 px-4 py-2 backdrop-blur md:h-14 md:flex-nowrap md:py-0">
         <div className="flex min-w-0 items-center gap-2.5">
           <div
