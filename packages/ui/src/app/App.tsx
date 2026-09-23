@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, ArrowLeftRight, FolderOpen, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, FolderOpen, Keyboard, Loader2, Moon, RefreshCw, Sun, Table2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { FieldError } from '@/components/ui/field';
@@ -162,6 +162,16 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
             </Button>
           ) : null}
           <Separator orientation="vertical" className="hidden md:my-1 md:block" />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setHelpOpen((open) => !open)}
+            title="Keyboard shortcuts"
+            aria-label="Keyboard shortcuts"
+          >
+            <Keyboard />
+          </Button>
           <Button
             type="button"
             variant="ghost"

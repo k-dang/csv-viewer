@@ -313,6 +313,22 @@ describe('App', () => {
     },
   );
 
+  it('opens the keyboard shortcuts panel from the header button and closes it on a second click', () => {
+    const viewer = createTestCsvViewer({
+      handlers: { 'csv.get-recent-sources': async () => [] },
+    });
+    render(
+      <CsvViewerProvider viewer={viewer}>
+        <App workspace={createWorkspace(viewer)} />
+      </CsvViewerProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+  });
+
   it('opens the keyboard shortcuts panel on Ctrl+/ and closes it on a second Ctrl+/', () => {
     const viewer = createTestCsvViewer({
       handlers: { 'csv.get-recent-sources': async () => [] },
