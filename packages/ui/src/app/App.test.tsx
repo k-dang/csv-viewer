@@ -341,10 +341,17 @@ describe('App', () => {
 
     fireEvent.keyDown(window, { key: '/', ctrlKey: true });
     const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
-    expect(dialog.textContent).toContain('F2');
-    expect(dialog.textContent).toContain(
-      'Rename the column whose header is focused. F2 on a cell edits the cell.',
-    );
+    const text = dialog.textContent ?? '';
+    expect(text).toContain('F2');
+    expect(text).toContain('Rename the column whose header is focused. F2 on a cell edits the cell.');
+    expect(text).toContain('Copy the focused column from anywhere that is not a text field.');
+    expect(text).toContain('Ctrl+Tab cycles every tab, including from a text field. Cmd+Tab is not a shortcut.');
+    expect(text).toContain('Ctrl+Shift+Tab cycles every tab backward. Cmd+Shift+Tab is not a shortcut.');
+    expect(text).toContain('Show or hide this panel while CSV Viewer is focused.');
+    expect(text).not.toContain('Commit rename');
+    expect(text).not.toContain('Cancel rename');
+    expect(text).not.toContain('Copy cell');
+    expect(text).not.toContain('Close this panel');
 
     fireEvent.keyDown(window, { key: '/', ctrlKey: true });
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
