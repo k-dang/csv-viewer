@@ -31,6 +31,6 @@ The user clarified that standard Effect output is sufficient for agents to inves
 
 Only approved identifiers and normalized outcomes are logged. Cleanup retains its original operation context. Shared CsvViewer tests capture standard Effect logger events and formatted text, including success, cancellation, invalid keys, source changes, failures, deferred table cleanup, cleanup retries and a throwing logger.
 
-See [Local Comparison diagnostics](../../../docs/local-diagnostics.md) for capture instructions and field meanings. Desktop output comes from the main-process console; web output comes from the browser console. Browser navigation can stop JavaScript before final disposal logs are emitted.
+See [Read diagnostics](../../../.agents/skills/verify-csv-viewer/SKILL.md#read-diagnostics) for capture instructions and timing interpretation.
 
 Validation passed: type checks, lint, 351 tests across 33 files, and both application builds. The suite includes 22 native and Wasm diagnostic contracts. Live desktop and web checks emitted Effect-formatted success, invalid-key, resource release and disposal logs. Local evidence is in `.agents/skills/verify-csv-viewer/evidence/issue2/desktop-diagnostics.log` and `web-diagnostics.log`, with UI screenshots and snapshots alongside them. Web disposal used a controlled page-hide event with the context kept alive for observation; normal navigation remains best effort.

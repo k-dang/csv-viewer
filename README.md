@@ -62,7 +62,6 @@ pnpm run dev:web
 
 ## Contributing
 
-Before submitting changes, run `pnpm run test` and `pnpm run build`.
+Before submitting changes, run `pnpm test`, `pnpm test:browser`, and `pnpm build`.
 
-- [Development](docs/development.md): commands, testing, packaging, and deployment.
-- [Local diagnostics](docs/local-diagnostics.md): operation timings, outcomes, and cleanup logs.
+Install the browser test dependency once with `pnpm exec playwright install chromium`. On Linux, add `--with-deps`.
