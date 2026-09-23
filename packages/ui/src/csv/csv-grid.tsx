@@ -391,7 +391,11 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         <QueryStatusIndicator state={state.queryStatus} />
         <Separator orientation="vertical" className="h-4 self-center" />
         <CsvColumnBar tab={tab} active={active} />
-        {editError ? <span className="min-w-0 truncate text-destructive">{editError}</span> : null}
+        {editError ? (
+          <span className="min-w-0 truncate text-destructive" role="alert" title={editError}>
+            {editError}
+          </span>
+        ) : null}
         {exportConfirmation ? (
           <span className="shrink-0 font-medium text-emerald-700 dark:text-emerald-400" role="status">
             {exportConfirmation}

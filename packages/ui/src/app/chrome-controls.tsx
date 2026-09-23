@@ -130,7 +130,9 @@ export function AppearanceControls({
                 onClick={() => onPaletteChange(name)}
                 className={cn(
                   'justify-start',
-                  palette === name && 'border-primary bg-accent text-accent-foreground hover:bg-accent',
+                  // The dark: repeats outrank the outline variant's own dark: border and background.
+                  palette === name &&
+                    'border-primary bg-accent text-accent-foreground hover:bg-accent dark:border-primary dark:bg-accent dark:hover:bg-accent',
                 )}
               >
                 <span
