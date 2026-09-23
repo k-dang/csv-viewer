@@ -26,24 +26,6 @@ const shortcutSections: readonly ShortcutSection[] = [
         detail: 'Rename the column whose header is focused. F2 on a cell edits the cell.',
       },
       {
-        chords: [['Enter']],
-        label: 'Commit rename',
-        detail: 'Commit the name while the column field is open.',
-      },
-      {
-        chords: [['Esc']],
-        label: 'Cancel rename',
-        detail: 'Discard the name while the column field is open.',
-      },
-      {
-        chords: [
-          ['Ctrl', 'C'],
-          ['⌘', 'C'],
-        ],
-        label: 'Copy cell',
-        detail: 'Copy the focused cell. An open editor or a text selection keeps the browser copy.',
-      },
-      {
         chords: [
           ['Ctrl', 'Shift', 'A'],
           ['⌘', 'Shift', 'A'],
@@ -73,11 +55,6 @@ const shortcutSections: readonly ShortcutSection[] = [
         ],
         label: 'Keyboard shortcuts',
         detail: 'Show or hide this panel while CSV Viewer is focused.',
-      },
-      {
-        chords: [['Esc']],
-        label: 'Close shortcuts',
-        detail: 'Close this panel.',
       },
     ],
   },
