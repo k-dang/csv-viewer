@@ -16,6 +16,7 @@ import {
   type ConfirmWorkspaceCloseOutcome,
 } from '../../src/csv-viewer';
 
+import type { WorkspaceDiagnostics } from '../../src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
 
 /**
@@ -41,7 +42,7 @@ export interface WorkspaceContractFixture {
 
 export type WorkspaceContractFactory = {
   name: string;
-  create(executor?: ComparisonExecutor): Promise<WorkspaceContractFixture>;
+  create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WorkspaceContractFixture>;
 };
 
 /** The internal row identifiers of a row window, in order. */

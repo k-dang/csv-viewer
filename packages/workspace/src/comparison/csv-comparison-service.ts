@@ -1,3 +1,4 @@
+import { diagnosticCause, observeStage, recordOutcome } from '../workspace-diagnostics';
 import { Cause, Deferred, Effect, Exit, Fiber, type Scope } from 'effect';
 import { DataEngineError } from '../database';
 import type {
@@ -35,7 +36,7 @@ import {
   validateKeySelection,
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
-import { ComparisonCleanupError } from './comparison-effects';
+import { ComparisonCleanup, ComparisonCleanupError } from './comparison-effects';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -238,13 +239,22 @@ export class CsvComparisonService {
     };
     const ready = yield* Deferred.make<void>();
     const completed = yield* Deferred.make<ComparisonAttemptOutcome>();
+    const cleanup = { failed: false };
     const fiber = yield* Effect.forkIn(
       Effect.scoped(Deferred.await(ready).pipe(
         // Return from admission before starting database work.
         Effect.andThen(Effect.yieldNow),
         Effect.andThen(this.compute(entity, operation, [...key])),
       )).pipe(
-        Effect.onExit((result) => Deferred.succeed(completed, this.finishAttempt(entity, operation, result))),
+        Effect.onExit((result) => Effect.gen({ self: this }, function* () {
+          const outcome = this.finishAttempt(entity, operation, result);
+          const cause = Exit.isFailure(result) ? result.cause : undefined;
+          yield* recordOutcome(outcome.status, cause, cleanup.failed || (cause && diagnosticCause(cause) === 'cleanup-failed') ? 'cleanup-failed' : 'succeeded');
+          yield* Deferred.succeed(completed, outcome);
+        })),
+        (effect) => observeStage('comparison.compute', effect),
+        Effect.provideService(ComparisonCleanup, cleanup),
+        Effect.annotateSpans({ comparisonId: entity.comparisonId, operationId: operation.operationId, baselineId: entity.baselineId, candidateId: entity.candidateId }),
       ),
       this.workspaceScope,
       // Install settlement before a running-state subscriber can request cancellation.
@@ -403,7 +413,7 @@ export class CsvComparisonService {
     if (entity.snapshot) {
       const result = yield* Effect.exit(this.executor.dropSnapshot(entity.snapshot.artifactId));
       if (Exit.isFailure(result)) {
-        console.error(`Failed to clean up Comparison ${comparisonId}.`, result.cause);
+        yield* recordOutcome('failed', result.cause);
         return {
           status: 'failed',
           failure: {
@@ -469,9 +479,6 @@ export class CsvComparisonService {
     operation: Operation,
     result: Exit.Exit<AttemptResult, DataEngineError>,
   ): ComparisonAttemptOutcome {
-    if (Exit.isFailure(result) && !Cause.hasInterruptsOnly(result.cause)) {
-      console.error(`Comparison operation ${operation.operationId} failed.`, result.cause);
-    }
     // Cancellation or cleanup failure after publication must preserve the committed result.
     if (entity.snapshot?.artifactId === operation.operationId) {
       return this.settle(entity, operation, { attemptId: operation.operationId, status: 'applied' });
@@ -514,9 +521,9 @@ export class CsvComparisonService {
       };
     }
     const captured = { baseline: baseline.dataRevision, candidate: candidate.dataRevision };
-    const executor = yield* this.executor.openAttempt();
-    const baselineDiagnostics = yield* executor.validateKey(entity.baselineId, key);
-    const candidateDiagnostics = yield* executor.validateKey(entity.candidateId, key);
+    const executor = yield* observeStage('comparison.acquire-worker', this.executor.openAttempt());
+    const baselineDiagnostics = yield* observeStage('comparison.validate-key', executor.validateKey(entity.baselineId, key)).pipe(Effect.annotateSpans({ workingCsvId: entity.baselineId }));
+    const candidateDiagnostics = yield* observeStage('comparison.validate-key', executor.validateKey(entity.candidateId, key)).pipe(Effect.annotateSpans({ workingCsvId: entity.candidateId }));
     const diagnostics: ComparisonKeyDiagnostics = {
       key,
       baseline: baselineDiagnostics,
@@ -540,14 +547,14 @@ export class CsvComparisonService {
           )
         : Effect.void,
     ));
-    const summary = yield* executor.createSnapshot({
+    const summary = yield* observeStage('comparison.snapshot', executor.createSnapshot({
       artifactId: operation.operationId,
       comparisonId: entity.comparisonId,
       baselineId: entity.baselineId,
       candidateId: entity.candidateId,
       key,
       valueColumns,
-    });
+    }));
     operation.phase = 'summarizing';
     this.publishChange(entity);
     yield* Effect.yieldNow;
@@ -596,7 +603,6 @@ export class CsvComparisonService {
     const retired = yield* Effect.exit(this.executor.dropSnapshot(artifactId));
     if (Exit.isFailure(retired)) {
       this.pendingRetirements.add(artifactId);
-      console.error(`Failed to retire Comparison snapshot ${artifactId}.`, retired.cause);
       return yield* Effect.failCause(retired.cause);
     }
     this.pendingRetirements.delete(artifactId);
@@ -759,7 +765,6 @@ export class CsvComparisonService {
 
   private publishChange(entity: ComparisonRecord): void {
     if (!this.csvs.getState(entity.baselineId) || !this.csvs.getState(entity.candidateId)) {
-      console.error(`Comparison ${entity.comparisonId} has an unavailable source projection.`);
       return;
     }
     entity.version += 1;
@@ -770,8 +775,8 @@ export class CsvComparisonService {
     for (const listener of this.listeners) {
       try {
         listener(event);
-      } catch (error) {
-        console.error('Comparison event subscriber failed.', error);
+      } catch {
+        // A subscriber cannot prevent other subscribers or resource cleanup.
       }
     }
   }

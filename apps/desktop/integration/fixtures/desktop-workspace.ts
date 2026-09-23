@@ -16,6 +16,7 @@ import type {
   WorkingCsvView,
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
+import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
@@ -53,7 +54,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(executor?: ComparisonExecutor): Promise<CsvWorkspaceFixture> {
+  static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<CsvWorkspaceFixture> {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-'));
     const prompts: ScriptedPrompts = {
       sourceChoices: [],
@@ -80,7 +81,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      workspace = new CsvWorkspaceImplementation(host, new DuckDbWorkspaceDatabase(), executor);
+      workspace = new CsvWorkspaceImplementation(host, new DuckDbWorkspaceDatabase(), executor, diagnostics);
       return new CsvWorkspaceFixture(directory, workspace, host, prompts);
     } catch (error) {
       await workspace?.dispose().catch(() => undefined);

@@ -28,7 +28,7 @@ The renderer-facing CsvViewer remains a transport contract with serializable req
 6. As a maintainer, I want diagnostics to distinguish expected failure, interruption, and unexpected defects, so that I can investigate the correct cause.
 7. As a maintainer, I want cleanup failures associated with the original operation, so that a secondary failure does not hide what first went wrong.
 8. As a maintainer, I want usable local structured logs, so that I can diagnose failures without a remote observability account.
-9. As a maintainer, I want a documented development trace viewer setup, so that I can inspect operation timings and parent-child relationships.
+9. As a maintainer, I want documented local diagnostic output that an agent can read, so that I can inspect operation timings and parent-child relationships.
 10. As a user, I want CSV contents and local file paths excluded from diagnostic attributes, so that troubleshooting preserves Local Processing and source privacy.
 11. As a user, I want a Comparison to continue after its begin request is accepted, so that the interface remains responsive while results are computed.
 12. As a user, I want cancelling a Comparison to stop its database work before resources are released, so that later operations remain reliable.
@@ -42,7 +42,7 @@ The renderer-facing CsvViewer remains a transport contract with serializable req
 20. As a user, I want close confirmation to continue reflecting current Unexported Changes and dependent Comparisons, so that I can make an informed decision before discarding work.
 21. As a user, I want the same results and failure behavior on desktop and web, so that runtime differences do not change how I use CSV Viewer.
 22. As a maintainer, I want to test migrated behavior through the existing CsvViewer contract, so that tests survive internal refactoring.
-23. As a maintainer, I want tests to capture logs and traces through workspace configuration, so that observability can be verified without a running viewer or network collector.
+23. As a maintainer, I want tests to capture Effect log events through workspace configuration, so that observability can be verified through in-memory capture.
 24. As a maintainer, I want completed migrations to remove the orchestration they replace, so that I do not have to maintain two competing implementations.
 
 ## Implementation Decisions
@@ -60,8 +60,8 @@ The renderer-facing CsvViewer remains a transport contract with serializable req
 - Model recoverable internal failures explicitly and translate them once into the existing public outcomes. Keep user cancellation and invalid Comparison Keys as their existing product outcomes. Unexpected defects and cleanup failures retain diagnostic causes without exposing raw engine details to callers.
 - Name top-level spans by operation, including CSV open, CSV reopen, Comparison computation, and workspace disposal. Add child spans for stages that explain latency or cleanup, such as source access, table preparation, Comparison Key validation, snapshot computation, and resource release. Avoid spans for each row or cell.
 - Correlate logs and traces using opaque identifiers already available to the operation, adding a workspace or request identifier where needed. Record terminal product outcome separately from Effect success so a returned failure outcome cannot appear as a successful product operation. Capture interruption, failure category, timing, and cleanup result.
-- Use Effect's logging and tracing facilities directly. Configure a local structured logger and an existing development trace viewer compatible with the installed Effect release. Document the exact setup and prove it works on both runtimes. A new telemetry framework or custom viewer is unnecessary.
-- Keep the default diagnostic output local. Trace and log fields use an allowlist of identifiers, stage names, timings, counts, and normalized outcomes. Do not serialize request payloads, CSV values, CSV Source names or locations, raw SQL, or unsanitized driver errors into diagnostic output. A local development collector, if required by the chosen tooling, is explicitly enabled and receives only these sanitized records.
+- Use Effect's logging and tracing facilities directly. Configure local structured output that agents can read to inspect stage timings, parent-child relationships, outcomes and cleanup. Document how to capture it and prove it works on both runtimes.
+- Keep the default diagnostic output local. Trace and log fields use an allowlist of identifiers, stage names, timings, counts, and normalized outcomes. Do not serialize request payloads, CSV values, CSV Source names or locations, raw SQL, or unsanitized driver errors into diagnostic output.
 - Diagnostic output must not block resource cleanup or change a successful product result when a development viewer is absent or disconnected. Use existing tooling's bounded handling of diagnostic output rather than introducing a new buffering subsystem.
 - Keep pure query construction, comparison presentation, serialization, and edit-history calculations as ordinary functions. Introduce dependencies at existing real seams; Effect adoption does not require a new module or Layer for every helper.
 - Delete superseded promise orchestration, obsolete logging, and temporary migration shims in each completed increment. Retain promises where native libraries or transport require them. Keep comments and architecture documentation aligned with the resulting ownership model.
@@ -71,7 +71,7 @@ The renderer-facing CsvViewer remains a transport contract with serializable req
 - Use CsvViewer requests and emitted events as the primary behavioral seam, with the existing workspace-owner confirmation and disposal interface for lifecycle assertions. Run the shared workspace contracts against both native DuckDB and DuckDB-Wasm. Preserve this highest shared seam rather than introducing a parallel internal test interface.
 - Reuse the Working CSV, comparison, editing, and lifecycle contract suites. They already cover real comparison execution, source changes during generation, closing dependent work, rejecting late admission, waiting for admitted opens and reads, concurrent mutations, and idempotent disposal.
 - A good test asserts results, event sequences, retained user data, released resources, or emitted diagnostic meaning. Do not assert Effect combinator choices, private maps, fiber identifiers, exact timestamps, or incidental log formatting.
-- Capture logs and completed spans through the diagnostic dependencies supplied at workspace composition. Drive ordinary requests through CsvViewer and verify operation correlation, stage relationships, terminal outcome classification, and cleanup evidence. Use a sentinel CSV value and source location to verify neither appears in captured diagnostics.
+- Capture standard Effect logger events through the logger supplied at workspace composition. Drive ordinary requests through CsvViewer and verify operation correlation, stage relationships, terminal outcome classification, and cleanup evidence. Use a sentinel CSV value and source location to verify neither appears in captured diagnostics.
 - Exercise Comparison success, invalid Comparison Key, cancellation during database work, source-change races, and cleanup failure. Verify accepted background work survives the begin request and cannot outlive workspace disposal. Use existing controlled executors or driver tests for deterministic failure and cancellation timing.
 - Exercise failed CSV open after partial allocation, failed reopen preserving the prior Working CSV, successful replacement with an active reader, and disposal racing an admitted open. Assert ownership through continued query behavior and existing resource observations rather than inspecting implementation internals.
 - Keep narrow driver tests where they are necessary to prove that cancellation settles an underlying query before cleanup. Shared contract tests cannot substitute for this adapter-specific guarantee.
@@ -85,17 +85,17 @@ The renderer-facing CsvViewer remains a transport contract with serializable req
 - Rebuilding DuckDB-Wasm startup and fatal-worker recovery as a separate Effect project. Make only the composition and disposal adjustments required to preserve existing behavior.
 - New user-facing cancellation controls, retry policies, timeout policies, or changes to Comparison and Working CSV outcomes.
 - Replacing shared-table ownership rules solely because Effect scopes are available.
-- Remote telemetry services, production collectors, analytics, durable diagnostic archives, custom trace viewers, and benchmark or metrics dashboards.
+- Separate trace viewers, telemetry collectors, remote telemetry services, analytics, durable diagnostic archives, and benchmark or metrics dashboards.
 - An Effect version upgrade unless implementation identifies and documents a concrete compatibility requirement.
 
 ## Further Notes
 
 The architectural direction comes from the user's preference for broader Effect adoption to improve observability and maintainability. The bounded first adoption scope is comparison consolidation followed by CSV open/reopen. The remaining workspace operations can adopt the same model in later work.
 
-The user confirmed the existing CsvViewer contracts as the test seam, including requests, events, and workspace disposal across desktop and web, with logs and traces captured at workspace composition.
+The user confirmed the existing CsvViewer contracts as the test seam, including requests, events, and workspace disposal across desktop and web, with Effect log events captured at workspace composition.
 
 Completion requires both migration increments, preserved desktop and web behavior, working local diagnostic output, and evidence that a maintainer can follow an operation to the step it reached, its outcome, and its cleanup result. Merely wrapping existing promises in Effect or adding span names without a usable diagnostic output does not complete the feature.
 
-Use the installed Effect release as the implementation authority. Consult its source and matching documentation before choosing runtime, tracing, or scope APIs. Relevant references include [Effect resource scopes](https://effect.website/docs/v4/resource-management/scope), [structured logging and annotations](https://effect.website/docs/v4/observability/logging), and [Effect developer tools](https://effect.website/docs/v4/getting-started/devtools).
+Use the installed Effect release as the implementation authority. Consult its source and matching documentation before choosing runtime, tracing, or scope APIs. Relevant references include [Effect resource scopes](https://effect.website/docs/v4/resource-management/scope), [structured logging and annotations](https://effect.website/docs/v4/observability/logging).
 
 ## Comments

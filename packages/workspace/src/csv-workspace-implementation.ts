@@ -1,3 +1,4 @@
+import { observeStage, recordOutcome, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Cause, Effect, Exit } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { Comparisons, WorkingCsv, makeWorkspaceRuntime } from './workspace-runtime';
@@ -37,6 +38,7 @@ type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${st
 export class CsvWorkspaceImplementation implements CsvViewer {
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
+  private readonly workspaceId = crypto.randomUUID();
   private disposal: Promise<void> | null = null;
   private readonly runtime: ReturnType<typeof makeWorkspaceRuntime>;
 
@@ -44,8 +46,9 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     private readonly host: CsvWorkspaceHost,
     database: WorkspaceDatabase,
     executor?: ComparisonExecutor,
+    diagnostics?: WorkspaceDiagnostics,
   ) {
-    this.runtime = makeWorkspaceRuntime(host, database, executor);
+    this.runtime = makeWorkspaceRuntime(host, database, executor, diagnostics);
     this.csvStore = this.runtime.runSync(WorkingCsv);
     this.comparisonStore = this.runtime.runSync(Comparisons);
   }
@@ -107,26 +110,29 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return this.beginComparison(request);
       case 'comparison.cancel':
         if (!this.comparisonStore.getState(request.comparisonId)) return Promise.resolve({ status: 'comparison-not-found' });
-        return this.runEffect(this.comparisonStore.cancel(request));
+        return this.runEffect(this.comparisonStore.cancel(request).pipe(Effect.tap((result) => recordOutcome(result.status))), 'comparison.cancel', { comparisonId: request.comparisonId, operationId: request.operationId });
       case 'comparison.get-window':
-        return this.runEffect(this.comparisonStore.getWindow(request));
+        return this.runEffect(this.comparisonStore.getWindow(request).pipe(Effect.tap((result) => recordOutcome(result.status))), 'comparison.get-window', { comparisonId: request.comparisonId });
       case 'comparison.swap':
         return Promise.resolve(this.comparisonStore.swap(request.comparisonId));
       case 'comparison.close':
         if (!this.comparisonStore.getState(request.comparisonId)) {
           return Promise.resolve({ status: 'closed', comparisonId: request.comparisonId });
         }
-        return this.runEffect(this.comparisonStore.close(request.comparisonId));
+        return this.runEffect(this.comparisonStore.close(request.comparisonId).pipe(Effect.tap((result) => recordOutcome(result.status))), 'comparison.close', { comparisonId: request.comparisonId });
       default:
         return unsupportedOperation(request);
     }
   }
 
   /** The shared promise boundary retains all causes when operation and cleanup both fail. */
-  private async runEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-    const result = await this.runtime.runPromiseExit(effect);
+  private async runEffect<A, E>(effect: Effect.Effect<A, E>, stage?: string, identifiers?: { comparisonId?: string; operationId?: string; workingCsvId?: string }): Promise<A> {
+    const traced = stage ? observeStage(stage, effect) : effect;
+    const context = { workspaceId: this.workspaceId, requestId: crypto.randomUUID(), ...identifiers };
+    const result = await this.runtime.runPromiseExit(traced.pipe(
+      Effect.annotateSpans(context),
+    ));
     if (Exit.isSuccess(result)) return result.value;
-    console.error('Workspace operation failed.', result.cause);
     if (result.cause.reasons.length > 1) {
       throw new AggregateError(Cause.prettyErrors(result.cause), 'Unable to complete all workspace operations.', {
         cause: result.cause,
@@ -218,7 +224,10 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       Effect.map((result): BeginComparisonResult => result.status === 'accepted'
         ? { status: 'accepted', operationId: result.operationId }
         : result),
-    ));
+      Effect.tap((result) => result.status === 'accepted'
+        ? Effect.annotateCurrentSpan('operationId', result.operationId).pipe(Effect.andThen(recordOutcome(result.status)))
+        : recordOutcome(result.status)),
+    ), 'comparison.begin', { comparisonId: request.comparisonId });
   }
 
   private async closeCsv(request: CloseWorkingCsvRequest): Promise<CloseWorkingCsvOutcome> {
@@ -249,15 +258,14 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return { status: 'confirmation-required', impact };
       }
       const closedComparisonIds = impact.dependentComparisons.map((comparison) => comparison.comparisonId);
-      await this.runEffect(this.comparisonStore.closeDependents(workingCsvId));
+      await this.runEffect(this.comparisonStore.closeDependents(workingCsvId), 'comparison.close', { workingCsvId });
       await this.csvStore.closeWorkingCsv(workingCsvId);
       return {
         status: 'closed',
         closedWorkingCsvId: workingCsvId,
         closedComparisonIds,
       };
-    } catch (error) {
-      console.error(`Failed to close Working CSV ${workingCsvId}.`, error);
+    } catch {
       return {
         status: 'failed',
         failure: {
@@ -340,8 +348,10 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private async disposeWorkspace(): Promise<void> {
-    await this.runEffect(this.comparisonStore.dispose());
-    await this.csvStore.disposeStore();
+    await this.runEffect(Effect.gen({ self: this }, function* () {
+      yield* observeStage('comparison.dispose', this.comparisonStore.dispose());
+      yield* observeStage('workspace.release-csvs', Effect.tryPromise(() => this.csvStore.disposeStore()));
+    }), 'workspace.dispose');
     await this.runtime.dispose();
   }
 }

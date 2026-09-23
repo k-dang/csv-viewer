@@ -1,3 +1,4 @@
+import { defineDiagnosticsContract } from './diagnostics.contract';
 import { defineCsvViewerRequestContract } from './csv-viewer.contract';
 import { defineCsvWorkspaceComparisonContract } from './comparison.contract';
 import { defineCsvWorkspaceEditingContract } from './editing.contract';
@@ -7,6 +8,7 @@ import type { WorkspaceContractFactory } from './workspace-contract';
 
 /** Registers the complete CsvViewer behavior against one runtime adapter. */
 export function defineCsvWorkspaceContract(factory: WorkspaceContractFactory): void {
+  defineDiagnosticsContract(factory);
   defineCsvViewerRequestContract(factory);
   defineCsvWorkspaceWorkingCsvContract(factory);
   defineCsvWorkspaceEditingContract(factory);

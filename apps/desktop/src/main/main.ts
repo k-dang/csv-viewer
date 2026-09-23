@@ -309,8 +309,8 @@ async function disposeWorkspaceBeforeQuit(): Promise<void> {
       workspaceDisposed = true;
       app.quit();
       return;
-    } catch (error) {
-      console.error(`Workspace disposal attempt ${attempt} failed.`, error);
+    } catch {
+      // Workspace diagnostics report failures. A timed-out attempt remains visible as an open span.
     }
   }
   app.exit(1);

@@ -76,6 +76,19 @@ Launch refuses if `current.json` points at a live pid. Cleanup first. Do not sta
 
 Teardown is `cleanup`. Do not `taskkill` by process name.
 
+## Read diagnostics
+
+After a desktop run, read the main-process logs:
+
+```powershell
+$run = Get-Content .agents/skills/verify-csv-viewer/runs/current.json | ConvertFrom-Json
+Get-Content $run.logPath | Select-String 'message="?(comparison|workspace)\.'
+```
+
+For web runs, capture the browser console through CDP before performing the operation. Diagnostics appear there, not in the Vite server log.
+
+Filter Effect output by `operationId` to follow a comparison through cleanup. Read the matching stage's log-span timing on its completion line; enclosing span timings show elapsed time, so do not add them together. Check `outcome` and `cleanup` separately. Browser navigation can stop logging before disposal completes.
+
 ## Doctor
 
 Run this first whenever the window looks wrong, CDP errors, or a previous run may still be alive.

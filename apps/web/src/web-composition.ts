@@ -60,8 +60,8 @@ export function disposeWorkspaceWhenPageHides(
   const dispose = () => {
     if (disposed) return;
     disposed = true;
-    void workspace.dispose().catch((error) => {
-      console.error('CSV Viewer Web cleanup failed.', error);
+    void workspace.dispose().catch(() => {
+      // The workspace already reports sanitized disposal failures.
     });
   };
   const handlePageShow = (event: Event) => {
@@ -135,7 +135,7 @@ class WebCsvViewerSession implements CsvWorkspaceOwner {
       return;
     }
     const failures = await this.database.close();
-    failures.forEach((failure) => console.error('CSV Viewer Web cleanup failed.', failure));
+    if (failures.length > 0) console.error('CSV Viewer Web cleanup failed.');
   }
 
   private fail(): void {
