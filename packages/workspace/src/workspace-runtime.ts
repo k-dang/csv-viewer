@@ -1,3 +1,4 @@
+import { diagnosticsLayer, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Context, Effect, Layer, ManagedRuntime } from 'effect';
 import { ComparisonExecutor } from './comparison/comparison-executor';
 import { CsvComparisonService } from './comparison/csv-comparison-service';
@@ -15,6 +16,7 @@ export function makeWorkspaceRuntime(
   host: CsvWorkspaceHost,
   database: WorkspaceDatabase,
   executor?: ComparisonExecutor,
+  diagnostics?: WorkspaceDiagnostics,
 ) {
   const csvs = Layer.effect(WorkingCsv, Effect.gen(function* () {
     return new WorkingCsvStore(yield* Host, yield* Database);
@@ -27,5 +29,5 @@ export function makeWorkspaceRuntime(
   const comparisons = Layer.effect(Comparisons, Effect.gen(function* () {
     return new CsvComparisonService(yield* WorkingCsv, yield* ComparisonExecutor, yield* Effect.scope);
   })).pipe(Layer.provide(execution), Layer.provideMerge(csvs));
-  return ManagedRuntime.make(comparisons);
+  return ManagedRuntime.make(comparisons.pipe(Layer.provideMerge(diagnosticsLayer(diagnostics))));
 }

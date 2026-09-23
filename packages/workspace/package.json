@@ -11,6 +11,7 @@
     "./csv-workspace": "./src/csv-workspace.ts",
     "./database": "./src/database.ts",
     "./errors": "./src/errors.ts",
+    "./workspace-diagnostics": "./src/workspace-diagnostics.ts",
     "./workspace-host": "./src/workspace-host.ts"
   },
   "scripts": {

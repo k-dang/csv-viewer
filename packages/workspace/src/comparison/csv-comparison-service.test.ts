@@ -300,7 +300,6 @@ describe('CsvComparisonService interaction contract', () => {
     });
     if (begun.status !== 'accepted') throw new Error('begin rejected');
     store.workingCsvs.delete('a');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(begun.completion).resolves.toMatchObject({
       status: 'failed',
@@ -312,7 +311,6 @@ describe('CsvComparisonService interaction contract', () => {
       comparisonId: opened.comparison.comparisonId,
     });
 
-    error.mockRestore();
     await service.dispose();
   });
 
@@ -443,7 +441,6 @@ describe('CsvComparisonService interaction contract', () => {
     const first = await waitForIdle(service, opened.comparison.comparisonId);
     const firstToken = first?.applied?.resultToken;
     if (!firstToken) throw new Error('result not applied');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     executor.dropFailuresRemaining = 1;
 
     service.begin({
@@ -463,7 +460,6 @@ describe('CsvComparisonService interaction contract', () => {
     });
     await waitForIdle(service, opened.comparison.comparisonId);
     expect(executor.droppedArtifacts.filter((artifactId) => artifactId === firstToken)).toHaveLength(2);
-    error.mockRestore();
     await service.dispose();
   });
 
@@ -526,13 +522,11 @@ describe('CsvComparisonService interaction contract', () => {
       key: ['id'],
     });
     await waitForIdle(service, opened.comparison.comparisonId);
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     executor.dropFailuresRemaining = 1;
 
     await expect(service.dispose()).rejects.toThrow('The data engine could not complete the operation.');
 
     expect(executor.disposeCalled).toBe(true);
-    error.mockRestore();
   });
 
   it('does not publish an invalid projection after a source disappears', async () => {
@@ -550,16 +544,11 @@ describe('CsvComparisonService interaction contract', () => {
     await waitForIdle(service, opened.comparison.comparisonId);
     const events: string[] = [];
     service.subscribe((event) => events.push(event.kind));
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     store.workingCsvs.delete('a');
 
     expect(() => store.change('a')).not.toThrow();
 
     expect(events).toEqual([]);
-    expect(error).toHaveBeenCalledWith(
-      `Comparison ${opened.comparison.comparisonId} has an unavailable source projection.`,
-    );
-    error.mockRestore();
     await service.dispose();
   });
 
@@ -625,7 +614,6 @@ describe('CsvComparisonService interaction contract', () => {
         cleanupStarted.resolve();
         return cleanup.promise;
       });
-      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
         const replacement = service.begin({ kind: 'apply-key', comparisonId, key: ['status'] });
         if (replacement.status !== 'accepted') throw new Error('begin rejected');
@@ -652,12 +640,10 @@ describe('CsvComparisonService interaction contract', () => {
           comparisonId, resultToken: snapshot.resultToken, offset: 0, limit: 100,
           rows: 'all', columns: 'csv-order',
         })).resolves.toMatchObject({ status: 'ready' });
-        expect(errors).toHaveBeenCalled();
       } finally {
         validate.mockRestore();
         release.mockRestore();
         await service.dispose();
-        errors.mockRestore();
       }
     },
   );
@@ -671,7 +657,6 @@ describe('CsvComparisonService interaction contract', () => {
     const activate = vi.spyOn(executor, 'activateSnapshot').mockImplementationOnce(() => {
       throw defect;
     });
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const service = createService(store, executor);
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
@@ -679,14 +664,12 @@ describe('CsvComparisonService interaction contract', () => {
     const begun = service.begin(request);
     if (begun.status !== 'accepted') throw new Error('begin rejected');
     await expect(begun.completion).resolves.toMatchObject({ status: 'failed', failure: { code: 'query-failed' } });
-    expect(errors).toHaveBeenCalled();
     expect(executor.droppedArtifacts).toContain(begun.operationId);
     const retry = service.begin(request);
     if (retry.status !== 'accepted') throw new Error('retry rejected');
     await expect(retry.completion).resolves.toMatchObject({ status: 'applied' });
     await service.dispose();
     activate.mockRestore();
-    errors.mockRestore();
   });
 
   it('shares reentrant closure and rejects new work from the settlement subscriber', async () => {

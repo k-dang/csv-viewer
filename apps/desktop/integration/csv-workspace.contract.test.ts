@@ -3,5 +3,5 @@ import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 
 defineCsvWorkspaceContract({
   name: 'native DuckDB',
-  create: (executor) => CsvWorkspaceFixture.create(executor),
+  create: (executor, diagnostics) => CsvWorkspaceFixture.create(executor, diagnostics),
 });

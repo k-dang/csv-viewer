@@ -1,5 +1,6 @@
+import { observeStage, recordOutcome, retainDiagnosticContext } from '../workspace-diagnostics';
 import { Deferred, Effect, Exit, Cause, type Scope } from 'effect';
-import { cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
+import { ComparisonCleanup, cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
 import type {
   ComparisonRow,
   ComparisonOperationId,
@@ -30,7 +31,7 @@ import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 export type ComparisonSource = {
   tableName: string;
   columns: CsvColumn[];
-  release(): Promise<void>;
+  release(): Promise<void | DataEngineError>;
 };
 
 export type DuckDbComparisonAccess = {
@@ -40,12 +41,13 @@ export type DuckDbComparisonAccess = {
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
-  private readonly failedWorkers = new Set<WorkspaceDatabaseConnection>();
-  private readonly failedSources = new Set<ComparisonSource>();
+  private readonly failedWorkers = new Map<WorkspaceDatabaseConnection, Effect.Effect<void>>();
+  private readonly failedSources = new Map<ComparisonSource, Effect.Effect<void>>();
   private readonly readers = new Map<ComparisonOperationId, {
     count: number;
     drained: Deferred.Deferred<void>;
   }>();
+  private readonly snapshotReleases = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
   private readonly retirements = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
 
   constructor(
@@ -58,10 +60,13 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   ): Effect.fn.Return<ComparisonAttemptExecutor, DataEngineError, Scope.Scope> {
     const writer = yield* Effect.acquireRelease(
       databaseEffect(() => this.database.connectWorker()),
-      (connection) => cleanupEffect(async () => {
-        this.failedWorkers.add(connection);
-        await connection.close();
-        this.failedWorkers.delete(connection);
+      (connection) => Effect.gen({ self: this }, function* () {
+        const release = yield* retainDiagnosticContext(observeStage('comparison.release-worker', cleanupEffect(async () => {
+          await connection.close();
+          this.failedWorkers.delete(connection);
+        })));
+        this.failedWorkers.set(connection, release);
+        yield* release;
       }),
     );
     return {
@@ -73,10 +78,18 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private acquireSource(workingCsvId: WorkingCsvId) {
     return Effect.acquireRelease(
       databaseEffect(() => this.database.acquireSource(workingCsvId)),
-      (source) => cleanupEffect(async () => {
-        this.failedSources.add(source);
-        await source.release();
-        this.failedSources.delete(source);
+      (source) => Effect.gen({ self: this }, function* () {
+        const release = yield* retainDiagnosticContext(observeStage('comparison.release-source', Effect.gen({ self: this }, function* () {
+          const deferredCleanup = yield* cleanupEffect(() => source.release());
+          this.failedSources.delete(source);
+          if (deferredCleanup) {
+            const cleanup = yield* Effect.serviceOption(ComparisonCleanup);
+            if (cleanup._tag === 'Some') cleanup.value.failed = true;
+            yield* recordOutcome('cleanup-failed', Cause.fail(deferredCleanup));
+          }
+        })).pipe(Effect.annotateSpans({ workingCsvId })));
+        this.failedSources.set(source, release);
+        yield* release;
       }),
     );
   }
@@ -185,6 +198,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       ]),
     ].join(', ');
 
+    this.snapshotReleases.set(request.artifactId, yield* retainDiagnosticContext(
+      observeStage('comparison.release-snapshot', this.retireSnapshot(request.artifactId)),
+    ));
     this.artifactRegistry.register({
       tableName,
       owner: { kind: 'comparison', comparisonId: request.comparisonId, operationId: request.artifactId },
@@ -298,7 +314,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const existing = this.retirements.get(artifactId);
     if (existing) return yield* existing;
     if (!this.hasSnapshot(artifactId)) return;
-    const retirement = yield* Effect.cached(this.retireSnapshot(artifactId).pipe(
+    const release = this.snapshotReleases.get(artifactId);
+    if (!release) throw new Error('Comparison snapshot release is missing.');
+    const retirement = yield* Effect.cached(release.pipe(
       Effect.ensuring(Effect.sync(() => this.retirements.delete(artifactId))),
     ));
     this.retirements.set(artifactId, retirement);
@@ -310,15 +328,13 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
   ): Effect.fn.Return<void, DataEngineError> {
     const failures: Cause.Cause<DataEngineError>[] = [];
-    for (const source of [...this.failedSources]) {
-      const result = yield* Effect.exit(databaseEffect(() => source.release()));
+    for (const release of [...this.failedSources.values()]) {
+      const result = yield* Effect.exit(release);
       if (Exit.isFailure(result)) failures.push(result.cause);
-      else this.failedSources.delete(source);
     }
-    for (const connection of [...this.failedWorkers]) {
-      const result = yield* Effect.exit(databaseEffect(() => connection.close()));
+    for (const release of [...this.failedWorkers.values()]) {
+      const result = yield* Effect.exit(release);
       if (Exit.isFailure(result)) failures.push(result.cause);
-      else this.failedWorkers.delete(connection);
     }
     for (const artifact of this.artifactRegistry.list()) {
       if (artifact.owner.kind !== 'comparison') continue;
@@ -378,6 +394,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
     yield* databaseEffect(() => connection.run(buildDropTableSql(tableName)));
     this.artifactRegistry.remove(tableName);
+    this.snapshotReleases.delete(artifactId);
   });
 
   private hasSnapshot(artifactId: ComparisonOperationId): boolean {

@@ -18,6 +18,7 @@ import type {
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
 import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
+import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
 import {
@@ -235,10 +236,10 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(executor?: ComparisonExecutor): Promise<WasmWorkspaceFixture> {
+  static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = new CsvWorkspaceImplementation(host, database, executor);
+    const workspace = new CsvWorkspaceImplementation(host, database, executor, diagnostics);
     return new WasmWorkspaceFixture(workspace, host);
   }
 

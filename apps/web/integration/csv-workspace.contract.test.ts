@@ -3,5 +3,5 @@ import { WasmWorkspaceFixture } from './fixtures/wasm-workspace';
 
 defineCsvWorkspaceContract({
   name: 'DuckDB-Wasm',
-  create: (executor) => WasmWorkspaceFixture.create(executor),
+  create: (executor, diagnostics) => WasmWorkspaceFixture.create(executor, diagnostics),
 });

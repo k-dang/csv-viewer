@@ -1,3 +1,4 @@
+import type { WorkspaceDiagnostics } from './workspace-diagnostics';
 import type {
   ConfirmWorkspaceCloseOutcome,
   CsvViewer,
@@ -17,6 +18,7 @@ export interface CsvWorkspaceOwner extends CsvViewer {
 export function createCsvViewer(
   host: CsvWorkspaceHost,
   database: WorkspaceDatabase,
+  diagnostics?: WorkspaceDiagnostics,
 ): CsvWorkspaceOwner {
-  return new CsvWorkspaceImplementation(host, database);
+  return new CsvWorkspaceImplementation(host, database, undefined, diagnostics);
 }

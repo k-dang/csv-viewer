@@ -1,3 +1,4 @@
+import { DataEngineError } from '../database';
 import { toError } from '../errors';
 import { supportedCsvFileExtensions } from '../csv-viewer';
 import type {
@@ -78,7 +79,7 @@ type WorkingCsvState = {
 
 type WorkingCsvLease = {
   state: WorkingCsvState;
-  release: () => Promise<void>;
+  release: () => Promise<void | DataEngineError>;
 };
 
 export class WorkingCsvStore {
@@ -627,7 +628,7 @@ export class WorkingCsvStore {
       release: async () => {
         if (released) return;
         released = true;
-        await this.releaseWorkingCsvLease(tableName);
+        return this.releaseWorkingCsvLease(tableName);
       },
     };
   }
@@ -681,7 +682,7 @@ export class WorkingCsvStore {
     }
   }
 
-  private async releaseWorkingCsvLease(tableName: string): Promise<void> {
+  private async releaseWorkingCsvLease(tableName: string): Promise<void | DataEngineError> {
     const count = this.sourceLeaseCounts.get(tableName);
     if (!count) throw new Error('Working CSV source lease invariant violated.');
     if (count > 1) {
@@ -691,9 +692,12 @@ export class WorkingCsvStore {
     this.sourceLeaseCounts.delete(tableName);
     try {
       if (this.artifactRegistry.get(tableName)?.role === 'retired') {
-        await this.dropRetiredSourceTable(tableName).catch((error) => {
-          console.error('Unable to drop a retired Working CSV table.', error);
-        });
+        try {
+          await this.dropRetiredSourceTable(tableName);
+        } catch (cause) {
+          // The lease is released. The registry still owns the table for disposal retry.
+          return new DataEngineError(cause);
+        }
       }
     } finally {
       const waiters = this.sourceLeaseWaiters.get(tableName) ?? [];
