@@ -12,7 +12,7 @@ afterEach(cleanup);
 /** Renders one Comparison Tab; `update` delivers later projections the way the workspace would. */
 function renderPanel(comparison: ComparisonView) {
   const tab = new ComparisonTab(createTestCsvViewer(), comparison);
-  render(<ComparisonPanel tab={tab} themeMode="light" />);
+  render(<ComparisonPanel tab={tab} />);
   return { update: (next: ComparisonView) => act(() => tab.receive(next)) };
 }
 

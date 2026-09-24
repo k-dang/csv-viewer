@@ -13,8 +13,10 @@ function Separator({
     <SeparatorPrimitive
       data-slot="separator"
       orientation={orientation}
+      // Plain classes, not data-[orientation] variants, so a caller's size or alignment overrides them.
       className={cn(
-        "shrink-0 bg-border data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:w-px data-[orientation=vertical]:self-stretch",
+        "shrink-0 bg-border",
+        orientation === "vertical" ? "w-px self-stretch" : "h-px w-full",
         className
       )}
       {...props}

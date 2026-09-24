@@ -5,7 +5,7 @@ test('opens a CSV, edits a cell, and exports the changed contents', async ({ pag
   await page.goto('/');
   const [picker] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.locator('header').getByRole('button', { name: 'Open CSV', exact: true }).click(),
+    page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true }).click(),
   ]);
   await picker.setFiles({
     name: 'people.csv',

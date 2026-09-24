@@ -1,4 +1,4 @@
-import type { QueryState } from './query-status-badge';
+import type { QueryState } from './query-status-indicator';
 import type {
   CsvColumn,
   CsvColumnPlacement,

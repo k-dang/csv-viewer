@@ -1,6 +1,6 @@
 # Copy a column
 
-The Column Bar sits between the toolbar and the row grid. It names the focused column, shows how many values the current query leaves in it, and copies those values to the clipboard one per line (nulls as empty lines). The grid tints the same column. It does not edit the CSV.
+The Column Bar sits in the status bar below the row grid. It names the focused column, shows how many values the current query leaves in it, and copies those values to the clipboard one per line (nulls as empty lines). The grid tints the same column. It does not edit the CSV.
 
 ## Sub-features
 

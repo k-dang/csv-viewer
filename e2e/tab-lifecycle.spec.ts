@@ -27,7 +27,7 @@ test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page 
     });
   });
   await page.goto('/');
-  const openButton = page.locator('header').getByRole('button', { name: 'Open CSV', exact: true });
+  const openButton = page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true });
   const [picker] = await Promise.all([page.waitForEvent('filechooser'), openButton.click()]);
   await picker.setFiles({ name: 'people.csv', mimeType: 'text/csv', buffer: Buffer.from('name\nAda\n') });
   await expect(page.getByRole('gridcell', { name: 'Ada', exact: true })).toBeVisible();
@@ -45,7 +45,7 @@ test('retains CSV query state across Tabs and closes dependent Comparison Tabs a
   for (const name of ['baseline.csv', 'candidate.csv']) {
     const [picker] = await Promise.all([
       page.waitForEvent('filechooser'),
-      page.locator('header').getByRole('button', { name: 'Open CSV', exact: true }).click(),
+      page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true }).click(),
     ]);
     await picker.setFiles({ name, mimeType: 'text/csv', buffer: Buffer.from('name,age\nAda,37\nGrace,41\n') });
     await expect(page.getByRole('tab', { name, exact: true })).toHaveAttribute('aria-selected', 'true');
