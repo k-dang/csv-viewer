@@ -189,6 +189,19 @@ export type CsvRenameColumnRequest = {
   name: string;
 };
 
+export type CsvColumnPlacement = 'before' | 'after';
+
+export type CsvInsertColumnRequest = {
+  workingCsvId: WorkingCsvId;
+  column: string;
+  placement: CsvColumnPlacement;
+};
+
+export type CsvDeleteColumnRequest = {
+  workingCsvId: WorkingCsvId;
+  column: string;
+};
+
 export type CsvEditStateRequest = {
   workingCsvId: WorkingCsvId;
 };
@@ -515,6 +528,14 @@ export type CsvViewerOperationMap = {
   };
   'csv.rename-column': {
     request: CsvRenameColumnRequest;
+    result: CsvSchemaEditState;
+  };
+  'csv.insert-column': {
+    request: CsvInsertColumnRequest;
+    result: CsvSchemaEditState;
+  };
+  'csv.delete-column': {
+    request: CsvDeleteColumnRequest;
     result: CsvSchemaEditState;
   };
   'csv.get-edit-state': {

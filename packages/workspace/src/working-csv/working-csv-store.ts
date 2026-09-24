@@ -4,15 +4,18 @@ import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
+  CsvColumnPlacement,
   CsvColumnValues,
   CsvColumnValuesRequest,
   CsvColumnValueCounts,
   CsvColumnValueCountsRequest,
+  CsvDeleteColumnRequest,
   CsvDeleteRowsRequest,
   CsvDialectOptions,
   CsvEditState,
   CsvExportOutcome,
   CsvEditStateRequest,
+  CsvInsertColumnRequest,
   CsvInsertRowRequest,
   CsvRenameColumnRequest,
   CsvRowWindow,
@@ -24,7 +27,7 @@ import type {
 } from '../csv-viewer';
 import type { ComparisonExecutor } from '../comparison/comparison-executor';
 import type { WorkspaceDatabase } from '../database';
-import { CsvEditHistory, rowCountDelta, type CsvEditCommand } from './csv-edit-history';
+import { CsvEditHistory, rowCountDelta, type CsvEditCommand, type CsvEditDraft } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import {
   assertKnownColumn,
@@ -36,9 +39,9 @@ import {
 import { normalizeCellValue, normalizeCount, normalizeRow } from '../query/csv-result-normalization';
 import {
   applyCellValue,
-  applyColumnRename,
   applyRowDeletion,
   assertRowsExist,
+  columnsAfter,
   createWorkingCsvTable,
   dropWorkingCsvTable,
   insertEmptyRow,
@@ -46,11 +49,10 @@ import {
   readColumns,
   readExportRows,
   readRowCount,
-  renameCsvColumns,
   runEditCommand,
   type CsvTable,
 } from './csv-working-csv-table';
-import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
+import { csvDeletedField, csvHiddenColumnPrefix, csvSourceOrderField, hiddenCsvColumnName } from './csv-storage-schema';
 import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-executor';
 import { CsvSourceUnavailableError, type CsvWorkspaceHost } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
@@ -504,11 +506,38 @@ export class WorkingCsvStore {
         return buildSchemaEditState(state);
       }
 
-      await applyColumnRename(this.tableFor(state), request.column, name);
-      state.history.record({ type: 'rename-column', from: request.column, to: name });
-      state.metadata.columns = renameCsvColumns(state.metadata.columns, request.column, name);
-      this.commitDataChange(state);
-      return buildSchemaEditState(state);
+      return this.commitSchemaEdit(state, { type: 'rename-column', from: request.column, to: name });
+    });
+  }
+
+  async insertColumn(request: CsvInsertColumnRequest): Promise<CsvSchemaEditState> {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
+      const columns = state.metadata.columns;
+      const anchorIndex = requireColumnIndex(columns, request.column);
+      const index = columnPlacementIndex(anchorIndex, request.placement);
+      const name = defaultColumnName(columns);
+      return this.commitSchemaEdit(state, { type: 'insert-column', name, index });
+    });
+  }
+
+  async deleteColumn(request: CsvDeleteColumnRequest): Promise<CsvSchemaEditState> {
+    return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
+      const columns = state.metadata.columns;
+      const index = requireColumnIndex(columns, request.column);
+      if (columns.length <= 1) {
+        throw new Error('The last CSV column cannot be deleted.');
+      }
+      const hiddenName = hiddenCsvColumnName(
+        state.history.revisionSequence,
+        columns.map((column) => column.name),
+      );
+      return this.commitSchemaEdit(state, {
+        type: 'delete-column',
+        name: request.column,
+        index,
+        columnType: columns[index].type,
+        hiddenName,
+      });
     });
   }
 
@@ -520,16 +549,24 @@ export class WorkingCsvStore {
     return this.stepHistory(workingCsvId, 'redo');
   }
 
+  private async commitSchemaEdit(state: WorkingCsvState, draft: CsvSchemaEditDraft): Promise<CsvSchemaEditState> {
+    const next = columnsAfter(state.metadata.columns, draft, 'redo');
+    await runEditCommand(this.tableFor(state), draft, 'redo');
+    state.history.record(draft);
+    state.metadata.columns = next;
+    this.commitDataChange(state, 0);
+    return buildSchemaEditState(state);
+  }
+
   private async stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Promise<CsvSchemaEditState> {
     return this.withWorkingCsvMutation(workingCsvId, async (state) => {
       const table = this.tableFor(state);
-      const replay = (entry: CsvEditCommand) => runEditCommand(table, entry, direction);
+      const replay = async (entry: CsvEditCommand) => {
+        const next = columnsAfter(state.metadata.columns, entry, direction);
+        await runEditCommand(table, entry, direction);
+        state.metadata.columns = next;
+      };
       const command = direction === 'undo' ? await state.history.undo(replay) : await state.history.redo(replay);
-      if (command.type === 'rename-column') {
-        const from = direction === 'redo' ? command.from : command.to;
-        const to = direction === 'redo' ? command.to : command.from;
-        state.metadata.columns = renameCsvColumns(state.metadata.columns, from, to);
-      }
       this.commitDataChange(state, rowCountDelta(command, direction));
       return buildSchemaEditState(state);
     });
@@ -859,13 +896,46 @@ function buildSchemaEditState(state: WorkingCsvState): CsvSchemaEditState {
   };
 }
 
+type CsvSchemaEditDraft = Extract<
+  CsvEditDraft,
+  { type: 'rename-column' | 'insert-column' | 'delete-column' }
+>;
+
 function isReservedCsvColumnName(name: string): boolean {
   const needle = name.toLowerCase();
   return (
     needle === csvInternalRowIdField.toLowerCase() ||
     needle === csvSourceOrderField.toLowerCase() ||
-    needle === csvDeletedField.toLowerCase()
+    needle === csvDeletedField.toLowerCase() ||
+    needle.startsWith(csvHiddenColumnPrefix.toLowerCase())
   );
+}
+
+function defaultColumnName(columns: readonly { name: string }[]): string {
+  const taken = new Set(columns.map((column) => column.name.toLowerCase()));
+  for (let n = 1; ; n += 1) {
+    const candidate = n === 1 ? 'New column' : `New column ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+function requireColumnIndex(columns: readonly { name: string }[], name: string): number {
+  const index = columns.findIndex((column) => column.name === name);
+  if (index < 0) throw new Error(`Unknown CSV column: ${name}`);
+  return index;
+}
+
+function columnPlacementIndex(anchorIndex: number, placement: CsvColumnPlacement): number {
+  switch (placement) {
+    case 'before':
+      return anchorIndex;
+    case 'after':
+      return anchorIndex + 1;
+    default: {
+      const exhaustive: never = placement;
+      throw new Error(`Unsupported CSV column placement: ${String(exhaustive)}`);
+    }
+  }
 }
 
 function hasConflictingColumnName(

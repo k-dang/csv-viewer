@@ -1,6 +1,7 @@
 import type { QueryState } from './query-status-badge';
 import type {
   CsvColumn,
+  CsvColumnPlacement,
   CsvColumnValueCounts,
   CsvEditState,
   CsvFilterDescriptor,
@@ -234,6 +235,31 @@ export class CsvTab {
         workingCsvId: this.workingCsvId,
         column,
         name,
+      }),
+    );
+  }
+
+  insertColumn(placement: CsvColumnPlacement): Promise<boolean> {
+    const column = this.state.focusedColumn;
+    if (!column) return Promise.resolve(false);
+    return this.mutate('Unable to insert column.', () =>
+      this.viewer.call({
+        operation: 'csv.insert-column',
+        workingCsvId: this.workingCsvId,
+        column,
+        placement,
+      }),
+    );
+  }
+
+  deleteFocusedColumn(): Promise<boolean> {
+    const column = this.state.focusedColumn;
+    if (!column) return Promise.resolve(false);
+    return this.mutate('Unable to delete column.', () =>
+      this.viewer.call({
+        operation: 'csv.delete-column',
+        workingCsvId: this.workingCsvId,
+        column,
       }),
     );
   }

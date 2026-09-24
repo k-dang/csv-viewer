@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
-import { Copy, Pencil } from 'lucide-react';
+import { BetweenVerticalEnd, BetweenVerticalStart, Copy, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CsvTab } from './csv-tab';
@@ -13,7 +13,7 @@ import { copyColumn, isCopyColumnShortcut } from './copy-column';
  * Ctrl+Shift+A copies the focused column from anywhere that is not a text field.
  */
 export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) {
-  const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { focusedColumn, filteredRowCount, workingCsv } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const [headerRename, setHeaderRename] = useState<{ column: string; serial: number } | null>(null);
   // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
   if (headerRename && headerRename.column !== focusedColumn) setHeaderRename(null);
@@ -57,6 +57,7 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           tab={tab}
           focusedColumn={focusedColumn}
           filteredRowCount={filteredRowCount}
+          columnCount={workingCsv.columns.length}
           initialRenaming={f2Rename !== null}
         />
       ) : (
@@ -70,11 +71,13 @@ function FocusedColumnBar({
   tab,
   focusedColumn,
   filteredRowCount,
+  columnCount,
   initialRenaming,
 }: {
   tab: CsvTab;
   focusedColumn: string;
   filteredRowCount: number;
+  columnCount: number;
   initialRenaming: boolean;
 }) {
   const [renaming, setRenaming] = useState(initialRenaming);
@@ -147,6 +150,34 @@ function FocusedColumnBar({
         >
           <Copy />
           Copy column
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void tab.insertColumn('before')}
+        >
+          <BetweenVerticalStart />
+          Insert column left
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void tab.insertColumn('after')}
+        >
+          <BetweenVerticalEnd />
+          Insert column right
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={columnCount === 1}
+          onClick={() => void tab.deleteFocusedColumn()}
+        >
+          <Trash2 />
+          Delete column
         </Button>
       </div>
     </>
