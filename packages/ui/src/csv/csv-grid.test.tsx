@@ -280,10 +280,12 @@ describe('CsvGrid', () => {
 
     render(withCsvViewer(<CsvGrid tab={tab} themeMode="light" active DataGrid={DataGrid} />));
 
-    expect(screen.queryByRole('button', { name: 'Insert column left' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Insert column right' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Delete column' })).toBeNull();
     expect(screen.getByText('Select a cell to copy its column.')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Rename column' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Copy column' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Insert column left' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Insert column right' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Delete column' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('offers Rename column for the focused column', async () => {

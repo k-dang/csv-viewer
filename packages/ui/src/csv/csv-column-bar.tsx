@@ -15,9 +15,6 @@ import { copyColumn, isCopyColumnShortcut } from './copy-column';
 export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) {
   const { focusedColumn, filteredRowCount, workingCsv } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const [headerRename, setHeaderRename] = useState<{ column: string; serial: number } | null>(null);
-  // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
-  if (headerRename && headerRename.column !== focusedColumn) setHeaderRename(null);
-
   const onKeyDownRef = useRef<(event: KeyboardEvent, capture: boolean) => void>(() => {});
   onKeyDownRef.current = (event, capture) => {
     if (!active) return;
@@ -47,22 +44,19 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
     };
   }, []);
 
+  // Drop a finished F2 once focus leaves that column, so undo or a later return does not reopen the field.
+  if (headerRename && headerRename.column !== focusedColumn) setHeaderRename(null);
   const f2Rename = headerRename?.column === focusedColumn ? headerRename : null;
 
   return (
     <div ref={bindKeys} className="flex min-h-11 items-center gap-3 border-b bg-muted/40 px-[18px] py-1.5 text-sm">
-      {focusedColumn ? (
-        <FocusedColumnBar
-          key={f2Rename ? `header-rename:${f2Rename.serial}:${focusedColumn}` : `focused-column:${focusedColumn}`}
-          tab={tab}
-          focusedColumn={focusedColumn}
-          filteredRowCount={filteredRowCount}
-          columnCount={workingCsv.columns.length}
-          initialRenaming={f2Rename !== null}
-        />
-      ) : (
-        <span className="text-muted-foreground">Select a cell to copy its column.</span>
-      )}
+      <FocusedColumnBar
+        tab={tab}
+        focusedColumn={focusedColumn}
+        filteredRowCount={filteredRowCount}
+        columnCount={workingCsv.columns.length}
+        f2Rename={f2Rename}
+      />
     </div>
   );
 }
@@ -72,55 +66,76 @@ function FocusedColumnBar({
   focusedColumn,
   filteredRowCount,
   columnCount,
-  initialRenaming,
+  f2Rename,
 }: {
   tab: CsvTab;
-  focusedColumn: string;
+  focusedColumn: string | null;
   filteredRowCount: number;
   columnCount: number;
-  initialRenaming: boolean;
+  f2Rename: { column: string; serial: number } | null;
 }) {
-  const [renaming, setRenaming] = useState(initialRenaming);
-  const [draft, setDraft] = useState(focusedColumn);
+  const [trackedColumn, setTrackedColumn] = useState(focusedColumn);
+  const [seenF2Serial, setSeenF2Serial] = useState<number | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(focusedColumn ?? '');
+  if (trackedColumn !== focusedColumn) {
+    setTrackedColumn(focusedColumn);
+    setSeenF2Serial(f2Rename?.serial ?? null);
+    setRenaming(f2Rename !== null);
+    setDraft(f2Rename?.column ?? focusedColumn ?? '');
+  } else if (f2Rename && seenF2Serial !== f2Rename.serial) {
+    setSeenF2Serial(f2Rename.serial);
+    setDraft(f2Rename.column);
+    setRenaming(true);
+  }
 
   async function commitRename(): Promise<void> {
     const ok = await tab.renameFocusedColumn(draft);
     if (ok) setRenaming(false);
   }
 
+  const actionsDisabled = focusedColumn === null;
+
   return (
     <>
-      {renaming ? (
-        <form
-          className="flex min-w-0 flex-1 items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void commitRename();
-          }}
-        >
-          <label className="sr-only" htmlFor="column-name">
-            Column name
-          </label>
-          <Input
-            id="column-name"
-            aria-label="Column name"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                setRenaming(false);
-                setDraft(focusedColumn);
-              }
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {focusedColumn && renaming ? (
+          <form
+            className="flex min-w-0 flex-1 items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void commitRename();
             }}
-            className="h-8 max-w-xs"
-            autoFocus
-          />
-        </form>
-      ) : (
-        <span className="truncate font-semibold text-foreground">{focusedColumn}</span>
-      )}
-      <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
+          >
+            <label className="sr-only" htmlFor="column-name">
+              Column name
+            </label>
+            <Input
+              key={f2Rename?.serial ?? 0}
+              id="column-name"
+              aria-label="Column name"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setRenaming(false);
+                  setDraft(focusedColumn);
+                }
+              }}
+              className="h-8 max-w-xs"
+              autoFocus
+            />
+          </form>
+        ) : (
+          <span className={focusedColumn ? 'truncate font-semibold text-foreground' : 'text-muted-foreground'}>
+            {focusedColumn ?? 'Select a cell to copy its column.'}
+          </span>
+        )}
+        {focusedColumn ? (
+          <span className="shrink-0 text-muted-foreground">{formatNumber(filteredRowCount)} values</span>
+        ) : null}
+      </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button
           type="button"
@@ -128,7 +143,9 @@ function FocusedColumnBar({
           size="sm"
           title="Rename column (F2 on the column header)"
           aria-pressed={renaming}
+          disabled={actionsDisabled}
           onClick={() => {
+            if (!focusedColumn) return;
             if (renaming) {
               setRenaming(false);
               setDraft(focusedColumn);
@@ -138,7 +155,7 @@ function FocusedColumnBar({
             setRenaming(true);
           }}
         >
-          <Pencil />
+          <Pencil data-icon="inline-start" />
           Rename column
         </Button>
         <Button
@@ -146,37 +163,40 @@ function FocusedColumnBar({
           variant="outline"
           size="sm"
           title="Copy column (Ctrl+Shift+A on a cell)"
+          disabled={actionsDisabled}
           onClick={() => void copyColumn(tab)}
         >
-          <Copy />
+          <Copy data-icon="inline-start" />
           Copy column
         </Button>
         <Button
           type="button"
           variant="outline"
           size="sm"
+          disabled={actionsDisabled}
           onClick={() => void tab.insertColumn('before')}
         >
-          <BetweenVerticalStart />
+          <BetweenVerticalStart data-icon="inline-start" />
           Insert column left
         </Button>
         <Button
           type="button"
           variant="outline"
           size="sm"
+          disabled={actionsDisabled}
           onClick={() => void tab.insertColumn('after')}
         >
-          <BetweenVerticalEnd />
+          <BetweenVerticalEnd data-icon="inline-start" />
           Insert column right
         </Button>
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={columnCount === 1}
+          disabled={actionsDisabled || columnCount === 1}
           onClick={() => void tab.deleteFocusedColumn()}
         >
-          <Trash2 />
+          <Trash2 data-icon="inline-start" />
           Delete column
         </Button>
       </div>
