@@ -28,14 +28,14 @@ export function EmptyCsvState({
       aria-labelledby="empty-state-title"
     >
       <div
-        className="grid size-24 place-items-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700 shadow-inner"
+        className="grid size-24 place-items-center rounded-lg border border-primary/20 bg-accent text-accent-foreground shadow-inner"
         aria-hidden="true"
       >
         <FileSpreadsheet className="size-11" />
       </div>
       <FieldGroup className="min-w-0 gap-3.5">
         <Field>
-          <FieldTitle id="empty-state-title" className="text-[28px] leading-none font-semibold text-foreground">
+          <FieldTitle id="empty-state-title" className="font-display text-[28px] leading-none font-semibold text-foreground">
             No CSV open
           </FieldTitle>
           <FieldDescription className="max-w-[46ch] text-[15px] leading-relaxed">

@@ -6,7 +6,6 @@ import {
   InfiniteRowModelModule,
   ModuleRegistry,
   RenderApiModule,
-  themeQuartz,
   type ColDef,
   type ColGroupDef,
   type ICellRendererParams,
@@ -14,6 +13,7 @@ import {
 } from 'ag-grid-community';
 import type { ComparisonRow, ComparisonSide, ComparisonView } from '@csv-viewer/workspace/csv-viewer';
 import { orderComparisonValueColumns } from '@csv-viewer/workspace/comparison-presentation';
+import { gridTheme } from '@/lib/grid-theme';
 import type { ComparisonTab } from './comparison-tab';
 
 ModuleRegistry.registerModules([CellStyleModule, ColumnApiModule, InfiniteRowModelModule, RenderApiModule]);
@@ -32,34 +32,15 @@ type GridComparisonRow = {
   [field: string]: string | DisplayValue | null;
 };
 
-const lightTheme = themeQuartz.withParams({
-  accentColor: '#0f766e',
-  rowHeight: 40,
-  wrapperBorder: false,
-  wrapperBorderRadius: 0,
-});
 const defaultColDef: ColDef = { resizable: true, sortable: false, minWidth: 120 };
-const darkTheme = themeQuartz.withParams({
-  accentColor: '#5eead4',
-  browserColorScheme: 'dark',
-  backgroundColor: '#171717',
-  foregroundColor: '#f5f5f5',
-  headerBackgroundColor: '#262626',
-  borderColor: '#3f3f46',
-  rowHeight: 40,
-  wrapperBorder: false,
-  wrapperBorderRadius: 0,
-});
 
 /** The result grid of one Comparison Tab. Rows come from the Tab; only AG Grid translation lives here. */
 export function ComparisonGrid({
   tab,
   applied,
-  themeMode,
 }: {
   tab: ComparisonTab;
   applied: NonNullable<ComparisonView['applied']>;
-  themeMode: 'light' | 'dark';
 }) {
   const { comparison, rows: rowsMode, columns: columnsMode } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const changedCounts = useMemo(
@@ -136,7 +117,7 @@ export function ComparisonGrid({
     <div className="min-h-0 min-w-0 comparison-grid-frame" aria-label="Aligned comparison results">
       <AgGridReact<GridComparisonRow>
         key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.workingCsvId}`}
-        theme={themeMode === 'dark' ? darkTheme : lightTheme}
+        theme={gridTheme}
         rowModelType="infinite"
         datasource={datasource}
         columnDefs={columnDefs}

@@ -136,18 +136,21 @@ Stable handles from this renderer:
 | Product title | heading `CSV Viewer` |
 | IPC health | `doctor` reports `inspect.hasHealth: true` |
 | Empty state | text `No CSV open` |
-| Open from disk | button `Open CSV`. Two of them render on the empty window (header and card), so pass `--nth 0`. On desktop this is a native OS dialog: do not click it. On web, drive it with `upload --file <path>` |
+| Open from disk | button `Open CSV`. Two of them render on the empty window (the `Workspace` navigation and the card), so pass `--nth 0`. On desktop this is a native OS dialog: do not click it. On web, drive it with `upload --file <path>` |
 | Open seeded fixture | button whose name contains `phase-2-sample.csv` or `phase-2-sample-edited.csv` |
-| Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`) |
-| Header mode | combobox `Headers` (`#csv-header-mode`), options `Auto`, `First row`, `None` |
-| Compare | button `Compare…` (ellipsis character `…`, U+2026). Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Use `drop --file <path>` to open a second CSV on either runtime. |
-| Reopen | button `Reopen` |
+| Parse options | button `Parse options`, the chevron beside `Open CSV`. It opens a popover that holds Delimiter and Headers; they are absent until it is open |
+| Delimiter | textbox `Delimiter` (`#csv-delimiter`, placeholder `Auto`), inside Parse options |
+| Header mode | combobox `Headers` (`#csv-header-mode`), options `Auto`, `First row`, `None`, inside Parse options |
+| Compare | button `Compare…` (ellipsis character `…`, U+2026) in the active CSV Tab's toolbar. Rendered only while a CSV tab is active, so it is absent on the empty window and absent while a Comparison Tab is active. Disabled until two CSV tabs are open. Use `drop --file <path>` to open a second CSV on either runtime. |
+| Reopen | button `Reopen` in the active CSV Tab's toolbar |
 | Theme | button `Switch to dark mode` / `Switch to light mode` |
-| Tabs | tablist `Open CSV and Comparison Tabs`, tab named with the file name |
+| Colors | button `Colors` in the sidebar footer opens a popover with palette buttons `Studio`, `Ledger`, `Terminal`, `Aurora`. The choice persists per browser profile; a fresh run starts on Studio |
+| Sidebar | button `Collapse sidebar` / `Expand sidebar`. Collapsed, the sidebar is an icon rail: `Open CSV` becomes an icon button, `Parse options` is absent, and tabs keep their accessible names. The state persists per browser profile |
+| Tabs | tab named with the file name, in the sidebar tablists `Open CSV Tabs` and `Comparison Tabs` |
 | Close tab | button `Close phase-2-sample.csv` |
 | File heading | `#metadata-title` text, e.g. `phase-2-sample.csv` |
 | Row counts | `5 visible of 5 rows` (locale-formatted) |
-| Query badge | `Ready`, `Querying`, or `Query failed` |
+| Query status | `Ready`, `Querying`, or `Query failed`, at the start of the status bar below the grid |
 | Global search | searchbox `Global search` (`#global-search`) |
 | Clear query | button `Clear query` |
 | Insert / append / delete | buttons `Insert row above`, `Insert row below`, `Append row`, `Delete selected rows` |
@@ -186,7 +189,7 @@ Proof standards:
 - Exercise the real UI. Do not call `window.csvViewer.*` from CDP eval to open, edit, or compare. That skips the user path.
 - Capture before and after. Empty state plus the opened grid, query typed plus the filtered count, cell before plus `Unexported Changes`.
 - Every artifact set includes a snapshot (`.aria.txt`) and a screenshot (`.png`) that show `CSV Viewer` and the feature's observable result.
-- Record the feature id and the entry point used (recent-files button, header Compare, searchbox, and so on).
+- Record the feature id and the entry point used (recent-files button, toolbar Compare, searchbox, and so on).
 - Opening a CSV also writes `recent-files.json` in the isolated userData dir. After a successful open, that file must still list the fixture path. The fixture bytes on disk must be unchanged. The app does not overwrite CSV sources.
 - Desktop Export CSV requires a human to finish the OS dialog. An enabled button is not export proof. Web exports are driveable. Comparison is driveable on both runtimes after opening files with `drop`.
 

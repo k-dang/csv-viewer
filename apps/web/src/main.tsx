@@ -3,7 +3,7 @@ import { confirmTabClose } from '@csv-viewer/ui/confirm-tab-close';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@csv-viewer/ui/App';
-import { applyTheme, getInitialTheme } from '@csv-viewer/ui/theme';
+import { applyPalette, applyTheme, getInitialPalette, getInitialTheme } from '@csv-viewer/ui/theme';
 import { CsvViewerProvider } from '@csv-viewer/ui/csv-viewer';
 import '@csv-viewer/ui/styles.css';
 import { pickPortableCsvSource } from './portable-csv-picker';
@@ -16,6 +16,7 @@ if (!rootElement) throw new Error('CSV Viewer Web root element was not found.');
 const root = createRoot(rootElement);
 
 applyTheme(getInitialTheme());
+applyPalette(getInitialPalette());
 root.render(<WebStartupState status="checking" />);
 
 const startupController = new AbortController();

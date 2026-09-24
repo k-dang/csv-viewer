@@ -42,6 +42,14 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+/** The Delimiter field lives in the Parse options popover beside Open CSV. */
+async function delimiterInput(): Promise<HTMLElement> {
+  const shown = screen.queryByRole('textbox', { name: 'Delimiter' });
+  if (shown) return shown;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Parse options' })));
+  return screen.getByRole('textbox', { name: 'Delimiter' });
+}
+
 describe('App', () => {
   it('uses current dialect input and validation for both menu and button commands', async () => {
     const open = vi.fn(async () => ({ status: 'cancelled' as const }));
@@ -51,17 +59,17 @@ describe('App', () => {
       onEvent: (listener) => { receiveEvent = listener; return () => {}; },
     });
     render(<CsvViewerProvider viewer={viewer}><App workspace={createWorkspace(viewer)} /></CsvViewerProvider>);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: 'xx' } });
+    fireEvent.change(await delimiterInput(), { target: { value: 'xx' } });
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     expect(open).not.toHaveBeenCalled();
     expect(screen.getByText('Delimiter must be one character, or blank for automatic detection.')).toBeTruthy();
 
-    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ';' } });
+    fireEvent.change(await delimiterInput(), { target: { value: ';' } });
     await act(async () => screen.getAllByRole('button', { name: 'Open CSV' })[0].click());
     expect(open).toHaveBeenLastCalledWith({ operation: 'csv.open', options: { delimiter: ';' } });
     expect(screen.queryByText('Delimiter must be one character, or blank for automatic detection.')).toBeNull();
 
-    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ',' } });
+    fireEvent.change(await delimiterInput(), { target: { value: ',' } });
     await act(async () => receiveEvent?.({ type: 'intent', intent: 'open-csv' }));
     expect(open).toHaveBeenLastCalledWith({ operation: 'csv.open', options: { delimiter: ',' } });
   });
@@ -88,11 +96,11 @@ describe('App', () => {
     });
     await act(async () => pending.resolve({ status: 'cancelled' }));
     expect(open).toHaveBeenCalledTimes(1);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Delimiter' }), { target: { value: ';' } });
+    fireEvent.change(await delimiterInput(), { target: { value: ';' } });
     rendered.unmount();
     expect(listeners.size).toBe(1);
     render(<StrictMode><CsvViewerProvider viewer={viewer}><App workspace={workspace} /></CsvViewerProvider></StrictMode>);
-    expect(screen.getByRole('textbox', { name: 'Delimiter' }).getAttribute('value')).toBe(';');
+    expect((await delimiterInput()).getAttribute('value')).toBe(';');
     expect(listeners.size).toBe(1);
     workspace.dispose();
     expect(listeners.size).toBe(0);
@@ -313,7 +321,7 @@ describe('App', () => {
     },
   );
 
-  it('opens the keyboard shortcuts panel from the header button and closes it on a second click', () => {
+  it('opens the keyboard shortcuts panel from the sidebar button and closes it on a second click', () => {
     const viewer = createTestCsvViewer({
       handlers: { 'csv.get-recent-sources': async () => [] },
     });
