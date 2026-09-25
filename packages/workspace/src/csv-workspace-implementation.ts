@@ -1,4 +1,4 @@
-import { observeStage, recordOutcome, type WorkspaceDiagnostics } from './workspace-diagnostics';
+import { diagnosticsLayer, observeStage, recordOutcome, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Cause, Effect, Exit } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { Comparisons, WorkingCsv, makeWorkspaceRuntime } from './workspace-runtime';
@@ -46,7 +46,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     private readonly host: CsvWorkspaceHost,
     database: WorkspaceDatabase,
     executor?: ComparisonExecutor,
-    diagnostics?: WorkspaceDiagnostics,
+    private readonly diagnostics?: WorkspaceDiagnostics,
   ) {
     this.runtime = makeWorkspaceRuntime(host, database, executor, diagnostics, (workingCsvId, failure) =>
       this.runEffect(recordOutcome('cleanup-failed', Cause.fail(failure), 'cleanup-failed'), 'csv.release-retired', { workingCsvId }));
@@ -131,12 +131,14 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   /** The shared promise boundary retains all causes when operation and cleanup both fail. */
-  private async runEffect<A, E>(effect: Effect.Effect<A, E>, stage?: string, identifiers?: { comparisonId?: string; operationId?: string; workingCsvId?: string }): Promise<A> {
+  private async runEffect<A, E>(effect: Effect.Effect<A, E>, stage?: string, identifiers?: { comparisonId?: string; operationId?: string; workingCsvId?: string }, execution: 'workspace' | 'independent' = 'workspace'): Promise<A> {
     const traced = stage ? observeStage(stage, effect) : effect;
     const context = { workspaceId: this.workspaceId, requestId: crypto.randomUUID(), ...identifiers };
-    const result = await this.runtime.runPromiseExit(traced.pipe(
-      Effect.annotateSpans(context),
-    ));
+    const instrumented = traced.pipe(Effect.annotateSpans(context));
+    // Source selection can outlive disposal, so that open flow must not belong to the managed runtime.
+    const result = execution === 'independent'
+      ? await Effect.runPromiseExit(instrumented.pipe(Effect.provide(diagnosticsLayer(this.diagnostics))))
+      : await this.runtime.runPromiseExit(instrumented);
     if (Exit.isSuccess(result)) return result.value;
     if (result.cause.reasons.length > 1) {
       throw new AggregateError(Cause.prettyErrors(result.cause), 'Unable to complete all workspace operations.', {
@@ -151,8 +153,8 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Promise<OpenCsvResult> {
-    const admission = this.csvStore.admitOpenWork();
-    if (!admission) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+    if (this.disposal) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+    // Source selection may outlive the workspace; admission protects only the open that follows it.
     return this.runEffect(Effect.gen({ self: this }, function* () {
       const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', Effect.promise(() => this.host.acquireSource())));
       if (!sourceId) {
@@ -165,13 +167,18 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       }
       let retained = false;
       try {
-        const result = yield* this.openSource(admission, sourceId, options);
+        const admission = this.csvStore.admitOpenWork();
+        if (!admission) {
+          yield* recordOutcome('failed');
+          return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+        }
+        const result = yield* this.openSource(admission, sourceId, options).pipe(Effect.ensuring(Effect.sync(admission.release)));
         retained = result.status === 'opened' || result.status === 'already-open';
         return result;
       } finally {
         if (!retained) this.host.releaseSource(sourceId);
       }
-    }).pipe(Effect.uninterruptible, Effect.ensuring(Effect.sync(admission.release))), 'csv.open');
+    }).pipe(Effect.uninterruptible), 'csv.open', undefined, 'independent');
   }
 
   private openRecentCsv(sourceId: CsvSourceId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
