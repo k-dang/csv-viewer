@@ -4,7 +4,6 @@ import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer
 import type {
   CsvCellEditRequest,
   CsvCellEditResult,
-  CsvColumnPlacement,
   CsvColumnValues,
   CsvColumnValuesRequest,
   CsvColumnValueCounts,
@@ -514,7 +513,7 @@ export class WorkingCsvStore {
     return this.withWorkingCsvMutation(request.workingCsvId, async (state) => {
       const columns = state.metadata.columns;
       const anchorIndex = requireColumnIndex(columns, request.column);
-      const index = columnPlacementIndex(anchorIndex, request.placement);
+      const index = anchorIndex + (request.placement === 'after' ? 1 : 0);
       const name = defaultColumnName(columns);
       return this.commitSchemaEdit(state, { type: 'insert-column', name, index });
     });
@@ -923,19 +922,6 @@ function requireColumnIndex(columns: readonly { name: string }[], name: string):
   const index = columns.findIndex((column) => column.name === name);
   if (index < 0) throw new Error(`Unknown CSV column: ${name}`);
   return index;
-}
-
-function columnPlacementIndex(anchorIndex: number, placement: CsvColumnPlacement): number {
-  switch (placement) {
-    case 'before':
-      return anchorIndex;
-    case 'after':
-      return anchorIndex + 1;
-    default: {
-      const exhaustive: never = placement;
-      throw new Error(`Unsupported CSV column placement: ${String(exhaustive)}`);
-    }
-  }
 }
 
 function hasConflictingColumnName(

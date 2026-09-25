@@ -60,19 +60,14 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
     setRenaming(f2Rename !== null);
   }
 
-  const actionsDisabled = focusedColumn === null;
-  const columnActionLock = useRef(false);
   const [columnActionPending, setColumnActionPending] = useState(false);
+  const actionsDisabled = focusedColumn === null;
+  // Rename shares the pending lock: an insert or delete may change the focused column under it.
   const columnActionsDisabled = actionsDisabled || columnActionPending;
 
   function runColumnAction(action: () => Promise<boolean>): void {
-    if (columnActionLock.current) return;
-    columnActionLock.current = true;
     setColumnActionPending(true);
-    void action().finally(() => {
-      columnActionLock.current = false;
-      setColumnActionPending(false);
-    });
+    void action().finally(() => setColumnActionPending(false));
   }
 
   return (
@@ -87,68 +82,64 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           onStopRenaming={() => setRenaming(false)}
         />
       ) : (
-        <span className="min-w-0 truncate text-muted-foreground">Select a cell to copy its column.</span>
+        <span className="min-w-0 truncate text-muted-foreground">Select a cell to edit its column.</span>
       )}
       <div className="flex shrink-0 items-center gap-0.5">
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="icon-xs"
           title="Rename column (F2 on the column header)"
+          aria-label="Rename column"
           aria-pressed={renaming}
-          disabled={actionsDisabled}
-          onClick={() => {
-            if (!focusedColumn) return;
-            if (renaming) {
-              setRenaming(false);
-              return;
-            }
-            setRenaming(true);
-          }}
+          disabled={columnActionsDisabled}
+          onClick={() => setRenaming(!renaming)}
         >
-          <Pencil data-icon="inline-start" />
-          Rename column
+          <Pencil />
         </Button>
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="icon-xs"
           title="Copy column (Ctrl+Shift+A on a cell)"
+          aria-label="Copy column"
           disabled={actionsDisabled}
           onClick={() => void copyColumn(tab)}
         >
-          <Copy data-icon="inline-start" />
-          Copy column
+          <Copy />
         </Button>
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="icon-xs"
+          title="Insert column left"
+          aria-label="Insert column left"
           disabled={columnActionsDisabled}
           onClick={() => runColumnAction(() => tab.insertColumn('before'))}
         >
-          <BetweenVerticalStart data-icon="inline-start" />
-          Insert column left
+          <BetweenVerticalStart />
         </Button>
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="icon-xs"
+          title="Insert column right"
+          aria-label="Insert column right"
           disabled={columnActionsDisabled}
           onClick={() => runColumnAction(() => tab.insertColumn('after'))}
         >
-          <BetweenVerticalEnd data-icon="inline-start" />
-          Insert column right
+          <BetweenVerticalEnd />
         </Button>
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="icon-xs"
+          title="Delete column"
+          aria-label="Delete column"
           disabled={columnActionsDisabled || workingCsv.columns.length === 1}
           onClick={() => runColumnAction(() => tab.deleteFocusedColumn())}
         >
-          <Trash2 data-icon="inline-start" />
-          Delete column
+          <Trash2 />
         </Button>
       </div>
     </div>

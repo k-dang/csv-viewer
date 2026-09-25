@@ -291,13 +291,13 @@ describe('CsvGrid', () => {
     const insertLeft = screen.getByRole('button', { name: 'Insert column left' });
     const insertRight = screen.getByRole('button', { name: 'Insert column right' });
     const deleteFocused = screen.getByRole('button', { name: 'Delete column' });
-    act(() => {
-      insertLeft.click();
-      insertRight.click();
-      deleteFocused.click();
-    });
+    const rename = screen.getByRole('button', { name: 'Rename column' });
+    act(() => insertLeft.click());
+    act(() => insertRight.click());
+    act(() => deleteFocused.click());
     expect(insertColumn).toHaveBeenCalledTimes(1);
     expect(deleteColumn).not.toHaveBeenCalled();
+    expect(rename.hasAttribute('disabled')).toBe(true);
     expect(insertLeft.hasAttribute('disabled')).toBe(true);
     expect(insertRight.hasAttribute('disabled')).toBe(true);
     expect(deleteFocused.hasAttribute('disabled')).toBe(true);
@@ -332,7 +332,7 @@ describe('CsvGrid', () => {
 
     render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
 
-    expect(screen.getByText('Select a cell to copy its column.')).toBeDefined();
+    expect(screen.getByText('Select a cell to edit its column.')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Rename column' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Copy column' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Insert column left' }).hasAttribute('disabled')).toBe(true);
