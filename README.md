@@ -12,7 +12,7 @@ A local desktop and web app for opening, inspecting, filtering, and cleaning CSV
 
 - Browse large CSV files, sort and filter rows, and search across columns.
 - Adjust delimiter and header settings when a file does not open as expected.
-- Edit cells, rename columns, add or delete rows, and undo or redo changes.
+- Edit cells, rename, insert, or delete columns, add or delete rows, and undo or redo changes.
 - Keep several files open in tabs, each with its own edits and filters.
 - Compare two files by a key and inspect changed cells and rows found only on one side.
 - View the most frequent values in a column, based on the current search and filters.
@@ -57,7 +57,7 @@ pnpm run dev:web
 
 - Cell values are edited as text, without numeric, date, or boolean validation.
 - Row insertion is disabled while sorting, filtering, or searching.
-- Adding, deleting, and reordering columns is not supported.
+- Reordering columns is not supported.
 - Spreadsheet features such as formulas, pivot tables, charts, joins, and SQL editing are not supported.
 
 ## Contributing

@@ -305,4 +305,188 @@ describe('CsvTab', () => {
     await expect(tab.renameFocusedColumn('sku')).resolves.toBe(false);
     expect(renameColumn).not.toHaveBeenCalled();
   });
+
+  it('does not insert or delete a column when none is focused', async () => {
+    const insertColumn = vi.fn();
+    const deleteColumn = vi.fn();
+    const tab = new CsvTab(
+      createTestCsvViewer({ handlers: { 'csv.insert-column': insertColumn, 'csv.delete-column': deleteColumn } }),
+      workingCsv,
+    );
+
+    await expect(tab.insertColumn('before')).resolves.toBe(false);
+    await expect(tab.deleteFocusedColumn()).resolves.toBe(false);
+
+    expect(insertColumn).not.toHaveBeenCalled();
+    expect(deleteColumn).not.toHaveBeenCalled();
+    expect(tab.snapshot().editError).toBeNull();
+  });
+
+  it('inserts beside the focused column and keeps focus, query, and data revision', async () => {
+    const csv = workingCsvFixture({
+      dataRevision: 4,
+      columns: [
+        { name: 'name', type: 'VARCHAR' },
+        { name: 'age', type: 'BIGINT' },
+      ],
+      rowCount: 250,
+    });
+    const columns = [
+      { name: 'New column', type: 'VARCHAR' },
+      { name: 'name', type: 'VARCHAR' },
+      { name: 'age', type: 'BIGINT' },
+    ];
+    const insertColumn = vi.fn(async () => ({
+      ...editedState,
+      workingCsvId: csv.workingCsvId,
+      columns,
+    }));
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.insert-column': insertColumn } }), csv);
+    tab.setFocusedColumn('name');
+    tab.setSearch('ada');
+    tab.setGridQuery(
+      [{ column: 'name', direction: 'asc' }],
+      [{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }],
+    );
+    tab.setSelection(['row-1']);
+
+    await expect(tab.insertColumn('before')).resolves.toBe(true);
+
+    expect(insertColumn).toHaveBeenCalledWith({
+      operation: 'csv.insert-column',
+      workingCsvId: csv.workingCsvId,
+      column: 'name',
+      placement: 'before',
+    });
+    const state = tab.snapshot();
+    expect(state.workingCsv.columns).toEqual(columns);
+    expect(state.workingCsv.dataRevision).toBe(4);
+    expect(state.focusedColumn).toBe('name');
+    expect(state.query.sort).toEqual([{ column: 'name', direction: 'asc' }]);
+    expect(state.query.filters).toEqual([{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }]);
+    expect(state.query.search).toBe('ada');
+    expect(state.selectedRowIds).toEqual([]);
+    expect(state.revision).toBe(1);
+  });
+
+  it('deletes the focused column and drops sort, filters, focus, and stats on that name', async () => {
+    const columns = [{ name: 'name', type: 'VARCHAR' }];
+    const deleteColumn = vi.fn(async () => ({
+      ...editedState,
+      columns,
+    }));
+    const getCounts = vi.fn(async () => counts(250));
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: { 'csv.delete-column': deleteColumn, 'csv.get-column-value-counts': getCounts },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('age');
+    tab.setSearch('ada');
+    tab.setGridQuery(
+      [{ column: 'age', direction: 'desc' }],
+      [{ column: 'age', kind: 'text', operator: 'contains', value: '3' }],
+    );
+    tab.toggleStats();
+
+    await expect(tab.deleteFocusedColumn()).resolves.toBe(true);
+
+    expect(deleteColumn).toHaveBeenCalledWith({
+      operation: 'csv.delete-column',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'age',
+    });
+    const state = tab.snapshot();
+    expect(state.workingCsv.columns).toEqual(columns);
+    expect(state.focusedColumn).toBeNull();
+    expect(state.query.sort).toEqual([]);
+    expect(state.query.filters).toEqual([]);
+    expect(state.query.search).toBe('ada');
+    expect(state.stats.column).toBe('name');
+    expect(state.revision).toBe(1);
+  });
+
+  it('keeps focus and descriptors when the delete result removes a different column', async () => {
+    const columns = [{ name: 'name', type: 'VARCHAR' }];
+    const deleteColumn = vi.fn(async () => ({
+      ...editedState,
+      columns,
+    }));
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.delete-column': deleteColumn } }), workingCsv);
+    tab.setFocusedColumn('name');
+    tab.setGridQuery(
+      [{ column: 'name', direction: 'asc' }],
+      [{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }],
+    );
+
+    await expect(tab.deleteFocusedColumn()).resolves.toBe(true);
+
+    expect(deleteColumn).toHaveBeenCalledWith({
+      operation: 'csv.delete-column',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'name',
+    });
+    const state = tab.snapshot();
+    expect(state.workingCsv.columns).toEqual(columns);
+    expect(state.focusedColumn).toBe('name');
+    expect(state.query.sort).toEqual([{ column: 'name', direction: 'asc' }]);
+    expect(state.query.filters).toEqual([{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }]);
+  });
+
+  it('leaves focus empty and the dropped sort dropped when undo only adds the deleted column back', async () => {
+    const withoutName = [{ name: 'age', type: 'BIGINT' }];
+    const withName = [
+      { name: 'name', type: 'VARCHAR' },
+      { name: 'age', type: 'BIGINT' },
+    ];
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.delete-column': async () => ({ ...editedState, columns: withoutName }),
+          'csv.undo': async () => ({ ...editedState, canRedo: true, columns: withName }),
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('name');
+    tab.setGridQuery(
+      [{ column: 'name', direction: 'asc' }],
+      [{ column: 'name', kind: 'text', operator: 'contains', value: 'a' }],
+    );
+
+    await tab.deleteFocusedColumn();
+    expect(tab.snapshot().focusedColumn).toBeNull();
+    expect(tab.snapshot().query.sort).toEqual([]);
+
+    await tab.undo();
+
+    const state = tab.snapshot();
+    expect(state.workingCsv.columns).toEqual(withName);
+    expect(state.focusedColumn).toBeNull();
+    expect(state.query.sort).toEqual([]);
+    expect(state.query.filters).toEqual([]);
+  });
+
+  it('reports a rejected delete and keeps columns, focus, and revision', async () => {
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.delete-column': async () => {
+            throw new Error('The last CSV column cannot be deleted.');
+          },
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('name');
+
+    await expect(tab.deleteFocusedColumn()).resolves.toBe(false);
+
+    const state = tab.snapshot();
+    expect(state.editError).toBe('The last CSV column cannot be deleted.');
+    expect(state.workingCsv.columns).toEqual(workingCsv.columns);
+    expect(state.focusedColumn).toBe('name');
+    expect(state.revision).toBe(0);
+  });
 });

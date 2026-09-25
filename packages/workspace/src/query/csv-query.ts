@@ -61,6 +61,15 @@ export function buildRenameColumnStatement(tableName: string, from: string, to: 
   return `ALTER TABLE ${quoteIdentifier(tableName)} RENAME COLUMN ${quoteIdentifier(from)} TO ${quoteIdentifier(to)}`;
 }
 
+/** Existing rows receive ''. Without the default, DuckDB would write NULL. */
+export function buildAddColumnStatement(tableName: string, name: string): string {
+  return `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${quoteIdentifier(name)} VARCHAR DEFAULT ''`;
+}
+
+export function buildDropColumnStatement(tableName: string, name: string): string {
+  return `ALTER TABLE ${quoteIdentifier(tableName)} DROP COLUMN ${quoteIdentifier(name)}`;
+}
+
 export function buildCellUpdateStatement(
   tableName: string,
   rowId: string,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { AgGridReactProps } from 'ag-grid-react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
@@ -144,6 +144,200 @@ describe('CsvGrid', () => {
 
     expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'work_email', 'status']);
     expect(latest?.maintainColumnOrder).toBeFalsy();
+  });
+
+  it('keeps grid column fields in Working CSV order after a middle insert and a delete', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+        { name: 'status', type: 'VARCHAR' },
+      ],
+    });
+    const insertedColumns = [
+      { name: 'id', type: 'VARCHAR' },
+      { name: 'email', type: 'VARCHAR' },
+      { name: 'New column', type: 'VARCHAR' },
+      { name: 'status', type: 'VARCHAR' },
+    ];
+    const deletedColumns = [
+      { name: 'id', type: 'VARCHAR' },
+      { name: 'New column', type: 'VARCHAR' },
+      { name: 'status', type: 'VARCHAR' },
+    ];
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.insert-column': async () => ({
+            workingCsvId: workingCsv.workingCsvId,
+            columns: insertedColumns,
+            hasUnexportedChanges: true,
+            canUndo: true,
+            canRedo: false,
+          }),
+          'csv.delete-column': async () => ({
+            workingCsvId: workingCsv.workingCsvId,
+            columns: deletedColumns,
+            hasUnexportedChanges: true,
+            canUndo: true,
+            canRedo: false,
+          }),
+        },
+      }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('email');
+    let latest: AgGridReactProps<CsvRow> | undefined;
+    const CaptureGrid = (props: AgGridReactProps<CsvRow>) => {
+      latest = props;
+      return null;
+    };
+
+    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+
+    await act(async () => {
+      await tab.insertColumn('after');
+    });
+    rerender(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'email', 'New column', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+
+    await act(async () => {
+      await tab.deleteFocusedColumn();
+    });
+    rerender(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'New column', 'status']);
+    expect(latest?.maintainColumnOrder).toBeFalsy();
+  });
+
+  it('inserts on either side of a focused column and deletes it when more than one column remains', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+      ],
+    });
+    const insertColumn = vi.fn(async () => ({
+      workingCsvId: workingCsv.workingCsvId,
+      columns: workingCsv.columns,
+      hasUnexportedChanges: true,
+      canUndo: true,
+      canRedo: false,
+    }));
+    const deleteColumn = vi.fn(async () => ({
+      workingCsvId: workingCsv.workingCsvId,
+      columns: [{ name: 'email', type: 'VARCHAR' }],
+      hasUnexportedChanges: true,
+      canUndo: true,
+      canRedo: false,
+    }));
+    const tab = new CsvTab(
+      createTestCsvViewer({ handlers: { 'csv.insert-column': insertColumn, 'csv.delete-column': deleteColumn } }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
+
+    const insertLeft = screen.getByRole('button', { name: 'Insert column left' });
+    const deleteFocused = screen.getByRole('button', { name: 'Delete column' });
+    expect(screen.getByRole('button', { name: 'Insert column right' })).toBeDefined();
+    expect(deleteFocused.hasAttribute('disabled')).toBe(false);
+
+    await act(async () => {
+      insertLeft.click();
+    });
+    expect(insertColumn).toHaveBeenCalledWith({
+      operation: 'csv.insert-column',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'id',
+      placement: 'before',
+    });
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Delete column' }).click();
+    });
+    expect(deleteColumn).toHaveBeenCalledWith({
+      operation: 'csv.delete-column',
+      workingCsvId: workingCsv.workingCsvId,
+      column: 'id',
+    });
+  });
+
+  it('ignores another column mutation while insert is pending', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+      ],
+    });
+    const pending = Promise.withResolvers<{
+      workingCsvId: string;
+      columns: typeof workingCsv.columns;
+      hasUnexportedChanges: boolean;
+      canUndo: boolean;
+      canRedo: boolean;
+    }>();
+    const insertColumn = vi.fn(() => pending.promise);
+    const deleteColumn = vi.fn();
+    const tab = new CsvTab(
+      createTestCsvViewer({ handlers: { 'csv.insert-column': insertColumn, 'csv.delete-column': deleteColumn } }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
+
+    const insertLeft = screen.getByRole('button', { name: 'Insert column left' });
+    const insertRight = screen.getByRole('button', { name: 'Insert column right' });
+    const deleteFocused = screen.getByRole('button', { name: 'Delete column' });
+    const rename = screen.getByRole('button', { name: 'Rename column' });
+    act(() => insertLeft.click());
+    act(() => insertRight.click());
+    act(() => deleteFocused.click());
+    expect(insertColumn).toHaveBeenCalledTimes(1);
+    expect(deleteColumn).not.toHaveBeenCalled();
+    expect(rename.hasAttribute('disabled')).toBe(true);
+    expect(insertLeft.hasAttribute('disabled')).toBe(true);
+    expect(insertRight.hasAttribute('disabled')).toBe(true);
+    expect(deleteFocused.hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      pending.resolve({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+    });
+    expect(insertLeft.hasAttribute('disabled')).toBe(false);
+    expect(insertRight.hasAttribute('disabled')).toBe(false);
+    expect(deleteFocused.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('disables Delete column when the focused column is the only one', () => {
+    const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
+
+    expect(screen.getByRole('button', { name: 'Insert column left' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Insert column right' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Delete column' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('keeps the column placeholder when no column is focused', () => {
+    const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
+
+    expect(screen.getByText('Select a cell to edit its column.')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Rename column' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Copy column' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Insert column left' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Insert column right' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Delete column' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('offers Rename column for the focused column', async () => {
