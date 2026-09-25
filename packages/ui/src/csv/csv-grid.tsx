@@ -45,7 +45,7 @@ import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescri
 import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusIndicator } from './query-status-indicator';
 import { CsvStatsPanel } from './csv-stats-panel';
-import { CsvColumnBar } from './csv-column-bar';
+import { CsvColumnMenu } from './csv-column-menu';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -201,7 +201,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   }
 
   // Ctrl+C copies the focused cell's raw value (null as empty). An open editor and text the user
-  // selected across cells keep the browser's own copy. Ctrl+Shift+A lives on the Column Bar.
+  // selected across cells keep the browser's own copy. Ctrl+Shift+A lives on the Column Menu.
   function onCellKeyDown({ event, api, column, value }: CellKeyDownEvent<CsvRow>) {
     if (!event || !isCopyCellShortcut(event)) return;
     if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;
@@ -350,47 +350,56 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           {focusedColumn ? (
-            // Tints the Column Bar's column without rebuilding columnDefs on every focus change.
+            // Tints the focused column without rebuilding columnDefs on every focus change.
             <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: color-mix(in oklch, var(--primary) 7%, transparent); }`}</style>
           ) : null}
-          <DataGrid
-            key={workingCsv.workingCsvId}
-            theme={gridTheme}
-            columnDefs={columnDefs}
-            defaultColDef={{
-              editable: true,
-              cellEditor: 'agTextCellEditor',
-              minWidth: 120,
-            }}
-            getRowId={(params) => params.data[csvInternalRowIdField]}
-            rowModelType="infinite"
-            datasource={datasource}
-            cacheBlockSize={100}
-            maxBlocksInCache={6}
-            rowBuffer={8}
-            rowSelection={{
-              mode: 'multiRow',
-              enableClickSelection: true,
-              checkboxes: false,
-              headerCheckbox: false,
-            }}
-            enableCellTextSelection
-            ensureDomOrder
-            suppressDragLeaveHidesColumns
-            onGridReady={onGridReady}
-            onCellValueChanged={onCellValueChanged}
-            onSelectionChanged={onSelectionChanged}
-            onCellFocused={onCellFocused}
-            onCellKeyDown={onCellKeyDown}
-            overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
-          />
+          <CsvColumnMenu tab={tab} active={active}>
+            <DataGrid
+              key={workingCsv.workingCsvId}
+              theme={gridTheme}
+              columnDefs={columnDefs}
+              defaultColDef={{
+                editable: true,
+                cellEditor: 'agTextCellEditor',
+                minWidth: 120,
+              }}
+              getRowId={(params) => params.data[csvInternalRowIdField]}
+              rowModelType="infinite"
+              datasource={datasource}
+              cacheBlockSize={100}
+              maxBlocksInCache={6}
+              rowBuffer={8}
+              rowSelection={{
+                mode: 'multiRow',
+                enableClickSelection: true,
+                checkboxes: false,
+                headerCheckbox: false,
+              }}
+              enableCellTextSelection
+              ensureDomOrder
+              suppressDragLeaveHidesColumns
+              onGridReady={onGridReady}
+              onCellValueChanged={onCellValueChanged}
+              onSelectionChanged={onSelectionChanged}
+              onCellFocused={onCellFocused}
+              onCellKeyDown={onCellKeyDown}
+              overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
+            />
+          </CsvColumnMenu>
         </div>
         {stats.open ? <CsvStatsPanel tab={tab} /> : null}
       </div>
       <div className="flex h-8 min-w-0 items-center gap-3 border-t bg-muted/40 px-3 text-xs">
         <QueryStatusIndicator state={state.queryStatus} />
         <Separator orientation="vertical" className="h-4 self-center" />
-        <CsvColumnBar tab={tab} active={active} />
+        {focusedColumn ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="min-w-0 truncate font-semibold text-foreground">{focusedColumn}</span>
+            <span className="shrink-0 text-muted-foreground">{formatNumber(state.filteredRowCount)} values</span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">Right-click a column header to edit the column.</span>
+        )}
         {editError ? (
           <span className="min-w-0 truncate text-destructive" role="alert" title={editError}>
             {editError}

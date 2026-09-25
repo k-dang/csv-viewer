@@ -906,7 +906,7 @@ async function locate(session, options) {
   return found;
 }
 
-async function dispatchMouseClick(session, x, y, clickCount) {
+async function dispatchMouseClick(session, x, y, clickCount, button = 'left') {
   // Press/release carry coordinates. Awaiting mouseMoved can stall for five seconds in an
   // occluded Electron window, leaving time-sensitive controls stale before the press arrives.
   for (let count = 1; count <= clickCount; count += 1) {
@@ -914,14 +914,14 @@ async function dispatchMouseClick(session, x, y, clickCount) {
       type: 'mousePressed',
       x,
       y,
-      button: 'left',
+      button,
       clickCount: count,
     });
     await session.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,
       y,
-      button: 'left',
+      button,
       clickCount: count,
     });
   }
@@ -937,7 +937,7 @@ async function runClick(options) {
       if (el) el.removeAttribute('data-verify-hit');
       return true;
     })()`);
-    await dispatchMouseClick(session, found.x, found.y, clickCount);
+    await dispatchMouseClick(session, found.x, found.y, clickCount, options.right ? 'right' : 'left');
     printJson({ status: 'ok', name: found.name, disabled: found.disabled });
   });
 }
@@ -1036,6 +1036,8 @@ async function runType(options) {
 
 // CDP modifier bits for `press --key Control+c` style chords.
 const keyModifierBits = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+// A bare Enter needs its text so Chromium fires keypress and runs implicit form submission.
+const keyText = { Enter: '\r' };
 
 async function runPress(options) {
   const run = await requireCurrentRun();
@@ -1049,7 +1051,8 @@ async function runPress(options) {
     modifiers |= keyModifierBits[part];
   }
   await withCdp(run, async (session) => {
-    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers });
+    const text = modifiers === 0 ? keyText[key] : undefined;
+    await session.send('Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers, text });
     await session.send('Input.dispatchKeyEvent', { type: 'keyUp', key, modifiers });
     printJson({ status: 'ok', key: chord });
   });
