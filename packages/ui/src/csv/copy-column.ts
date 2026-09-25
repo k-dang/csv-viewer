@@ -15,7 +15,7 @@ export function isCopyColumnShortcut(event: Event): boolean {
   return event.key.toLowerCase() === 'a' && (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey;
 }
 
-/** Confirms a completed clipboard write for both the button and the shortcut. */
+/** Confirms a completed clipboard write for both the Column Menu item and the shortcut. */
 export async function copyColumn(tab: CsvTab): Promise<void> {
   const result = await tab.copyFocusedColumn();
   if (result) confirmCopy(result.count, result.column);

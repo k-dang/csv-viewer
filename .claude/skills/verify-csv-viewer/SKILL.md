@@ -154,6 +154,8 @@ Stable handles from this renderer:
 | Global search | searchbox `Global search` (`#global-search`) |
 | Clear query | button `Clear query` |
 | Insert / append / delete | buttons `Insert row above`, `Insert row below`, `Append row`, `Delete selected rows` |
+| Column Menu | `click --right --role columnheader --name "email"` opens it at the pointer. Items are `--role menuitem`: `Rename column`, `Copy column`, `Insert column left`, `Insert column right`, `Delete column`. A disabled item reports `"disabled": true`. A right-click on a cell keeps the browser menu |
+| Column name | textbox `Column name` in a popover under the header, from `Rename column` or F2 on a focused header |
 | Export | button `Export CSV`. Never disabled, dirty or not. On desktop this is a native OS dialog: do not click it. On web it downloads into the run's `downloads/` directory and the status line reads `Download started` |
 | Undo / redo | buttons `Undo edit`, `Redo edit` |
 | Dirty marker | text `Unexported Changes` |
@@ -213,11 +215,11 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | --- | --- |
 | `launch [--web] [--rebuild]` | Start an isolated instance of the chosen target and wait until healthy. Desktop builds if needed and seeds Recent CSV Sources; web starts the dev server and a real browser, and captures downloads. `--rebuild` applies to desktop only |
 | `doctor` | Read-only health of the recorded instance |
-| `click --role <role> --name <name> [--exact] [--double] [--nth N]` | Click a visible control (CDP mouse at the control center). `--nth` is 0-based when names collide |
+| `click --role <role> --name <name> [--exact] [--double] [--right] [--nth N]` | Click a visible control (CDP mouse at the control center). `--right` sends a right-click. `--nth` is 0-based when names collide |
 | `fill --role <role> --name <name> --value <text>` | Replace a textbox/searchbox value and fire input events |
 | `fill --focused --value <text>` | Replace the active editor (AG Grid cell editor) |
 | `type --text <text>` | Insert text at the current caret via CDP |
-| `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
+| `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). A bare `Enter` carries its keypress text, so it submits forms. Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
 | `drop --file <path>` or `drop --files <JSON array>` | Both runtimes. Sends file-backed Chromium drag input at the window center. Add `--hover` for the highlight, `--cancel` to cancel, or `--x` and `--y` to target another location |
 | `upload --role <role> --name <name> --file <path>` | Web only. Arms file-chooser interception, clicks the control, and answers the chooser with `--file` (resolved from the repo root) |
 | `wait --text <substring> [--timeout 10000]` | Poll `document.body.innerText` |
