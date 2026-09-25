@@ -23,6 +23,29 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       return fixture.viewer;
     }
 
+    const people = ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel'].join('\n');
+
+    async function openPeople(fileName: string) {
+      return fixture.openSource(fileName, people);
+    }
+
+    async function readRows(
+      workingCsvId: string,
+      query: {
+        sort?: { column: string; direction: 'asc' | 'desc' }[];
+        filters?: CsvFilterDescriptor[];
+        search?: string;
+      } = {},
+    ) {
+      return workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId,
+        offset: 0,
+        limit: 10,
+        ...query,
+      });
+    }
+
     it('edits a cell by row identifier and returns edited values in later row windows', async () => {
       const workingCsv = await fixture.openSource('edit.csv', ['name,code', 'Ada,001', 'Grace,002'].join('\n'));
       const firstWindow = await workspace().call({
@@ -863,6 +886,14 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         workspace().call({
           operation: 'csv.rename-column',
           ...request,
+          column: 'sku',
+          name: '__csvViewerHidden_1',
+        }),
+      ).rejects.toThrow('CSV column name is reserved.');
+      await expect(
+        workspace().call({
+          operation: 'csv.rename-column',
+          ...request,
           column: 'missing',
           name: 'other',
         }),
@@ -1344,6 +1375,419 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         });
         expectVisibleRows(redone.rows).toEqual([{ name: 'Ada', code: '003' }]);
       });
+    });
+
+    it('inserts a column after an anchor with empty cells, then removes and restores it', async () => {
+      const workingCsv = await openPeople('insert-after.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const insertedColumns = [
+        workingCsv.columns[0],
+        { name: 'New column', type: 'VARCHAR' },
+        workingCsv.columns[1],
+      ];
+
+      const inserted = await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'after',
+      });
+      const insertedWindow = await readRows(workingCsv.workingCsvId);
+
+      expect(inserted).toEqual({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: insertedColumns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      expectVisibleRows(insertedWindow.rows).toEqual([
+        { name: 'Ada', 'New column': '', team: 'compiler' },
+        { name: 'Grace', 'New column': '', team: 'navy' },
+        { name: 'Linus', 'New column': '', team: 'kernel' },
+      ]);
+      expect(rowIds(insertedWindow.rows)).toEqual(['1', '2', '3']);
+
+      const undone = await workspace().call({ operation: 'csv.undo', ...request });
+      const undoneWindow = await readRows(workingCsv.workingCsvId);
+      expect(undone.columns).toEqual(workingCsv.columns);
+      expect(undone).toMatchObject({ hasUnexportedChanges: false, canUndo: false, canRedo: true });
+      expectVisibleRows(undoneWindow.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      const redoneWindow = await readRows(workingCsv.workingCsvId);
+      expect(redone.columns).toEqual(insertedColumns);
+      expectVisibleRows(redoneWindow.rows).toEqual([
+        { name: 'Ada', 'New column': '', team: 'compiler' },
+        { name: 'Grace', 'New column': '', team: 'navy' },
+        { name: 'Linus', 'New column': '', team: 'kernel' },
+      ]);
+
+      const readExported = fixture.captureNextExport('insert-after-export.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(
+        ['name,New column,team', 'Ada,,compiler', 'Grace,,navy', 'Linus,,kernel', ''].join('\n'),
+      );
+    });
+
+    it('inserts before the first header and skips a taken default name', async () => {
+      const workingCsv = await openPeople('insert-before.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      const first = await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'before',
+      });
+      expect(first.columns.map((column) => column.name)).toEqual(['New column', 'name', 'team']);
+      expect(first.columns[0]).toEqual({ name: 'New column', type: 'VARCHAR' });
+
+      const second = await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'before',
+      });
+      expect(second.columns.map((column) => column.name)).toEqual(['New column', 'New column 2', 'name', 'team']);
+      expect(second.columns[1]).toEqual({ name: 'New column 2', type: 'VARCHAR' });
+
+      const taken = await fixture.openSource(
+        'insert-taken-name.csv',
+        ['new column,team', 'Ada,compiler'].join('\n'),
+      );
+      const takenInsert = await workspace().call({
+        operation: 'csv.insert-column',
+        workingCsvId: taken.workingCsvId,
+        column: 'new column',
+        placement: 'before',
+      });
+      expect(takenInsert.columns.map((column) => column.name)).toEqual(['New column 2', 'new column', 'team']);
+      expect(takenInsert.columns[0].type).toBe('VARCHAR');
+    });
+
+    it('writes an empty cell in a new column when a row is inserted afterwards', async () => {
+      const workingCsv = await openPeople('insert-column-then-row.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'team',
+        placement: 'after',
+      });
+      await workspace().call({
+        operation: 'csv.insert-row',
+        ...request,
+        placement: 'append',
+        rowIds: [],
+        hasActiveQuery: false,
+      });
+      const window = await readRows(workingCsv.workingCsvId);
+
+      expectVisibleRows(window.rows).toEqual([
+        { name: 'Ada', team: 'compiler', 'New column': '' },
+        { name: 'Grace', team: 'navy', 'New column': '' },
+        { name: 'Linus', team: 'kernel', 'New column': '' },
+        { name: '', team: '', 'New column': '' },
+      ]);
+    });
+
+    it('returns fewer rows when a search matched only the deleted column', async () => {
+      const workingCsv = await openPeople('delete-search.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      const before = await readRows(workingCsv.workingCsvId, { search: 'navy' });
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+      const after = await readRows(workingCsv.workingCsvId, { search: 'navy' });
+
+      expect(rowIds(before.rows)).toEqual(['2']);
+      expect(before.filteredRowCount).toBe(1);
+      expect(after.filteredRowCount).toBe(0);
+      expect(after.rows).toEqual([]);
+    });
+
+    it('restores an edited cell when the column delete is undone, then walks the pair', async () => {
+      const workingCsv = await openPeople('delete-edited.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({
+        operation: 'csv.edit-cell',
+        ...request,
+        rowId: '1',
+        column: 'team',
+        value: 'compilers',
+      });
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const restored = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(restored.rows).toEqual([
+        { name: 'Ada', team: 'compilers' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const original = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(original.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+
+      await workspace().call({ operation: 'csv.redo', ...request });
+      const reedited = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(reedited.rows).toEqual([
+        { name: 'Ada', team: 'compilers' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+
+      const removed = await workspace().call({ operation: 'csv.redo', ...request });
+      const removedWindow = await readRows(workingCsv.workingCsvId);
+      expect(removed.columns.map((column) => column.name)).toEqual(['name']);
+      expectVisibleRows(removedWindow.rows).toEqual([{ name: 'Ada' }, { name: 'Grace' }, { name: 'Linus' }]);
+    });
+
+    it('restores a source null when a deleted column is undone', async () => {
+      const workingCsv = await fixture.openSource(
+        'delete-null.csv',
+        ['name,note,team', 'Ada,,compiler', 'Grace,kept,navy'].join('\n'),
+      );
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      const before = await readRows(workingCsv.workingCsvId);
+      expect(before.rows[0].note).toBeNull();
+
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'note' });
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const restored = await readRows(workingCsv.workingCsvId);
+
+      expectVisibleRows(restored.rows).toEqual([
+        { name: 'Ada', note: null, team: 'compiler' },
+        { name: 'Grace', note: 'kept', team: 'navy' },
+      ]);
+    });
+
+    it('replays a column insert and a cell edit so the column returns blank before the edit', async () => {
+      const workingCsv = await openPeople('insert-edit-replay.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'after',
+      });
+      await workspace().call({
+        operation: 'csv.edit-cell',
+        ...request,
+        rowId: '1',
+        column: 'New column',
+        value: 'x',
+      });
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const blank = await readRows(workingCsv.workingCsvId);
+      expect(blank.rows[0]['New column']).toBe('');
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const absent = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(absent.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+
+      await workspace().call({ operation: 'csv.redo', ...request });
+      const returned = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(returned.rows).toEqual([
+        { name: 'Ada', 'New column': '', team: 'compiler' },
+        { name: 'Grace', 'New column': '', team: 'navy' },
+        { name: 'Linus', 'New column': '', team: 'kernel' },
+      ]);
+
+      await workspace().call({ operation: 'csv.redo', ...request });
+      const edited = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(edited.rows).toEqual([
+        { name: 'Ada', 'New column': 'x', team: 'compiler' },
+        { name: 'Grace', 'New column': '', team: 'navy' },
+        { name: 'Linus', 'New column': '', team: 'kernel' },
+      ]);
+    });
+
+    it('restores a deleted column after a rename reused its name', async () => {
+      const workingCsv = await openPeople('delete-then-rename.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+      const renamed = await workspace().call({
+        operation: 'csv.rename-column',
+        ...request,
+        column: 'name',
+        name: 'team',
+      });
+      expect(renamed.columns.map((column) => column.name)).toEqual(['team']);
+
+      const undoneRename = await workspace().call({ operation: 'csv.undo', ...request });
+      expect(undoneRename.columns.map((column) => column.name)).toEqual(['name']);
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const restored = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(restored.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+    });
+
+    it('restores two deleted middle columns to their original indexes', async () => {
+      const workingCsv = await fixture.openSource(
+        'delete-middle.csv',
+        ['name,left,right,team', 'Ada,L1,R1,compiler', 'Grace,L2,R2,navy'].join('\n'),
+      );
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'left' });
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'right' });
+      const removed = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(removed.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+      ]);
+
+      const firstUndo = await workspace().call({ operation: 'csv.undo', ...request });
+      const rightBack = await readRows(workingCsv.workingCsvId);
+      expect(firstUndo.columns.map((column) => column.name)).toEqual(['name', 'right', 'team']);
+      expectVisibleRows(rightBack.rows).toEqual([
+        { name: 'Ada', right: 'R1', team: 'compiler' },
+        { name: 'Grace', right: 'R2', team: 'navy' },
+      ]);
+
+      const secondUndo = await workspace().call({ operation: 'csv.undo', ...request });
+      const bothBack = await readRows(workingCsv.workingCsvId);
+      expect(secondUndo.columns.map((column) => column.name)).toEqual(['name', 'left', 'right', 'team']);
+      expectVisibleRows(bothBack.rows).toEqual([
+        { name: 'Ada', left: 'L1', right: 'R1', team: 'compiler' },
+        { name: 'Grace', left: 'L2', right: 'R2', team: 'navy' },
+      ]);
+    });
+
+    it('rejects deleting the last column and leaves history unchanged', async () => {
+      const workingCsv = await fixture.openSource('delete-last.csv', ['name', 'Ada', 'Grace'].join('\n'));
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const before = await fixture.editState(workingCsv.workingCsvId);
+
+      await expect(
+        workspace().call({ operation: 'csv.delete-column', ...request, column: 'name' }),
+      ).rejects.toThrow('The last CSV column cannot be deleted.');
+
+      await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
+      const searched = await readRows(workingCsv.workingCsvId, { search: 'Ada' });
+      expectVisibleRows(searched.rows).toEqual([{ name: 'Ada' }]);
+      expect(searched.filteredRowCount).toBe(1);
+    });
+
+    it('rejects unknown insert and delete targets and leaves history unchanged', async () => {
+      const workingCsv = await openPeople('unknown-column.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const before = await fixture.editState(workingCsv.workingCsvId);
+
+      await expect(
+        workspace().call({
+          operation: 'csv.insert-column',
+          ...request,
+          column: 'missing',
+          placement: 'after',
+        }),
+      ).rejects.toThrow('Unknown CSV column: missing');
+      await expect(
+        workspace().call({ operation: 'csv.delete-column', ...request, column: 'missing' }),
+      ).rejects.toThrow('Unknown CSV column: missing');
+
+      await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
+      const window = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(window.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+    });
+
+    it('restores pre-delete cells after an inserted row is undone', async () => {
+      const workingCsv = await openPeople('delete-then-insert-row.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+      await workspace().call({
+        operation: 'csv.insert-row',
+        ...request,
+        placement: 'append',
+        rowIds: [],
+        hasActiveQuery: false,
+      });
+      await workspace().call({ operation: 'csv.undo', ...request });
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const restored = await readRows(workingCsv.workingCsvId);
+
+      expect(rowIds(restored.rows)).toEqual(['1', '2', '3']);
+      expectVisibleRows(restored.rows).toEqual([
+        { name: 'Ada', team: 'compiler' },
+        { name: 'Grace', team: 'navy' },
+        { name: 'Linus', team: 'kernel' },
+      ]);
+    });
+
+    it('restores an inserted column as empty after a row inserted while it was hidden is undone', async () => {
+      const workingCsv = await openPeople('insert-delete-insert-row.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'after',
+      });
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'New column' });
+      await workspace().call({
+        operation: 'csv.insert-row',
+        ...request,
+        placement: 'append',
+        rowIds: [],
+        hasActiveQuery: false,
+      });
+      await workspace().call({ operation: 'csv.undo', ...request });
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const restored = await readRows(workingCsv.workingCsvId);
+
+      expect(rowIds(restored.rows)).toEqual(['1', '2', '3']);
+      expectVisibleRows(restored.rows).toEqual([
+        { name: 'Ada', 'New column': '', team: 'compiler' },
+        { name: 'Grace', 'New column': '', team: 'navy' },
+        { name: 'Linus', 'New column': '', team: 'kernel' },
+      ]);
+    });
+
+    it('omits a deleted column from export and writes its original cells after undo', async () => {
+      const workingCsv = await openPeople('delete-export.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+      const readDeleted = fixture.captureNextExport('deleted-columns.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readDeleted()).toBe(['name', 'Ada', 'Grace', 'Linus', ''].join('\n'));
+
+      await workspace().call({ operation: 'csv.undo', ...request });
+      const readRestored = fixture.captureNextExport('restored-columns.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readRestored()).toBe(
+        ['name,team', 'Ada,compiler', 'Grace,navy', 'Linus,kernel', ''].join('\n'),
+      );
     });
   });
 

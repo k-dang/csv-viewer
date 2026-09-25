@@ -10,7 +10,15 @@ export type CsvEditDraft =
     }
   | { type: 'delete-rows'; rowIds: string[] }
   | { type: 'insert-row'; rowId: string }
-  | { type: 'rename-column'; from: string; to: string };
+  | { type: 'rename-column'; from: string; to: string }
+  | { type: 'insert-column'; name: string; index: number }
+  | {
+      type: 'delete-column';
+      name: string;
+      index: number;
+      columnType: string;
+      hiddenName: string;
+    };
 
 export type CsvEditCommand = CsvEditDraft & {
   previousRevisionId: number;
@@ -102,6 +110,8 @@ export function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo
   switch (command.type) {
     case 'cell-edit':
     case 'rename-column':
+    case 'insert-column':
+    case 'delete-column':
       return 0;
     case 'delete-rows':
       return sign * -command.rowIds.length;

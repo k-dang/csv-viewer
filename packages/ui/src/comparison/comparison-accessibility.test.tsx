@@ -29,9 +29,9 @@ const comparison = (overrides: Partial<ComparisonView> = {}) =>
 afterEach(cleanup);
 
 /** Renders one Comparison Tab and returns its markup, the way the static dialog case reads it. */
-function panelMarkup(view: ComparisonView, themeMode: 'light' | 'dark' = 'light'): string {
+function panelMarkup(view: ComparisonView): string {
   const tab = new ComparisonTab(createTestCsvViewer(), view);
-  return render(<ComparisonPanel tab={tab} themeMode={themeMode} />).container.innerHTML;
+  return render(<ComparisonPanel tab={tab} />).container.innerHTML;
 }
 
 describe('Comparison accessibility semantics', () => {
@@ -100,7 +100,6 @@ describe('Comparison accessibility semantics', () => {
           },
         },
       }),
-      'dark',
     );
 
     expect(markup).toContain('role="alert"');

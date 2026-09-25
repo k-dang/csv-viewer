@@ -5,13 +5,15 @@ import type {
   CsvInsertRowPlacement,
 } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
-import type { CsvEditCommand } from './csv-edit-history';
+import type { CsvEditDraft } from './csv-edit-history';
 import {
+  buildAddColumnStatement,
   buildAppendSourceOrderSql,
   buildCellUpdateStatement,
   buildCellValueQuery,
   buildCreateWorkingCsvTableSql,
   buildDescribeColumnsSql,
+  buildDropColumnStatement,
   buildDropTableSql,
   buildEmptyRowInsertStatement,
   buildExistingRowIdsQuery,
@@ -83,6 +85,14 @@ export async function applyColumnRename(table: CsvTable, from: string, to: strin
   await table.database.run(buildRenameColumnStatement(table.tableName, from, to));
 }
 
+export async function applyAddColumn(table: CsvTable, name: string): Promise<void> {
+  await table.database.run(buildAddColumnStatement(table.tableName, name));
+}
+
+export async function applyDropColumn(table: CsvTable, name: string): Promise<void> {
+  await table.database.run(buildDropColumnStatement(table.tableName, name));
+}
+
 export function renameCsvColumns(columns: CsvColumn[], from: string, to: string): CsvColumn[] {
   let renamed = false;
   const next = columns.map((column) => {
@@ -91,6 +101,43 @@ export function renameCsvColumns(columns: CsvColumn[], from: string, to: string)
     return { ...column, name: to };
   });
   if (!renamed) throw new Error(`Unknown CSV column: ${from}`);
+  return next;
+}
+
+export function columnsAfter(
+  columns: CsvColumn[],
+  command: CsvEditDraft,
+  direction: 'undo' | 'redo',
+): CsvColumn[] {
+  switch (command.type) {
+    case 'cell-edit':
+    case 'delete-rows':
+    case 'insert-row':
+      return columns;
+    case 'rename-column': {
+      const from = direction === 'redo' ? command.from : command.to;
+      const to = direction === 'redo' ? command.to : command.from;
+      return renameCsvColumns(columns, from, to);
+    }
+    case 'insert-column':
+      if (direction === 'undo') return columns.filter((column) => column.name !== command.name);
+      return spliceColumn(columns, command.index, { name: command.name, type: 'VARCHAR' });
+    case 'delete-column':
+      if (direction === 'redo') return columns.filter((column) => column.name !== command.name);
+      return spliceColumn(columns, command.index, { name: command.name, type: command.columnType });
+    default: {
+      const exhaustive: never = command;
+      throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
+    }
+  }
+}
+
+function spliceColumn(columns: readonly CsvColumn[], index: number, column: CsvColumn): CsvColumn[] {
+  if (!Number.isInteger(index) || index < 0 || index > columns.length) {
+    throw new Error(`CSV column index ${index} is outside the logical schema.`);
+  }
+  const next = columns.slice();
+  next.splice(index, 0, column);
   return next;
 }
 
@@ -154,7 +201,7 @@ export async function readExportRows(
 
 export async function runEditCommand(
   table: CsvTable,
-  command: CsvEditCommand,
+  command: CsvEditDraft,
   direction: 'undo' | 'redo',
 ): Promise<void> {
   const redoing = direction === 'redo';
@@ -178,6 +225,17 @@ export async function runEditCommand(
         table,
         redoing ? command.from : command.to,
         redoing ? command.to : command.from,
+      );
+      return;
+    case 'insert-column':
+      if (redoing) await applyAddColumn(table, command.name);
+      else await applyDropColumn(table, command.name);
+      return;
+    case 'delete-column':
+      await applyColumnRename(
+        table,
+        redoing ? command.name : command.hiddenName,
+        redoing ? command.hiddenName : command.name,
       );
       return;
     default: {

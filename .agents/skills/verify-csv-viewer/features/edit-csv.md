@@ -1,6 +1,6 @@
 # Edit a CSV
 
-Editing changes the in-memory Working CSV. Cell values stay text. Insert, append, and delete target source rows. Column rename changes a header on the Working CSV only. Undo and redo walk that history one recorded command at a time. Export CSV writes a different file: through an OS dialog on desktop, as a browser download on web.
+Editing changes the in-memory Working CSV. Cell values stay text. Insert, append, and delete target source rows. Column insert, delete, and rename change the Working CSV schema only. Undo and redo walk that history one recorded command at a time. Export CSV writes a different file: through an OS dialog on desktop, as a browser download on web.
 
 ## Sub-features
 
@@ -10,6 +10,7 @@ Editing changes the in-memory Working CSV. Cell values stay text. Insert, append
 - `edit-delete` deletes selected rows.
 - `edit-undo-redo` restores and re-applies those changes.
 - `edit-rename` renames the focused column header in place, rejects blank and duplicate names, and is undone like other edits.
+- `edit-column` inserts an empty column left or right of the focused column and deletes the focused column. Undo restores a deleted column at its old position with its cells. Delete column is disabled when one column remains.
 - `edit-blocked-append` keeps Append row disabled under search, sort, or filter. Insert row above/below stay enabled with one selected row.
 - `edit-export` is the Export CSV path. Desktop needs a human for the OS dialog; web is provable unattended.
 
@@ -21,6 +22,7 @@ Editing changes the in-memory Working CSV. Cell values stay text. Insert, append
 - Select one or more rows, then `Delete selected rows`.
 - Choose `Undo edit` and `Redo edit`.
 - Click a cell so the Column Bar names that column, choose `Rename column`, type a new header, press Enter.
+- Click a cell, then choose `Insert column left`, `Insert column right`, or `Delete column` in the Column Bar.
 - Focus a column header — click it, or press Up from a cell on the first row — and press F2. The same Column name field opens. F2 while a cell, the search box, or any other control is focused leaves rename closed.
 - Choose `Export CSV`, or `File → Export CSV...` / `Ctrl+Shift+E`, then pick a destination in the OS dialog.
 - Close a tab with its close button, or `File → Close Tab` / `Ctrl+W`; a dirty tab asks to confirm first.
@@ -38,8 +40,9 @@ Count your edits as you go. Each bullet below records exactly one command, and t
 - **Edit a cell.** Run `click --role gridcell --name "Ada Lovelace" --double`, then `fill --focused --value "Ada Lovelace Edited"`, then `press --key Enter`. Wait for `Ada Lovelace Edited` and `Unexported Changes`. `Undo edit` enables. `Export CSV` stays enabled whether or not the tab is dirty.
 - **Undo.** Run `click --role button --name "Undo edit"`. Read `text`: `Ada Lovelace` is back without `Edited`. `Redo edit` enables.
 - **Redo.** Run `click --role button --name "Redo edit"`. `Unexported Changes` and `Ada Lovelace Edited` return.
-- **Rename.** Click `gridcell` `grace@example.com` so the Column Bar shows `email`. Run `click --role button --name "Rename column"`, then `fill --role textbox --name "Column name" --value "work_email"`, then `press --key Enter`. Wait for `work_email` in the Column Bar. The header stays between `name` and `status`. `Unexported Changes` remains. Duplicate: rename again to `name` and wait for `CSV column name already exists.` Blank: rename to ` ` and wait for `CSV column name cannot be blank.` Undo once to restore `email`.
+- **Rename.** Click `gridcell` `grace@example.com` so the Column Bar shows `email`. Run `click --role button --name "Rename column"`, then `fill --role textbox --name "Column name" --value "work_email"`, then `press --key Enter`. Wait for `work_email` in the Column Bar. The header stays between `name` and `signup_date`. `Unexported Changes` remains. Duplicate: rename again to `name` and wait for `CSV column name already exists.` Blank: rename to ` ` and wait for `CSV column name cannot be blank.` Undo once to restore `email`.
 - **Rename with F2.** Click `gridcell` `Ada Lovelace` (first row), then `press --key ArrowUp` so the `name` column header is focused. `press --key F2`, then `fill --role textbox --name "Column name" --value "full_name"`, then `press --key Enter`. Wait for `full_name` in the Column Bar. Undo once to restore `name`. F2 while the search box is focused does not open Column name: `fill --role searchbox --name "Global search" --value ""` is enough to focus it, then `press --key F2`, and Column name stays absent.
+- **Insert and delete columns.** Click `gridcell` `grace@example.com` so the Column Bar shows `email`. Run `click --role button --name "Insert column right"` and wait for `New column` in the header row, between `email` and `signup_date`. Undo once. Click `grace@example.com` again, run `click --role button --name "Delete column"`, and confirm with `text` that `grace@example.com` is gone. Undo once: the `email` header and `grace@example.com` return between `name` and `signup_date`.
 - **Append.** A cell edit clears the selection, so `Append row` is enabled. Run `click --role button --name "Append row"`. Wait for `6 visible of 6 rows`.
 - **Insert.** Click a grid cell to select one source row, then `click --role button --name "Insert row above"`. Wait for `7 visible of 7 rows`. Insert deselects rows.
 - **Delete.** Run `click --role gridcell --name "Grace Hopper"` to reselect, then `click --role button --name "Delete selected rows"`. Wait for `6 visible of 6 rows` and confirm Grace is gone.

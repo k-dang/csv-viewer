@@ -609,7 +609,8 @@ function findControlExpression({ role, name, exact, nth }) {
       return { status: 'missing', names: scored.map((item) => item.value) };
     }
     const winner = scored[pick].el;
-    winner.scrollIntoView({ block: 'center', inline: 'center' });
+    // Scroll only when the target is off screen, as a user would; centering would move the grid.
+    winner.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const box = winner.getBoundingClientRect();
     winner.dataset.verifyHit = '1';
     return {

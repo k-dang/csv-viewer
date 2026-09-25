@@ -83,6 +83,10 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return this.csvStore.insertRow(request);
       case 'csv.rename-column':
         return this.csvStore.renameColumn(request);
+      case 'csv.insert-column':
+        return this.csvStore.insertColumn(request);
+      case 'csv.delete-column':
+        return this.csvStore.deleteColumn(request);
       case 'csv.get-edit-state':
         return this.csvStore.getEditState(request);
       case 'csv.undo':
