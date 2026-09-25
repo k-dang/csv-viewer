@@ -61,6 +61,19 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
   }
 
   const actionsDisabled = focusedColumn === null;
+  const columnActionLock = useRef(false);
+  const [columnActionPending, setColumnActionPending] = useState(false);
+  const columnActionsDisabled = actionsDisabled || columnActionPending;
+
+  function runColumnAction(action: () => Promise<boolean>): void {
+    if (columnActionLock.current) return;
+    columnActionLock.current = true;
+    setColumnActionPending(true);
+    void action().finally(() => {
+      columnActionLock.current = false;
+      setColumnActionPending(false);
+    });
+  }
 
   return (
     <div ref={bindKeys} className="flex min-w-0 flex-1 items-center gap-2">
@@ -111,8 +124,8 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           type="button"
           variant="ghost"
           size="xs"
-          disabled={actionsDisabled}
-          onClick={() => void tab.insertColumn('before')}
+          disabled={columnActionsDisabled}
+          onClick={() => runColumnAction(() => tab.insertColumn('before'))}
         >
           <BetweenVerticalStart data-icon="inline-start" />
           Insert column left
@@ -121,8 +134,8 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           type="button"
           variant="ghost"
           size="xs"
-          disabled={actionsDisabled}
-          onClick={() => void tab.insertColumn('after')}
+          disabled={columnActionsDisabled}
+          onClick={() => runColumnAction(() => tab.insertColumn('after'))}
         >
           <BetweenVerticalEnd data-icon="inline-start" />
           Insert column right
@@ -131,8 +144,8 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
           type="button"
           variant="ghost"
           size="xs"
-          disabled={actionsDisabled || workingCsv.columns.length === 1}
-          onClick={() => void tab.deleteFocusedColumn()}
+          disabled={columnActionsDisabled || workingCsv.columns.length === 1}
+          onClick={() => runColumnAction(() => tab.deleteFocusedColumn())}
         >
           <Trash2 data-icon="inline-start" />
           Delete column

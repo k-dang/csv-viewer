@@ -264,6 +264,58 @@ describe('CsvGrid', () => {
     });
   });
 
+  it('ignores another column mutation while insert is pending', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+      ],
+    });
+    const pending = Promise.withResolvers<{
+      workingCsvId: string;
+      columns: typeof workingCsv.columns;
+      hasUnexportedChanges: boolean;
+      canUndo: boolean;
+      canRedo: boolean;
+    }>();
+    const insertColumn = vi.fn(() => pending.promise);
+    const deleteColumn = vi.fn();
+    const tab = new CsvTab(
+      createTestCsvViewer({ handlers: { 'csv.insert-column': insertColumn, 'csv.delete-column': deleteColumn } }),
+      workingCsv,
+    );
+    tab.setFocusedColumn('id');
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
+
+    const insertLeft = screen.getByRole('button', { name: 'Insert column left' });
+    const insertRight = screen.getByRole('button', { name: 'Insert column right' });
+    const deleteFocused = screen.getByRole('button', { name: 'Delete column' });
+    act(() => {
+      insertLeft.click();
+      insertRight.click();
+      deleteFocused.click();
+    });
+    expect(insertColumn).toHaveBeenCalledTimes(1);
+    expect(deleteColumn).not.toHaveBeenCalled();
+    expect(insertLeft.hasAttribute('disabled')).toBe(true);
+    expect(insertRight.hasAttribute('disabled')).toBe(true);
+    expect(deleteFocused.hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      pending.resolve({
+        workingCsvId: workingCsv.workingCsvId,
+        columns: workingCsv.columns,
+        hasUnexportedChanges: true,
+        canUndo: true,
+        canRedo: false,
+      });
+    });
+    expect(insertLeft.hasAttribute('disabled')).toBe(false);
+    expect(insertRight.hasAttribute('disabled')).toBe(false);
+    expect(deleteFocused.hasAttribute('disabled')).toBe(false);
+  });
+
   it('disables Delete column when the focused column is the only one', () => {
     const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
     tab.setFocusedColumn('id');
