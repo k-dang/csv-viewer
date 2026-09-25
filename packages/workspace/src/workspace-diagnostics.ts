@@ -10,6 +10,7 @@ const outcomes = new Set([
   'started', 'succeeded', 'applied', 'accepted', 'busy', 'rejected', 'ready', 'closed',
   'requested', 'already-requested', 'already-finished', 'operation-mismatch',
   'comparison-not-found', 'result-replaced', 'invalid-key', 'sources-changed',
+  'opened', 'already-open', 'revision-changed', 'working-csv-not-found',
   'cancelled', 'failed', 'recoverable-failure', 'defect', 'interrupted', 'cleanup-failed',
 ]);
 const identifiers = new Set(['workspaceId', 'requestId', 'comparisonId', 'operationId', 'baselineId', 'candidateId', 'workingCsvId']);
@@ -19,6 +20,7 @@ const identifiers = new Set(['workspaceId', 'requestId', 'comparisonId', 'operat
 function approvedField(key: string, value: unknown): boolean {
   if (identifiers.has(key)) return Schema.is(Schema.String)(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
   if (key === 'outcome' || key === 'failureCategory' || key === 'cleanup') return Schema.is(Schema.String)(value) && outcomes.has(value);
+  if (key === 'csvFailureCategory') return Schema.is(Schema.String)(value) && ['source-access', 'dialect', 'engine'].includes(value);
   if (key === 'recoverableFailure' || key === 'defect' || key === 'interrupted') return value === true || value === false;
   return false;
 }

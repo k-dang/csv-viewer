@@ -1,4 +1,5 @@
 import { rm } from 'node:fs/promises';
+import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
@@ -24,7 +25,14 @@ afterEach(async () => {
 
 async function openWorkingCsv(fileName: string, contents: string) {
   const filePath = await fixture.writeSource(fileName, contents);
-  const outcome = await store.open(await fixture.sourceId(filePath));
+  const admission = store.admitOpenWork();
+  if (!admission) throw new Error('Working CSV open was not admitted.');
+  let outcome;
+  try {
+    outcome = await Effect.runPromise(store.open(admission, await fixture.sourceId(filePath)));
+  } finally {
+    admission.release();
+  }
   if (outcome.status !== 'opened')
     throw new Error(`Working CSV was ${outcome.status}.`);
   return outcome.workingCsv;

@@ -605,6 +605,20 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
       if (opened.status !== 'opened') throw new Error('open was not admitted');
     });
 
+    it('waits for a reopen admitted before disposal', async () => {
+      const workspace = fixture.viewer;
+      const original = await fixture.openSource('reopen-before-disposal.csv', 'id,value\n1,a\n');
+      await fixture.writeSource('reopen-before-disposal.csv', 'id,value\n1,b\n');
+
+      const reopening = workspace.call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
+      const disposal = fixture.disposeWorkspace();
+      await expect(reopening).resolves.toMatchObject({
+        status: 'opened',
+        workingCsv: { workingCsvId: original.workingCsvId, dataRevision: original.dataRevision + 1 },
+      });
+      await disposal;
+    });
+
     it('waits for an admitted row read and rejects later reads while closing', async () => {
       const workspace = fixture.viewer;
       const workingCsv = await fixture.openSource('working.csv', 'id,value\n1,a\n2,b\n');

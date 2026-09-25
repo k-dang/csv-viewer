@@ -145,69 +145,115 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     return this.comparisonStore.subscribe((event) => listener({ type: 'comparison', event }));
   }
 
-  private async openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Promise<OpenCsvResult> {
-    const sourceId = reservedSourceId ?? await this.host.acquireSource();
-    if (!sourceId) return { status: 'cancelled' };
-    if (sourceId instanceof Object) return sourceId;
-    let retained = false;
+  private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Promise<OpenCsvResult> {
+    const admission = this.csvStore.admitOpenWork();
+    if (!admission) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+    return this.runEffect(Effect.gen({ self: this }, function* () {
+      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', Effect.promise(() => this.host.acquireSource())));
+      if (!sourceId) {
+        yield* recordOutcome('cancelled');
+        return { status: 'cancelled' } satisfies OpenCsvResult;
+      }
+      if (sourceId instanceof Object) {
+        yield* recordOutcome('failed');
+        return sourceId;
+      }
+      let retained = false;
+      try {
+        const result = yield* this.openSource(admission, sourceId, options);
+        retained = result.status === 'opened' || result.status === 'already-open';
+        return result;
+      } finally {
+        if (!retained) this.host.releaseSource(sourceId);
+      }
+    }).pipe(Effect.uninterruptible, Effect.ensuring(Effect.sync(admission.release))), 'csv.open');
+  }
+
+  private openRecentCsv(sourceId: CsvSourceId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
+    const admission = this.csvStore.admitOpenWork();
+    return admission
+      ? this.runEffect(this.openSource(admission, sourceId, options).pipe(Effect.uninterruptible, Effect.ensuring(Effect.sync(admission.release))), 'csv.open')
+      : Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+  }
+
+  private openSource(admission: NonNullable<ReturnType<WorkingCsvStore['admitOpenWork']>>, sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult> {
+    return Effect.gen({ self: this }, function* () {
+      const outcome = yield* this.csvStore.open(admission, sourceId, options);
+      if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message };
+      if (outcome.status === 'existing') {
+        yield* recordOutcome('already-open');
+        return { status: 'already-open', workingCsv: outcome.workingCsv };
+      }
+      const recorded = yield* this.recordRecentSource(sourceId);
+      if (!recorded) yield* recordOutcome('opened', undefined, 'cleanup-failed');
+      return { status: 'opened', workingCsv: outcome.workingCsv };
+    });
+  }
+
+  private recordRecentSource(sourceId: CsvSourceId) {
+    return observeStage('csv.record-recent', Effect.tryPromise(() => this.host.recordRecentSource(sourceId)).pipe(
+      Effect.matchCauseEffect({
+        onFailure: (cause) => recordOutcome('cleanup-failed', cause, 'cleanup-failed').pipe(Effect.as(false)),
+        onSuccess: () => Effect.succeed(true),
+      }),
+    ));
+  }
+
+  private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
+    if (!this.csvStore.has(workingCsvId)) {
+      return this.runEffect(recordOutcome('failed').pipe(Effect.as({ status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult)), 'csv.reopen', { workingCsvId });
+    }
+    let admission: NonNullable<ReturnType<WorkingCsvStore['admitReopenWork']>>;
     try {
-      const result = await this.openRecentCsv(sourceId, options);
-      retained = result.status === 'opened' || result.status === 'already-open';
-      return result;
-    } finally {
-      if (!retained) this.host.releaseSource(sourceId);
+      const admitted = this.csvStore.admitReopenWork(workingCsvId);
+      if (!admitted) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+      admission = admitted;
+    } catch {
+      return Promise.resolve({ status: 'failed', message: 'This CSV is closing.' });
     }
-  }
-
-  private async openRecentCsv(sourceId: CsvSourceId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
-    const outcome = await this.csvStore.open(sourceId, options);
-    if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message };
-    if (outcome.status === 'existing') {
-      return { status: 'already-open', workingCsv: outcome.workingCsv };
-    }
-    await this.host.recordRecentSource(sourceId);
-    return { status: 'opened', workingCsv: outcome.workingCsv };
-  }
-
-  private async reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
-    let existing = this.csvStore.getState(workingCsvId);
-    if (!existing)
-      return {
-        status: 'failed',
-        message: 'The Working CSV is no longer open.',
-      };
-
-    while (true) {
-      while (existing.editState.hasUnexportedChanges) {
-        const canContinue = await this.host.confirmDiscardChanges(existing.source.name);
-        if (!canContinue) return { status: 'cancelled' };
-        const current = this.csvStore.getState(workingCsvId);
-        if (!current)
-          return {
-            status: 'failed',
-            message: 'The Working CSV is no longer open.',
-          };
-        if (current.dataRevision === existing.dataRevision) break;
-        existing = current;
+    return this.runEffect(Effect.scoped(Effect.gen({ self: this }, function* () {
+      yield* Effect.acquireRelease(Effect.succeed(admission), () => this.csvStore.releaseReopenAdmission(admission));
+      const initial = this.csvStore.getState(workingCsvId);
+      if (!initial) {
+        yield* recordOutcome('failed');
+        return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
       }
-
-      const outcome = await this.csvStore.replace(workingCsvId, existing.dataRevision, options);
-      if (outcome.status === 'revision-changed') {
-        existing = outcome.workingCsv;
-        continue;
+      let existing = initial;
+      while (true) {
+        while (existing.editState.hasUnexportedChanges) {
+          const canContinue = yield* observeStage('csv.confirm-discard', Effect.promise(() => this.host.confirmDiscardChanges(existing.source.name)));
+          if (!canContinue) {
+            yield* recordOutcome('cancelled');
+            return { status: 'cancelled' } satisfies OpenCsvResult;
+          }
+          const current = this.csvStore.getState(workingCsvId);
+          if (!current) {
+            yield* recordOutcome('failed');
+            return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
+          }
+          if (current.dataRevision === existing.dataRevision) break;
+          existing = current;
+        }
+        const outcome = yield* this.csvStore.replace(admission, existing.dataRevision, options);
+        if (outcome.status === 'revision-changed') {
+          existing = outcome.workingCsv;
+          continue;
+        }
+        if (outcome.status === 'replaced') {
+          const recorded = yield* this.recordRecentSource(outcome.workingCsv.source.sourceId);
+          if (!recorded) yield* recordOutcome('opened', undefined, 'cleanup-failed');
+          return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
+        }
+        if (outcome.status === 'working-csv-not-found') {
+          yield* recordOutcome('failed');
+          return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
+        }
+        return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
       }
-      if (outcome.status === 'replaced') {
-        await this.host.recordRecentSource(outcome.workingCsv.source.sourceId);
-        return { status: 'opened', workingCsv: outcome.workingCsv };
-      }
-      if (outcome.status === 'working-csv-not-found') {
-        return {
-          status: 'failed',
-          message: 'The Working CSV is no longer open.',
-        };
-      }
-      return { status: 'failed', message: outcome.failure.message };
-    }
+    })).pipe(
+      Effect.tap(() => admission.failed ? Effect.annotateCurrentSpan({ cleanup: 'cleanup-failed' }) : Effect.void),
+      Effect.uninterruptible,
+    ), 'csv.reopen', { workingCsvId });
   }
 
   private async exportCsv(workingCsvId: WorkingCsvId): Promise<CsvExportOutcome> {

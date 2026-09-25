@@ -28,6 +28,11 @@ export interface WorkspaceContractFixture {
   registerSource(fileName: string, contents: string): Promise<CsvSourceId>;
   removeSource(fileName: string): Promise<void>;
   openSource(fileName: string, contents: string, options?: CsvDialectOptions): Promise<WorkingCsvView>;
+  /** Fail one driver call after table allocation to exercise staged resource cleanup. */
+  failNextMetadataRead(): void;
+  /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
+  failNextTableDrop(): void;
+  holdNextRowRead(): { entered: Promise<void>; release: () => void };
   /** Writes `fileName` inside the fixture, creating it or replacing what is there. */
   writeSource(fileName: string, contents: string): Promise<string>;
   /** Points the next Export CSV at `fileName` and returns a reader for the delivered bytes. */

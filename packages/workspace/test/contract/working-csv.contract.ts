@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField } from '../../src/csv-viewer';
+import { WorkspaceArtifactRegistry } from '../../src/workspace-artifact-registry';
 import {
   expectVisibleRows,
   rowIds,
@@ -228,6 +229,96 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       });
       expectVisibleRows(rows.rows).toEqual([{ name: 'Ada', age: '37' }]);
       error.mockRestore();
+    });
+
+    it('releases a staged table after metadata failure so the source can open again', async () => {
+      const sourceId = await fixture.registerSource('partial.csv', 'name\nAda\n');
+      fixture.failNextMetadataRead();
+      await expect(workspace().call({ operation: 'csv.open-recent', sourceId })).resolves.toMatchObject({ status: 'failed' });
+      const opened = await workspace().call({ operation: 'csv.open-recent', sourceId });
+      expect(opened.status).toBe('opened');
+    });
+
+    it('preserves rows, revision, and edit history when replacement preparation fails', async () => {
+      const original = await fixture.openSource('prepare-failure.csv', 'name\nAda\n');
+      await workspace().call({
+        operation: 'csv.edit-cell', workingCsvId: original.workingCsvId, rowId: '1', column: 'name', value: 'Grace',
+      });
+      fixture.failNextMetadataRead();
+      await expect(workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
+        .resolves.toMatchObject({ status: 'failed' });
+      const rows = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      expectVisibleRows(rows.rows).toEqual([{ name: 'Grace' }]);
+      await expect(workspace().call({ operation: 'csv.open-recent', sourceId: original.source.sourceId }))
+        .resolves.toMatchObject({ status: 'already-open', workingCsv: { dataRevision: 1, workingCsvId: original.workingCsvId } });
+      await expect(fixture.editState(original.workingCsvId)).resolves.toMatchObject({ hasUnexportedChanges: true, canUndo: true });
+    });
+
+    it('restores the current table if publication fails after retirement starts', async () => {
+      const original = await fixture.openSource('publish-failure.csv', 'name\nAda\n');
+      const candidate = await fixture.openSource('publish-candidate.csv', 'name\nGrace\n');
+      const comparison = await workspace().call({ operation: 'comparison.open', baselineId: original.workingCsvId, candidateId: candidate.workingCsvId });
+      if (comparison.status === 'rejected') throw new Error('Comparison rejected.');
+      const started = await workspace().call({ operation: 'comparison.begin', comparisonId: comparison.comparison.comparisonId, kind: 'apply-key', key: ['name'] });
+      if (started.status !== 'accepted') throw new Error('Comparison not accepted.');
+      expect((await fixture.awaitComparisonOutcome(started.operationId)).status).toBe('applied');
+      await workspace().call({ operation: 'csv.edit-cell', workingCsvId: original.workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
+      const priorComparison = fixture.latestComparison(comparison.comparison.comparisonId);
+      const transition = WorkspaceArtifactRegistry.prototype.transition;
+      let failPublication = true;
+      const injected = vi.spyOn(WorkspaceArtifactRegistry.prototype, 'transition').mockImplementation(function (this: WorkspaceArtifactRegistry, tableName, role) {
+        if (failPublication && role === 'current') {
+          failPublication = false;
+          throw new Error('PRIVATE publication failure');
+        }
+        return transition.call(this, tableName, role);
+      });
+      try {
+        await expect(workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
+          .resolves.toMatchObject({ status: 'failed' });
+      } finally {
+        injected.mockRestore();
+      }
+      const rows = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      expectVisibleRows(rows.rows).toEqual([{ name: 'Grace' }]);
+      await expect(workspace().call({ operation: 'csv.open-recent', sourceId: original.source.sourceId }))
+        .resolves.toMatchObject({ status: 'already-open', workingCsv: { dataRevision: 1, workingCsvId: original.workingCsvId } });
+      await expect(fixture.editState(original.workingCsvId)).resolves.toMatchObject({ hasUnexportedChanges: true, canUndo: true });
+      expect(fixture.latestComparison(comparison.comparison.comparisonId)).toEqual(priorComparison);
+      const recovered = await workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
+      expect(recovered).toMatchObject({ status: 'opened', workingCsv: { dataRevision: 2, workingCsvId: original.workingCsvId } });
+    });
+
+    it('keeps the committed replacement when retiring the previous table fails', async () => {
+      const original = await fixture.openSource('retire-failure.csv', 'name\nAda\n');
+      await workspace().call({ operation: 'csv.edit-cell', workingCsvId: original.workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
+      fixture.failNextTableDrop();
+      const reopened = await workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
+      if (reopened.status !== 'opened') throw new Error(`Reopen was ${reopened.status}.`);
+      expect(reopened.workingCsv.workingCsvId).toBe(original.workingCsvId);
+      expect(reopened.workingCsv.dataRevision).toBe(2);
+      const rows = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      expectVisibleRows(rows.rows).toEqual([{ name: 'Ada' }]);
+      await expect(fixture.editState(original.workingCsvId)).resolves.toMatchObject({ hasUnexportedChanges: false, canUndo: false });
+      await fixture.disposeWorkspace();
+    });
+
+    it('lets an admitted reader finish on the retired table after replacement', async () => {
+      const original = await fixture.openSource('reader.csv', 'name\nAda\n');
+      const hold = fixture.holdNextRowRead();
+      const previousRead = workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      await hold.entered;
+      try {
+        await fixture.writeSource('reader.csv', 'name\nGrace\n');
+        const reopened = await workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
+        expect(reopened).toMatchObject({ status: 'opened', workingCsv: { workingCsvId: original.workingCsvId, dataRevision: 1 } });
+        const currentRead = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+        expectVisibleRows(currentRead.rows).toEqual([{ name: 'Grace' }]);
+      } finally {
+        hold.release();
+      }
+      const rows = await previousRead;
+      expectVisibleRows(rows.rows).toEqual([{ name: 'Ada' }]);
     });
 
     it('keeps multiple Working CSVs open with independent data', async () => {

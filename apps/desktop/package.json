@@ -29,6 +29,7 @@
     "cross-env": "^10.1.0",
     "electron": "^44.1.1",
     "electron-builder": "^26.15.3",
+    "effect": "4.0.0-rc.115",
     "react": "catalog:",
     "react-dom": "catalog:",
     "typescript": "catalog:",

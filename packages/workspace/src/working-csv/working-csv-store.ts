@@ -1,4 +1,6 @@
 import { DataEngineError } from '../database';
+import { Cause, Effect } from 'effect';
+import { observeStage, recordOutcome } from '../workspace-diagnostics';
 import { toError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
@@ -87,6 +89,15 @@ type WorkingCsvLease = {
   release: () => Promise<void | DataEngineError>;
 };
 
+type OpenAdmission = { release: () => void };
+
+type ReopenAdmission = OpenAdmission & {
+  lease: WorkingCsvLease;
+  previous: Promise<void>;
+  settled: PromiseWithResolvers<void>;
+  failed: boolean;
+};
+
 export class WorkingCsvStore {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
   private workingCsvs = new Map<string, WorkingCsvState>();
@@ -109,34 +120,56 @@ export class WorkingCsvStore {
     if (this.lifecycle === 'active') this.lifecycle = 'disposing';
   }
 
-  async open(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Promise<OpenWorkingCsvOutcome> {
-    if (this.lifecycle !== 'active') {
-      return { status: 'failed', failure: unavailableWorkingCsvFailure('open-failed') };
-    }
-    const existing = this.findBySource(sourceId);
-    if (existing) return { status: 'existing', workingCsv: existing };
+  /** Admit the complete transport operation before disposal can begin. */
+  admitOpenWork(): OpenAdmission | null {
+    return this.lifecycle === 'active' ? { release: this.acquireWorkspaceWork() } : null;
+  }
+
+  /** Reserve both the old table and a queue position before running any asynchronous confirmation. */
+  admitReopenWork(workingCsvId: WorkingCsvId): ReopenAdmission | null {
+    const work = this.admitOpenWork();
+    if (!work) return null;
     try {
-      return { status: 'opened', workingCsv: await this.openWorkingCsv(sourceId, options) };
+      const lease = this.acquireWorkingCsvLease(workingCsvId);
+      const previous = this.mutationQueues.get(workingCsvId) ?? Promise.resolve();
+      const settled = Promise.withResolvers<void>();
+      this.mutationQueues.set(workingCsvId, settled.promise);
+      return { ...work, lease, previous, settled, failed: false };
     } catch (error) {
-      if (this.lifecycle !== 'active') {
-        return { status: 'failed', failure: unavailableWorkingCsvFailure('open-failed') };
-      }
-      return { status: 'failed', failure: workingCsvFailure('open-failed', error) };
+      work.release();
+      throw error;
     }
   }
 
-  private async openWorkingCsv(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Promise<WorkingCsvView> {
-    const releaseWork = this.acquireWorkspaceWork();
-    try {
-      if (this.findBySource(sourceId)) throw new Error('CSV file is already open.');
-
-      const state = await this.createWorkingCsv(sourceId, options);
-      this.artifactRegistry.transition(state.tableName, 'current');
-      this.workingCsvs.set(state.metadata.workingCsvId, state);
-      return buildWorkingCsvView(state);
-    } finally {
-      releaseWork();
-    }
+  open(_admission: OpenAdmission, sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome> {
+    return Effect.gen({ self: this }, function* () {
+      const existing = this.findBySource(sourceId);
+      if (existing) return { status: 'existing', workingCsv: existing } satisfies OpenWorkingCsvOutcome;
+      const cleanup = { failed: false };
+      const result = yield* this.createWorkingCsv(sourceId, options, crypto.randomUUID(), 0, 0, cleanup).pipe(
+        Effect.map((state): OpenWorkingCsvOutcome => {
+          const alreadyOpen = this.findBySource(sourceId);
+          if (alreadyOpen) return { status: 'existing', workingCsv: alreadyOpen };
+          const view = buildWorkingCsvView(state);
+          this.artifactRegistry.transition(state.tableName, 'current');
+          this.workingCsvs.set(state.metadata.workingCsvId, state);
+          return { status: 'opened', workingCsv: view };
+        }),
+        Effect.scoped,
+        Effect.matchCauseEffect({
+          onSuccess: (outcome) => recordOutcome(outcome.status === 'existing' ? 'already-open' : outcome.status, undefined, cleanup.failed ? 'cleanup-failed' : 'succeeded').pipe(Effect.as(outcome)),
+          onFailure: (cause) => {
+            const error = Cause.squash(cause);
+            const failure = workingCsvFailure('open-failed', error);
+            return recordOutcome('failed', cause, cleanup.failed ? 'cleanup-failed' : 'succeeded').pipe(
+              Effect.andThen(error instanceof CsvOpenError ? Effect.annotateCurrentSpan('csvFailureCategory', error.category) : Effect.void),
+              Effect.as({ status: 'failed', failure } satisfies OpenWorkingCsvOutcome),
+            );
+          },
+        }),
+      );
+      return result;
+    }).pipe(Effect.uninterruptible);
   }
 
   private findBySource(sourceId: CsvSourceId): WorkingCsvView | null {
@@ -209,53 +242,58 @@ export class WorkingCsvStore {
     return this.comparisonExecutor;
   }
 
-  async replace(
-    workingCsvId: WorkingCsvId,
+  replace(
+    admission: ReopenAdmission,
     expectedDataRevision: number,
     options: CsvDialectOptions = {},
-  ): Promise<ReplaceWorkingCsvOutcome> {
-    if (this.lifecycle !== 'active') {
-      return { status: 'failed', failure: unavailableWorkingCsvFailure('replace-failed') };
-    }
-    if (!this.workingCsvs.has(workingCsvId)) return { status: 'working-csv-not-found' };
-    try {
-      return await this.replaceWorkingCsv(workingCsvId, expectedDataRevision, options);
-    } catch (error) {
-      if (this.lifecycle !== 'active') {
-        return { status: 'failed', failure: unavailableWorkingCsvFailure('replace-failed') };
-      }
-      if (this.closingWorkingCsvs.has(workingCsvId)) {
-        return { status: 'failed', failure: unavailableWorkingCsvFailure('replace-failed', 'This CSV is closing.') };
-      }
-      return { status: 'failed', failure: workingCsvFailure('replace-failed', error) };
-    }
+  ): Effect.Effect<ReplaceWorkingCsvOutcome> {
+    return Effect.gen({ self: this }, function* () {
+      const workingCsvId = admission.lease.state.metadata.workingCsvId;
+      const cleanup = { failed: false };
+      return yield* this.withWorkingCsvMutationEffect(admission, (existing) => Effect.gen({ self: this }, function* () {
+        if (existing.metadata.dataRevision !== expectedDataRevision) {
+          return { status: 'revision-changed', workingCsv: buildWorkingCsvView(existing) } satisfies ReplaceWorkingCsvOutcome;
+        }
+        const state = yield* this.createWorkingCsv(
+          existing.sourceId, options, workingCsvId, existing.metadata.dataRevision + 1,
+          existing.history.revisionSequence, cleanup,
+        );
+        const view = buildWorkingCsvView(state);
+        yield* Effect.sync(() => this.publishReplacement(existing, state));
+        this.notifyDataChange(workingCsvId);
+        return { status: 'replaced', workingCsv: view } satisfies ReplaceWorkingCsvOutcome;
+      }).pipe(Effect.scoped), cleanup).pipe(
+        Effect.matchCauseEffect({
+          onSuccess: (outcome) => recordOutcome(outcome.status === 'replaced' ? 'opened' : outcome.status, undefined, cleanup.failed ? 'cleanup-failed' : 'succeeded').pipe(Effect.as(outcome)),
+          onFailure: (cause) => {
+            const error = Cause.squash(cause);
+            const failure = workingCsvFailure('replace-failed', error);
+            return recordOutcome('failed', cause, cleanup.failed ? 'cleanup-failed' : 'succeeded').pipe(
+              Effect.andThen(error instanceof CsvOpenError ? Effect.annotateCurrentSpan('csvFailureCategory', error.category) : Effect.void),
+              Effect.as({ status: 'failed', failure } satisfies ReplaceWorkingCsvOutcome),
+            );
+          },
+        }),
+      );
+    }).pipe(Effect.uninterruptible);
   }
 
-  private async replaceWorkingCsv(
-    workingCsvId: WorkingCsvId,
-    expectedDataRevision: number,
-    options: CsvDialectOptions = {},
-  ): Promise<
-    { status: 'replaced'; workingCsv: WorkingCsvView } | { status: 'revision-changed'; workingCsv: WorkingCsvView }
-  > {
-    return this.withWorkingCsvMutation(workingCsvId, async (existing) => {
-      if (existing.metadata.dataRevision !== expectedDataRevision) {
-        return { status: 'revision-changed', workingCsv: buildWorkingCsvView(existing) };
-      }
-
-      const state = await this.createWorkingCsv(
-        existing.sourceId,
-        options,
-        workingCsvId,
-        existing.metadata.dataRevision,
-        existing.history.revisionSequence,
-      );
+  /** No await or observer runs between the role changes and the state swap. */
+  private publishReplacement(existing: WorkingCsvState, replacement: WorkingCsvState): void {
+    try {
       this.artifactRegistry.transition(existing.tableName, 'retired');
-      this.artifactRegistry.transition(state.tableName, 'current');
-      this.workingCsvs.set(workingCsvId, state);
-      this.commitDataChange(state);
-      return { status: 'replaced', workingCsv: buildWorkingCsvView(state) };
-    });
+      this.artifactRegistry.transition(replacement.tableName, 'current');
+      this.workingCsvs.set(existing.metadata.workingCsvId, replacement);
+    } catch (error) {
+      this.workingCsvs.set(existing.metadata.workingCsvId, existing);
+      if (this.artifactRegistry.get(replacement.tableName)?.role === 'current') {
+        this.artifactRegistry.transition(replacement.tableName, 'staging');
+      }
+      if (this.artifactRegistry.get(existing.tableName)?.role === 'retired') {
+        this.artifactRegistry.transition(existing.tableName, 'current');
+      }
+      throw error;
+    }
   }
 
   async closeWorkingCsv(workingCsvId: WorkingCsvId): Promise<void> {
@@ -296,6 +334,12 @@ export class WorkingCsvStore {
       }
       for (const { tableName } of this.retiredSourceTables()) {
         await this.dropRetiredSourceTable(tableName);
+      }
+      for (const artifact of this.artifactRegistry.list()) {
+        if (artifact.owner.kind === 'working-csv' && artifact.role === 'staging') {
+          await dropWorkingCsvTable(this.table(artifact.tableName));
+          this.artifactRegistry.remove(artifact.tableName);
+        }
       }
 
       this.artifactRegistry.assertEmpty();
@@ -572,64 +616,65 @@ export class WorkingCsvStore {
     return { status: 'exported', editState: buildEditState(state) };
   }
 
-  private async createWorkingCsv(
+  private createWorkingCsv(
     sourceId: CsvSourceId,
     options: CsvDialectOptions,
-    logicalWorkingCsvId: WorkingCsvId = crypto.randomUUID(),
-    dataRevision = 0,
-    initialRevisionId = 0,
-  ): Promise<WorkingCsvState> {
-    const dialect = validateDialectOptions(options);
-    const description = await this.host.describeSource(sourceId).catch((cause: unknown) => {
-      throw normalizeOpenError(cause);
-    });
-
-    if (!isSupportedCsvSourceName(description.name)) {
-      throw new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.');
-    }
-
-    await this.database.ownerConnection();
-    const tableName = buildWorkingCsvTableName(crypto.randomUUID());
-    const table = this.table(tableName);
-    this.artifactRegistry.register({
-      tableName,
-      owner: { kind: 'working-csv', workingCsvId: logicalWorkingCsvId },
-      role: 'staging',
-    });
-
-    try {
-      await this.host.withEngineSource(sourceId, (engineSourceReference) =>
-        createWorkingCsvTable(table, engineSourceReference, dialect),
+    logicalWorkingCsvId: WorkingCsvId,
+    dataRevision: number,
+    initialRevisionId: number,
+    cleanup: { failed: boolean },
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const dialect = yield* Effect.try({ try: () => validateDialectOptions(options), catch: normalizeOpenError });
+      const description = yield* observeStage('csv.describe-source', Effect.tryPromise({
+        try: () => this.host.describeSource(sourceId), catch: normalizeOpenError,
+      }));
+      if (!isSupportedCsvSourceName(description.name)) {
+        return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
+      }
+      yield* observeStage('csv.prepare-table', Effect.tryPromise({
+        try: () => this.database.ownerConnection(), catch: normalizeEngineError,
+      }));
+      const tableName = buildWorkingCsvTableName(crypto.randomUUID());
+      const table = this.table(tableName);
+      yield* Effect.acquireRelease(
+        Effect.sync(() => this.artifactRegistry.register({
+          tableName, owner: { kind: 'working-csv', workingCsvId: logicalWorkingCsvId }, role: 'staging',
+        })),
+        () => this.releaseStagingTable(tableName, cleanup),
       );
-
-      const metadata: Omit<WorkingCsvView, 'editState'> = {
-        workingCsvId: logicalWorkingCsvId,
-        dataRevision,
-        source: {
-          sourceId,
-          name: description.name,
-          location: description.location,
-          sizeBytes: description.sizeBytes,
-        },
-        columns: await readColumns(table),
-        rowCount: await readRowCount(table),
-        dialect,
-      };
-
+      yield* observeStage('csv.access-and-load', Effect.tryPromise({
+        try: () => this.host.withEngineSource(sourceId, (reference) => createWorkingCsvTable(table, reference, dialect)),
+        catch: normalizeEngineError,
+      }));
+      const [columns, rowCount] = yield* observeStage('csv.read-metadata', Effect.all([
+        Effect.tryPromise({ try: () => readColumns(table), catch: normalizeEngineError }),
+        Effect.tryPromise({ try: () => readRowCount(table), catch: normalizeEngineError }),
+      ]));
       return {
-        metadata,
-        tableName,
-        sourceId,
-        defaultDelimiter: description.defaultDelimiter,
+        metadata: {
+          workingCsvId: logicalWorkingCsvId, dataRevision,
+          source: { sourceId, name: description.name, location: description.location, sizeBytes: description.sizeBytes },
+          columns, rowCount, dialect,
+        },
+        tableName, sourceId, defaultDelimiter: description.defaultDelimiter,
         history: new CsvEditHistory(initialRevisionId),
-      };
-    } catch (error) {
-      await dropWorkingCsvTable(table).catch((cause: unknown) => {
-        console.error('Unable to drop a partially created Working CSV table.', cause);
-      });
-      this.artifactRegistry.remove(tableName);
-      throw normalizeEngineError(error);
-    }
+      } satisfies WorkingCsvState;
+    });
+  }
+
+  private releaseStagingTable(tableName: string, cleanup: { failed: boolean }) {
+    return observeStage('csv.release-staging', Effect.gen({ self: this }, function* () {
+      if (this.artifactRegistry.get(tableName)?.role !== 'staging') return;
+      const result = yield* Effect.exit(Effect.tryPromise(() => dropWorkingCsvTable(this.table(tableName))));
+      if (result._tag === 'Failure') {
+        cleanup.failed = true;
+        yield* recordOutcome('cleanup-failed', result.cause, 'cleanup-failed');
+      } else {
+        this.artifactRegistry.remove(tableName);
+        yield* recordOutcome('succeeded', undefined, 'succeeded');
+      }
+    }));
   }
 
   private table(tableName: string): CsvTable {
@@ -717,6 +762,47 @@ export class WorkingCsvStore {
       }
       await admissionLease.release();
     }
+  }
+
+  /** The queue slot was reserved when the request was admitted, before any prompt or await. */
+  private withWorkingCsvMutationEffect<A, E>(
+    admission: ReopenAdmission,
+    operation: (state: WorkingCsvState) => Effect.Effect<A, E>,
+    cleanup: { failed: boolean },
+  ): Effect.Effect<A, E> {
+    return Effect.scoped(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => admission.previous);
+      const current = this.requireWorkingCsv(admission.lease.state.metadata.workingCsvId);
+      if (current !== admission.lease.state) {
+        yield* Effect.acquireRelease(
+          Effect.sync(() => this.acquireStateLease(current)),
+          (lease) => this.releaseReopenLease(lease, cleanup),
+        );
+      }
+      return yield* operation(current);
+    }));
+  }
+
+  releaseReopenAdmission(admission: ReopenAdmission) {
+    return this.releaseReopenLease(admission.lease, admission).pipe(Effect.ensuring(Effect.sync(() => {
+      const workingCsvId = admission.lease.state.metadata.workingCsvId;
+      if (this.mutationQueues.get(workingCsvId) === admission.settled.promise) this.mutationQueues.delete(workingCsvId);
+      admission.settled.resolve();
+      admission.release();
+    })));
+  }
+
+  private releaseReopenLease(lease: WorkingCsvLease, cleanup: { failed: boolean }) {
+    return observeStage('csv.release-retired', Effect.gen(function* () {
+      const result = yield* Effect.exit(Effect.promise(() => lease.release()));
+      if (result._tag === 'Failure') {
+        cleanup.failed = true;
+        yield* recordOutcome('cleanup-failed', result.cause, 'cleanup-failed');
+      } else if (result.value) {
+        cleanup.failed = true;
+        yield* recordOutcome('cleanup-failed', Cause.fail(result.value), 'cleanup-failed');
+      }
+    }));
   }
 
   private async releaseWorkingCsvLease(tableName: string): Promise<void | DataEngineError> {
@@ -892,7 +978,7 @@ function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
 
   if (options.delimiter !== undefined && options.delimiter !== '') {
     if (options.delimiter.length !== 1) {
-      throw new CsvOpenError('Delimiter must be exactly one character.');
+      throw new CsvOpenError('Delimiter must be exactly one character.', 'dialect');
     }
 
     dialect.delimiter = options.delimiter;
@@ -924,7 +1010,7 @@ function buildWorkingCsvTableName(physicalTableId: string): string {
 
 /** A CSV Source that could not be opened, carrying copy the user can act on. */
 class CsvOpenError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly category: 'source-access' | 'dialect' | 'engine') {
     super(message);
     this.name = 'CsvOpenError';
   }
@@ -936,15 +1022,11 @@ function normalizeRowIds(rowIds: string[]): string[] {
 }
 
 function workingCsvFailure(code: WorkingCsvFailure['code'], cause: unknown): WorkingCsvFailure {
-  console.error(`Working CSV ${code} operation failed.`, cause);
-  return { code, message: normalizeOpenError(cause).message, retryable: true };
-}
-
-function unavailableWorkingCsvFailure(
-  code: WorkingCsvFailure['code'],
-  message = 'The CSV workspace is closing.',
-): WorkingCsvFailure {
-  return { code, message, retryable: false };
+  return {
+    code,
+    message: cause instanceof CsvOpenError ? cause.message : 'Unable to open CSV.',
+    retryable: true,
+  };
 }
 
 function normalizeOpenError(cause: unknown): Error {
@@ -952,28 +1034,27 @@ function normalizeOpenError(cause: unknown): Error {
 
   if (cause instanceof CsvSourceUnavailableError) {
     if (cause.code === 'missing-source') {
-      return new CsvOpenError('Unable to open CSV: the file no longer exists.');
+      return new CsvOpenError('Unable to open CSV: the file no longer exists.', 'source-access');
     }
     if (cause.code === 'permission-denied') {
-      return new CsvOpenError('Unable to open CSV: permission was denied for this file.');
+      return new CsvOpenError('Unable to open CSV: permission was denied for this file.', 'source-access');
     }
-    return new CsvOpenError('Unable to open CSV: the file could not be read.');
+    return new CsvOpenError('Unable to open CSV: the file could not be read.', 'source-access');
   }
 
-  if (cause instanceof Error) return new CsvOpenError(`Unable to open CSV: ${cause.message}`);
+  if (cause instanceof Error) return new CsvOpenError(`Unable to open CSV: ${cause.message}`, 'source-access');
 
-  return new CsvOpenError('Unable to open CSV.');
+  return new CsvOpenError('Unable to open CSV.', 'source-access');
 }
 
 /**
  * Data engine failures carry driver detail such as the CSV Source path, and the host boundary keeps
- * runtime locations out of the workspace's callers. The detail is logged instead, and the caller
- * gets the message that actually helps: what to change about the dialect and try again.
+ * runtime locations out of workspace diagnostics. The caller gets guidance about which dialect
+ * options to change before retrying.
  */
 function normalizeEngineError(cause: unknown): Error {
   if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
     return normalizeOpenError(cause);
   }
-  console.error('The data engine could not read the CSV Source.', cause);
-  return new CsvOpenError('Unable to read CSV: check the delimiter, quote, and header options for this file.');
+  return new CsvOpenError('Unable to read CSV: check the delimiter, quote, and header options for this file.', 'engine');
 }

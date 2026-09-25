@@ -31,6 +31,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
+import { failNextMetadataRead, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -227,6 +228,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
 
   private constructor(
     private readonly workspace: CsvWorkspaceImplementation,
+    private readonly database: DuckDbWasmWorkspaceDatabase,
     private readonly host: WasmContractHost,
   ) {
     this.observer = new WorkspaceContractObserver(workspace);
@@ -240,8 +242,14 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
     const workspace = new CsvWorkspaceImplementation(host, database, executor, diagnostics);
-    return new WasmWorkspaceFixture(workspace, host);
+    return new WasmWorkspaceFixture(workspace, database, host);
   }
+
+  failNextMetadataRead(): void { failNextMetadataRead(this.database); }
+
+  failNextTableDrop(): void { failNextTableDrop(this.database); }
+
+  holdNextRowRead() { return holdNextRowRead(this.database); }
 
   registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
     return Promise.resolve(this.host.writeSource(fileName, contents));
