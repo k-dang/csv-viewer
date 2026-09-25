@@ -6,12 +6,7 @@ import type { CsvTab } from './csv-tab';
 import { formatNumber } from './csv-format';
 import { copyColumn, isCopyColumnShortcut } from './copy-column';
 
-/**
- * The strip between the toolbar and the row grid that names the focused column, renames it, and copies it.
- * F2 starts rename only while a Working CSV column header has keyboard focus. Focus on a cell, the
- * search box, or any other control leaves F2 to that control, so the grid can still edit a cell.
- * Ctrl+Shift+A copies the focused column from anywhere that is not a text field.
- */
+/** Shows actions for the focused column and handles its keyboard shortcuts. */
 export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) {
   const { focusedColumn, filteredRowCount } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const [headerRename, setHeaderRename] = useState<{ column: string; serial: number } | null>(null);
@@ -30,7 +25,6 @@ export function CsvColumnBar({ tab, active }: { tab: CsvTab; active: boolean }) 
       setHeaderRename((current) => ({ column, serial: (current?.serial ?? 0) + 1 }));
       return;
     }
-    // Bubble, not capture: text fields keep their own keystrokes, and cell F2 still edits.
     if (!focusedColumn || !isCopyColumnShortcut(event) || isTextField(event.target)) return;
     event.preventDefault();
     void copyColumn(tab);
@@ -157,7 +151,6 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select') !== null);
 }
 
-/** The Working CSV column whose header is the key target, or null when F2 should be left alone. */
 function headerColumnForF2(event: KeyboardEvent, tab: CsvTab): string | null {
   if (event.key !== 'F2' || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
     return null;

@@ -1,6 +1,5 @@
 import type { WorkspaceDatabase } from '../../src/database';
 
-/** One-shot driver failures keep the shared contract's requests and assertions at CsvViewer. */
 export function failNextMetadataRead(database: WorkspaceDatabase): void {
   const read = database.readObjects.bind(database);
   database.readObjects = (sql, values) => {

@@ -71,7 +71,6 @@ type OpenWorkingCsvOutcome =
 type ReplaceWorkingCsvOutcome =
   | { status: 'replaced'; workingCsv: WorkingCsvView }
   | { status: 'revision-changed'; workingCsv: WorkingCsvView }
-  | { status: 'working-csv-not-found' }
   | { status: 'failed'; failure: WorkingCsvFailure };
 
 const workingCsvTablePrefix = 'csv_working_';
@@ -100,6 +99,7 @@ type ReopenAdmission = OpenAdmission & {
 
 export class WorkingCsvStore {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
+  private readonly openAdmissions = new WeakSet<OpenAdmission>();
   private workingCsvs = new Map<string, WorkingCsvState>();
   private dataChangeListeners = new Set<(workingCsvId: WorkingCsvId) => void>();
   private closingWorkingCsvs = new Set<string>();
@@ -114,6 +114,7 @@ export class WorkingCsvStore {
   constructor(
     private readonly host: CsvWorkspaceHost,
     private readonly database: WorkspaceDatabase,
+    private readonly reportRetiredCleanupFailure?: (workingCsvId: WorkingCsvId, failure: DataEngineError) => Promise<void>,
   ) {}
 
   beginDisposal(): void {
@@ -122,7 +123,16 @@ export class WorkingCsvStore {
 
   /** Admit the complete transport operation before disposal can begin. */
   admitOpenWork(): OpenAdmission | null {
-    return this.lifecycle === 'active' ? { release: this.acquireWorkspaceWork() } : null;
+    if (this.lifecycle !== 'active') return null;
+    const releaseWork = this.acquireWorkspaceWork();
+    const admission = {
+      release: () => {
+        if (!this.openAdmissions.delete(admission)) return;
+        releaseWork();
+      },
+    };
+    this.openAdmissions.add(admission);
+    return admission;
   }
 
   /** Reserve both the old table and a queue position before running any asynchronous confirmation. */
@@ -141,8 +151,11 @@ export class WorkingCsvStore {
     }
   }
 
-  open(_admission: OpenAdmission, sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome> {
+  open(admission: OpenAdmission, sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome> {
     return Effect.gen({ self: this }, function* () {
+      if (!this.openAdmissions.has(admission)) {
+        return { status: 'failed', failure: { code: 'open-failed', message: 'The CSV workspace is closing.', retryable: false } } satisfies OpenWorkingCsvOutcome;
+      }
       const existing = this.findBySource(sourceId);
       if (existing) return { status: 'existing', workingCsv: existing } satisfies OpenWorkingCsvOutcome;
       const cleanup = { failed: false };
@@ -399,7 +412,7 @@ export class WorkingCsvStore {
         rows: rows.map(normalizeRow),
       };
     } finally {
-      await lease.release();
+      await this.releaseLeaseAndReport(lease);
     }
   }
 
@@ -450,7 +463,7 @@ export class WorkingCsvStore {
         })),
       };
     } finally {
-      await lease.release();
+      await this.releaseLeaseAndReport(lease);
     }
   }
 
@@ -723,7 +736,7 @@ export class WorkingCsvStore {
     try {
       return await operation(lease.state);
     } finally {
-      await lease.release();
+      await this.releaseLeaseAndReport(lease);
     }
   }
 
@@ -749,7 +762,7 @@ export class WorkingCsvStore {
       try {
         return await operation(currentState);
       } finally {
-        await currentLease?.release();
+        if (currentLease) await this.releaseLeaseAndReport(currentLease);
       }
     });
     const settled = mutation.then(() => undefined, () => undefined);
@@ -760,11 +773,10 @@ export class WorkingCsvStore {
       if (this.mutationQueues.get(workingCsvId) === settled) {
         this.mutationQueues.delete(workingCsvId);
       }
-      await admissionLease.release();
+      await this.releaseLeaseAndReport(admissionLease);
     }
   }
 
-  /** The queue slot was reserved when the request was admitted, before any prompt or await. */
   private withWorkingCsvMutationEffect<A, E>(
     admission: ReopenAdmission,
     operation: (state: WorkingCsvState) => Effect.Effect<A, E>,
@@ -803,6 +815,13 @@ export class WorkingCsvStore {
         yield* recordOutcome('cleanup-failed', Cause.fail(result.value), 'cleanup-failed');
       }
     }));
+  }
+
+  private async releaseLeaseAndReport(lease: WorkingCsvLease): Promise<void> {
+    const failure = await lease.release();
+    if (failure && this.reportRetiredCleanupFailure) {
+      await this.reportRetiredCleanupFailure(lease.state.metadata.workingCsvId, failure).catch(() => undefined);
+    }
   }
 
   private async releaseWorkingCsvLease(tableName: string): Promise<void | DataEngineError> {
@@ -1008,7 +1027,7 @@ function buildWorkingCsvTableName(physicalTableId: string): string {
   return `${workingCsvTablePrefix}${physicalTableId.replaceAll('-', '_')}`;
 }
 
-/** A CSV Source that could not be opened, carrying copy the user can act on. */
+/** A CSV Source error with product guidance and a diagnostic category. */
 class CsvOpenError extends Error {
   constructor(message: string, readonly category: 'source-access' | 'dialect' | 'engine') {
     super(message);
@@ -1047,11 +1066,7 @@ function normalizeOpenError(cause: unknown): Error {
   return new CsvOpenError('Unable to open CSV.', 'source-access');
 }
 
-/**
- * Data engine failures carry driver detail such as the CSV Source path, and the host boundary keeps
- * runtime locations out of workspace diagnostics. The caller gets guidance about which dialect
- * options to change before retrying.
- */
+/** Keep driver details out of product messages and diagnostics. */
 function normalizeEngineError(cause: unknown): Error {
   if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
     return normalizeOpenError(cause);

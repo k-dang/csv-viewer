@@ -48,7 +48,8 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     executor?: ComparisonExecutor,
     diagnostics?: WorkspaceDiagnostics,
   ) {
-    this.runtime = makeWorkspaceRuntime(host, database, executor, diagnostics);
+    this.runtime = makeWorkspaceRuntime(host, database, executor, diagnostics, (workingCsvId, failure) =>
+      this.runEffect(recordOutcome('cleanup-failed', Cause.fail(failure), 'cleanup-failed'), 'csv.release-retired', { workingCsvId }));
     this.csvStore = this.runtime.runSync(WorkingCsv);
     this.comparisonStore = this.runtime.runSync(Comparisons);
   }
@@ -243,10 +244,6 @@ export class CsvWorkspaceImplementation implements CsvViewer {
           const recorded = yield* this.recordRecentSource(outcome.workingCsv.source.sourceId);
           if (!recorded) yield* recordOutcome('opened', undefined, 'cleanup-failed');
           return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
-        }
-        if (outcome.status === 'working-csv-not-found') {
-          yield* recordOutcome('failed');
-          return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
         }
         return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
       }

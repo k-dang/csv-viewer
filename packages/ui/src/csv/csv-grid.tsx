@@ -250,8 +250,7 @@ export function CsvGrid({ tab, themeMode, active, DataGrid = AgGridReact }: CsvG
     if (column) tab.setFocusedColumn(column);
   }
 
-  // Ctrl+C copies the focused cell's raw value (null as empty). An open editor and text the user
-  // selected across cells keep the browser's own copy. Ctrl+Shift+A lives on the Column Bar.
+  // Leave native copy available in editors and for selected text.
   function onCellKeyDown({ event, api, column, value }: CellKeyDownEvent<CsvRow>) {
     if (!event || !isCopyCellShortcut(event)) return;
     if (api.getEditingCells().length > 0 || window.getSelection()?.isCollapsed === false) return;

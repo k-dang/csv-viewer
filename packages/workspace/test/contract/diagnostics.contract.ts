@@ -56,6 +56,30 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose(); }
     });
 
+    it('reports a retired-table deletion failure after an admitted reader finishes', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const original = await fixture.openSource('PRIVATE-reader.csv', 'name\nAda\n');
+        const hold = fixture.holdNextRowRead();
+        const reading = fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+        await hold.entered;
+        try {
+          await fixture.writeSource('PRIVATE-reader.csv', 'name\nGrace\n');
+          await expect(fixture.viewer.call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
+            .resolves.toMatchObject({ status: 'opened' });
+          fixture.failNextTableDrop();
+        } finally {
+          hold.release();
+        }
+        await expect(reading).resolves.toMatchObject({ rows: expect.arrayContaining([expect.objectContaining({ name: 'Ada' })]) });
+        const release = capture.completed().find((record) => record.message === 'csv.release-retired' && record.annotations.outcome === 'cleanup-failed');
+        expect(release?.annotations.workingCsvId).toBe(original.workingCsvId);
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+        await fixture.disposeWorkspace();
+      } finally { await fixture.dispose(); }
+    });
+
     it('completes comparison and disposal when diagnostic output throws', async () => {
       const fixture = await factory.create(undefined, { logger: Logger.make(() => { throw new Error('PRIVATE output failure'); }) });
       try {

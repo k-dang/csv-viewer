@@ -1,7 +1,6 @@
 import { Context, Effect } from 'effect';
 import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
 
-// Per-attempt diagnostic state also records deferred table cleanup that must not fail the query.
 export const ComparisonCleanup = Context.Service<{ failed: boolean }>('csv-viewer/ComparisonCleanup');
 
 export class ComparisonCleanupError extends DataEngineError {

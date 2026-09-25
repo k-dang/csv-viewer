@@ -27,18 +27,27 @@ async function openWorkingCsv(fileName: string, contents: string) {
   const filePath = await fixture.writeSource(fileName, contents);
   const admission = store.admitOpenWork();
   if (!admission) throw new Error('Working CSV open was not admitted.');
-  let outcome;
   try {
-    outcome = await Effect.runPromise(store.open(admission, await fixture.sourceId(filePath)));
+    const outcome = await Effect.runPromise(store.open(admission, await fixture.sourceId(filePath)));
+    if (outcome.status !== 'opened')
+      throw new Error(`Working CSV was ${outcome.status}.`);
+    return outcome.workingCsv;
   } finally {
     admission.release();
   }
-  if (outcome.status !== 'opened')
-    throw new Error(`Working CSV was ${outcome.status}.`);
-  return outcome.workingCsv;
 }
 
 describe('WorkingCsvStore invariants', () => {
+  it('rejects a store open after its admission is released', async () => {
+    const sourceId = await fixture.registerSource('late-open.csv', 'name\nAda\n');
+    const admission = store.admitOpenWork();
+    if (!admission) throw new Error('Open was not admitted.');
+    admission.release();
+    store.beginDisposal();
+    await expect(Effect.runPromise(store.open(admission, sourceId))).resolves.toMatchObject({ status: 'failed' });
+    await store.disposeStore();
+  });
+
   it('closes database handles when disposal validation fails', async () => {
     await openWorkingCsv('dispose-failure.csv', ['id', '1'].join('\n'));
 
