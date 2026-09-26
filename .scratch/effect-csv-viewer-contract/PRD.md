@@ -24,7 +24,7 @@ The entry adapter also passes through whatever an unexpected defect throws, for 
 
 Define every CsvViewer request with Effect Schema and derive the request types from those schemas. The shared entry adapter decodes each request before dispatch on both runtimes. A malformed request is rejected with one sanitized message before it reaches the store.
 
-Mark each expected failure with a tag. The entry adapter rejects an expected failure with its existing user message and rejects a defect with one generic message. The desktop IPC channels return a failure as a value, and the preload rethrows it as `new Error(message)`. The renderer then receives the same message on both runtimes.
+Represent expected workspace failures with tagged errors and preserve the existing host and database error classes. Adapt expected failures into Effect's failure channel and keep unexpected errors as defects. The entry adapter rejects an expected failure with its existing user message and rejects a defect with one generic message. The desktop IPC channels return a sanitized failure as a value, and the preload rethrows it as `new Error(message)`. The renderer then receives the same message on both runtimes.
 
 The public contract keeps its current shape. Requests, results, events, and the rule that expected failures reject stay the same.
 
@@ -33,7 +33,7 @@ The public contract keeps its current shape. Requests, results, events, and the 
 1. As a maintainer, I want one definition of each CsvViewer request, so that its type and its runtime validation cannot drift apart.
 2. As a maintainer, I want the workspace to reject malformed requests before dispatch, so that the store never runs on fields it did not validate.
 3. As a maintainer, I want desktop and web to accept and reject exactly the same requests, so that validation does not depend on the runtime.
-4. As a maintainer, I want expected failures marked with tags, so that the entry adapter and diagnostics can tell them apart from defects without reading message text.
+4. As a maintainer, I want expected failures represented in Effect's failure channel, so that the entry adapter and diagnostics can distinguish them from defects and interruption without reading message text.
 5. As a user, I want the same failure message on desktop and web for the same failed action, so that the runtime does not change what I read.
 6. As a user, I want defects to show a plain message and not internal error text, so that I am not shown engine or programming details.
 7. As a user, I want every action that works today to keep its results and messages, so that this change does not affect me.
@@ -74,20 +74,22 @@ The public contract keeps its current shape. Requests, results, events, and the 
 
 ### Expected failures and defects
 
-- Mark expected failures with `Data.TaggedError`. These errors never cross the transport, so `Schema.TaggedError` is not needed. Cover every throw a request can reach that has a user-facing message today, including:
+- Mark expected workspace failures with `Data.TaggedError`. These errors never cross the transport, so `Schema.TaggedError` is not needed. Reuse a tag for validations with the same recovery and diagnostic handling; do not create a class for every message. Cover deliberate user-facing validation failures, including:
   - the store's lifecycle, lookup, and edit validation throws
   - `csv-query.ts` (unknown CSV column)
   - `csv-working-csv-table.ts` (CSV row no longer exists)
   - `csv-edit-history.ts` (no edit to undo or redo)
-- `DataEngineError` and `CsvSourceUnavailableError` stay as classes, because they belong to the host and database adapters. The entry adapter treats them as expected failures. Their messages are already sanitized.
-- The entry adapter translates failures once. An expected failure rejects with its existing message. Anything else, including an `AggregateError` of several causes, rejects with `The CSV workspace could not complete the request.`. The full cause stays in diagnostics inside the owning process.
-- Diagnostics classify failure categories from tags. The classification replaces the `instanceof` checks and the `ComparisonCleanupError` special case in `workspace-diagnostics.ts`.
+- `DataEngineError` and `CsvSourceUnavailableError` keep their existing classes and sanitized messages. Recognize them by `instanceof` when adapting thrown values; they do not need new tags solely for consistency with workspace errors. Broken invariants and unexpected exceptions remain defects.
+- At each synchronous or Promise adapter into Effect, put recognized expected errors in the typed failure channel and preserve unexpected errors as defects. Native Effect code fails explicitly for expected conditions. Merely throwing a `Data.TaggedError` inside `Effect.sync` or rejecting inside `Effect.promise` produces a defect; default `Effect.tryPromise` wraps a rejection in `UnknownError`. Neither is sufficient for preserving expected errors. Apply this conversion where the operation enters Effect, before its stages record diagnostics.
+- The entry adapter inspects `Exit` and `Cause` before squashing a cause or constructing a Promise rejection. A single recognized expected failure rejects with its existing message. Defects, interruption, and multiple causes, including an `AggregateError`, reject with `The CSV workspace could not complete the request.`. Do not recover a defect as an expected failure solely because its value has a recognized tag.
+- Diagnostics retain Effect's distinction between failure, defect, and interruption. Use domain tags or existing error classes only for further classification. Preserve the existing cleanup-failure classification, including `ComparisonCleanupError` from finalizers, and keep cleanup status separate from the operation outcome. Do not rewrite this classification solely to remove `instanceof` checks.
+- Retain original causes internally in the owning process through classification and cleanup. Diagnostic output contains only the existing allowlisted identifiers, stage names, timings, and normalized outcomes. Never serialize raw causes, error messages or stacks, Schema issues, request payloads, CSV values, source names or paths, SQL, or driver details into logs or traces. User-facing validation messages may contain column names and must not become diagnostic text.
 - Operations that return declared outcomes today, such as `failed`, `rejected`, and `invalid-key`, keep them.
 
 ### Desktop transport
 
-- The `csv-viewer:request` and `acquireDroppedSource` IPC handlers return `{ ok: true, value }` or `{ ok: false, message }`. The preload returns `value` or throws `new Error(message)`. Web needs no change.
-- `acquireDroppedSource` already validates its payload, which must be an absolute path string, and keeps that check.
+- The `csv-viewer:request` and `acquireDroppedSource` IPC handlers return `{ ok: true, value }` or `{ ok: false, message }`. The preload returns `value` or throws `new Error(message)`. The request handler uses the message already sanitized by the shared entry adapter. Web needs no transport change.
+- `acquireDroppedSource` calls the desktop host directly and does not pass through that entry adapter. Keep its absolute-path payload check and its existing unsupported-file and directory messages as explicitly recognized expected failures. Normalize expected filesystem failures from `stat` and file-identity lookup into `CsvSourceUnavailableError` with sanitized messages. Unexpected failures use `The CSV workspace could not complete the request.`. Complete this translation before constructing the IPC response; never forward arbitrary `error.message` values or classify them by message text. Any diagnostics follow the same privacy allowlist.
 - Main-process events stay trusted, as results are. Delete the preload event guard.
 
 ### Code to delete
@@ -106,9 +108,9 @@ Use the installed Effect release, `effect` 4.0.0-rc.115, as the authority. The A
 
 - The shared CsvViewer contract suites stay the primary seam, run against native DuckDB and DuckDB-Wasm. They must pass without weakened assertions. The only assertion that changes on purpose is `csv-viewer.contract.ts`, which expects `Unsupported CSV Viewer operation: workspace.dispose` today and will expect `Malformed CSV Viewer request.`.
 - Add one decoding contract case that sends malformed requests through `call`: an unknown operation, a missing required field, a wrong value kind, an unknown `placement`, and a negative row window offset. Assert the sanitized message and that no Working CSV state or data revision changed.
-- Add one contract case that forces a defect through a real request and asserts the generic message. Use the existing database failure injection if it can raise a non-tagged error. Otherwise add the smallest seam that can.
-- Extend the diagnostics contract. A malformed request records `csv-viewer.request` with `malformed-request` and contains no request content. Tag-based classification still separates expected failures from defects.
-- Replace the desktop IPC test with one focused test of the transport: a rejected request and a rejected dropped-source call both reach the renderer side with the original message and no Electron prefix. A fake IPC pair is enough, because the test covers the transport and the shared contract covers decoding.
+- Add one contract case that forces a defect through a real request and asserts the generic message. Put sentinel SQL and a local path in the error and its nested cause, and assert that neither reaches the public rejection or captured diagnostics. Use the existing database failure injection if it can raise an error that remains a defect through the adapters. Otherwise add the smallest seam that can.
+- Extend the diagnostics contract. A malformed request records `csv-viewer.request` with `malformed-request` and contains no request content. Exercise an expected synchronous validation failure and an expected Promise rejection through real requests, preserving their messages and reporting `recoverable-failure`. The defect case reports `defect`. Existing interruption and cleanup-failure assertions remain unchanged. Assert behavior and classification, not specific Effect combinators or error-class counts.
+- Replace the desktop IPC test with a focused transport test: an expected rejected request and an expected rejected dropped-source call both reach the renderer side with their sanitized messages and no Electron prefix. A fake IPC pair is enough, because the test covers the transport and the shared contract covers decoding. Add a dropped-source case for a missing or inaccessible file and one injected unexpected failure; neither may expose its sentinel path or internal error text in the response or diagnostics.
 - Before changing the transport, reproduce the prefixed message on desktop with the verify skill by renaming a column to a blank name. After the change, show that desktop and web show the same message for that rename and for one Comparison action.
 - Run the required type, lint, and test checks and the desktop and web builds.
 
