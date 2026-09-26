@@ -22,7 +22,7 @@ import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/c
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextMetadataRead, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -117,6 +117,8 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+
+  failNextSnapshotDrop(): Promise<void> { return failNextSnapshotDrop(this.database); }
 
   holdNextRowRead() { return holdNextRowRead(this.database); }
 

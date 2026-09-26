@@ -18,6 +18,16 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
   };
 }
 
+export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise<void> {
+  const connection = await database.ownerConnection();
+  const run = connection.run.bind(connection);
+  connection.run = (sql, values) => {
+    if (!sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) return run(sql, values);
+    connection.run = run;
+    return Promise.reject(new Error('PRIVATE snapshot cleanup failure'));
+  };
+}
+
 export function holdNextRowRead(database: WorkspaceDatabase) {
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();

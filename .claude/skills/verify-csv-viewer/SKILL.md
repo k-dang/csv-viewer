@@ -82,10 +82,12 @@ After a desktop run, read the main-process logs:
 
 ```powershell
 $run = Get-Content .claude/skills/verify-csv-viewer/runs/current.json | ConvertFrom-Json
-Get-Content $run.logPath | Select-String 'message="?(comparison|workspace)\.'
+Get-Content $run.logPath | Select-String 'message="?(csv|comparison|workspace)\.'
 ```
 
 For web runs, capture the browser console through CDP before performing the operation. Diagnostics appear there, not in the Vite server log.
+
+Every CsvViewer request logs a stage named after its operation, such as `csv.get-rows`, `csv.edit-cell`, or `comparison.begin`. Each line carries `workspaceId`, `requestId`, and the request's `workingCsvId` or `comparisonId`. Filter by `requestId` to follow one request, or by `workingCsvId` to see all work on one Working CSV. A mutation logs `csv.queue-wait` while earlier mutations on the same Working CSV run. Each returned lease logs `csv.release-lease`, and `csv.release-retired` when that release drops a replaced table. A `started` line without a completion line shows the stage where a request is stuck.
 
 Filter Effect output by `operationId` to follow a comparison through cleanup. Read the matching stage's log-span timing on its completion line; enclosing span timings show elapsed time, so do not add them together. Check `outcome` and `cleanup` separately. Browser navigation can stop logging before disposal completes.
 
