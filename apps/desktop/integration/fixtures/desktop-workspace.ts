@@ -33,6 +33,7 @@ export type ScriptedPrompts = {
   sourceConflictCount: number;
   /** Runs while the export destination prompt is open, so tests can hold it there. */
   holdExportPrompt?: () => Promise<void>;
+  holdDiscardPrompt?: () => Promise<void>;
 };
 
 /**
@@ -78,8 +79,10 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
           showSourceConflict: async () => {
             prompts.sourceConflictCount += 1;
           },
-          confirmDiscardChanges: async () =>
-            prompts.discardChoices.shift() ?? true,
+          confirmDiscardChanges: async () => {
+            await prompts.holdDiscardPrompt?.();
+            return prompts.discardChoices.shift() ?? true;
+          },
         },
         path.join(directory, 'recent-sources.json'),
       );

@@ -136,7 +136,7 @@ export class WorkingCsvStore {
     return admission;
   }
 
-  /** Reserve both the old table and a queue position before running any asynchronous confirmation. */
+  /** Reserve the old table and a mutation queue position for replacement. */
   admitReopenWork(workingCsvId: WorkingCsvId): ReopenAdmission | null {
     const work = this.admitOpenWork();
     if (!work) return null;

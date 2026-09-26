@@ -46,5 +46,14 @@ describe('CSV source selection during workspace disposal', () => {
 
     await expect(opening).resolves.toEqual({ status: 'failed', message: 'The CSV workspace is closing.' });
     expect(releaseSource).toHaveBeenCalledExactlyOnceWith('selected.csv');
+
+    await expect(workspace.call({ operation: 'csv.open', sourceId: 'reserved.csv' })).resolves.toEqual({
+      status: 'failed', message: 'The CSV workspace is closing.',
+    });
+    expect(releaseSource).toHaveBeenNthCalledWith(2, 'reserved.csv');
+    await expect(workspace.call({ operation: 'csv.open' })).resolves.toEqual({
+      status: 'failed', message: 'The CSV workspace is closing.',
+    });
+    expect(releaseSource).toHaveBeenCalledTimes(2);
   });
 });

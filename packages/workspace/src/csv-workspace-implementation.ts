@@ -23,6 +23,7 @@ import type {
   CsvViewer,
   OpenCsvResult,
   WorkingCsvId,
+  WorkingCsvView,
   WorkspaceCloseImpact,
   ConfirmWorkspaceCloseOutcome,
 } from './csv-viewer';
@@ -153,7 +154,10 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Promise<OpenCsvResult> {
-    if (this.disposal) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+    if (this.disposal) {
+      if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
+      return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
+    }
     // Source selection may outlive the workspace; admission protects only the open that follows it.
     return this.runEffect(Effect.gen({ self: this }, function* () {
       const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', Effect.promise(() => this.host.acquireSource())));
@@ -212,25 +216,19 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Promise<OpenCsvResult> {
+    if (this.disposal) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
     if (!this.csvStore.has(workingCsvId)) {
       return this.runEffect(recordOutcome('failed').pipe(Effect.as({ status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult)), 'csv.reopen', { workingCsvId });
     }
-    let admission: NonNullable<ReturnType<WorkingCsvStore['admitReopenWork']>>;
-    try {
-      const admitted = this.csvStore.admitReopenWork(workingCsvId);
-      if (!admitted) return Promise.resolve({ status: 'failed', message: 'The CSV workspace is closing.' });
-      admission = admitted;
-    } catch {
-      return Promise.resolve({ status: 'failed', message: 'This CSV is closing.' });
-    }
-    return this.runEffect(Effect.scoped(Effect.gen({ self: this }, function* () {
-      yield* Effect.acquireRelease(Effect.succeed(admission), () => this.csvStore.releaseReopenAdmission(admission));
+    if (this.csvStore.isClosing(workingCsvId)) return Promise.resolve({ status: 'failed', message: 'This CSV is closing.' });
+    // A discard prompt may outlive disposal, so only the replacement runs under reopen admission.
+    return this.runEffect(Effect.gen({ self: this }, function* () {
       const initial = this.csvStore.getState(workingCsvId);
       if (!initial) {
         yield* recordOutcome('failed');
         return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
       }
-      let existing = initial;
+      let existing: WorkingCsvView = initial;
       while (true) {
         while (existing.editState.hasUnexportedChanges) {
           const canContinue = yield* observeStage('csv.confirm-discard', Effect.promise(() => this.host.confirmDiscardChanges(existing.source.name)));
@@ -238,15 +236,44 @@ export class CsvWorkspaceImplementation implements CsvViewer {
             yield* recordOutcome('cancelled');
             return { status: 'cancelled' } satisfies OpenCsvResult;
           }
+          if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
           const current = this.csvStore.getState(workingCsvId);
           if (!current) {
             yield* recordOutcome('failed');
             return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
           }
-          if (current.dataRevision === existing.dataRevision) break;
+          if (current.dataRevision === existing.dataRevision) {
+            existing = current;
+            break;
+          }
           existing = current;
         }
-        const outcome = yield* this.csvStore.replace(admission, existing.dataRevision, options);
+        const expectedRevision = existing.dataRevision;
+        let admission: NonNullable<ReturnType<WorkingCsvStore['admitReopenWork']>>;
+        try {
+          const admitted = this.csvStore.admitReopenWork(workingCsvId);
+          if (!admitted) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+          admission = admitted;
+        } catch {
+          return { status: 'failed', message: 'This CSV is closing.' } satisfies OpenCsvResult;
+        }
+        const attempt = yield* Effect.scoped(Effect.gen({ self: this }, function* () {
+          yield* Effect.acquireRelease(Effect.succeed(admission), () => this.csvStore.releaseReopenAdmission(admission));
+          const current = this.csvStore.getState(workingCsvId);
+          if (!current) return { kind: 'missing' } as const;
+          if (current.dataRevision !== expectedRevision) return { kind: 'revision-changed', workingCsv: current } as const;
+          const outcome = yield* this.csvStore.replace(admission, expectedRevision, options);
+          return { kind: 'replace', outcome } as const;
+        })).pipe(Effect.tap(() => admission.failed ? Effect.annotateCurrentSpan({ cleanup: 'cleanup-failed' }) : Effect.void));
+        if (attempt.kind === 'missing') {
+          yield* recordOutcome('failed');
+          return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
+        }
+        if (attempt.kind === 'revision-changed') {
+          existing = attempt.workingCsv;
+          continue;
+        }
+        const { outcome } = attempt;
         if (outcome.status === 'revision-changed') {
           existing = outcome.workingCsv;
           continue;
@@ -258,10 +285,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         }
         return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
       }
-    })).pipe(
-      Effect.tap(() => admission.failed ? Effect.annotateCurrentSpan({ cleanup: 'cleanup-failed' }) : Effect.void),
-      Effect.uninterruptible,
-    ), 'csv.reopen', { workingCsvId });
+    }).pipe(Effect.uninterruptible), 'csv.reopen', { workingCsvId }, 'independent');
   }
 
   private async exportCsv(workingCsvId: WorkingCsvId): Promise<CsvExportOutcome> {
