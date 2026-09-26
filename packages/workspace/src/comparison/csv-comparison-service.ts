@@ -1,4 +1,4 @@
-import { diagnosticCause, observeStage, recordOutcome } from '../workspace-diagnostics';
+import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
 import { Cause, Deferred, Effect, Exit, Fiber, type Scope } from 'effect';
 import { DataEngineError } from '../database';
 import type {
@@ -36,7 +36,7 @@ import {
   validateKeySelection,
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
-import { ComparisonCleanup, ComparisonCleanupError } from './comparison-effects';
+import { ComparisonCleanupError } from './comparison-effects';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -253,7 +253,7 @@ export class CsvComparisonService {
           yield* Deferred.succeed(completed, outcome);
         })),
         (effect) => observeStage('comparison.compute', effect),
-        Effect.provideService(ComparisonCleanup, cleanup),
+        Effect.provideService(OperationCleanup, cleanup),
         Effect.annotateSpans({ comparisonId: entity.comparisonId, operationId: operation.operationId, baselineId: entity.baselineId, candidateId: entity.candidateId }),
       ),
       this.workspaceScope,
@@ -397,7 +397,7 @@ export class CsvComparisonService {
     ));
     this.closing.set(comparisonId, completion);
     return yield* completion;
-  }, Effect.uninterruptible);
+  }, Effect.uninterruptible, Effect.tap((result) => result.status === 'failed' ? markCleanupFailed : Effect.void));
 
   private readonly closeEntity = Effect.fnUntraced(function* (
     this: CsvComparisonService,
