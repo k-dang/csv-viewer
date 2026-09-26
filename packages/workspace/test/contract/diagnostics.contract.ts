@@ -11,6 +11,75 @@ import type { WorkspaceContractFactory } from './workspace-contract';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
+    it('traces CSV open, reopen, staged cleanup, and product outcomes without source data', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const sourceId = await fixture.registerSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
+        const opened = await fixture.viewer.call({ operation: 'csv.open-recent', sourceId });
+        if (opened.status !== 'opened') throw new Error(`Open was ${opened.status}.`);
+        await expect(fixture.viewer.call({
+          operation: 'csv.reopen', workingCsvId: opened.workingCsv.workingCsvId, options: { delimiter: '||' },
+        })).resolves.toMatchObject({ status: 'failed' });
+        fixture.failNextTableDrop();
+        await expect(fixture.viewer.call({ operation: 'csv.reopen', workingCsvId: opened.workingCsv.workingCsvId }))
+          .resolves.toMatchObject({ status: 'opened' });
+        const partialSourceId = await fixture.registerSource('PRIVATE-PARTIAL.csv', 'name\nPRIVATE-CELL\n');
+        fixture.failNextMetadataRead();
+        fixture.failNextTableDrop();
+        await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId: partialSourceId }))
+          .resolves.toMatchObject({ status: 'failed' });
+        await fixture.disposeWorkspace();
+        const records = capture.completed();
+        const successfulOpen = records.find((record) => record.message === 'csv.open' && record.annotations.outcome === 'opened');
+        const failedOpen = records.find((record) => record.message === 'csv.open' && record.annotations.outcome === 'failed');
+        const failedReopen = records.find((record) => record.message === 'csv.reopen' && record.annotations.outcome === 'failed');
+        const committedReopen = records.find((record) => record.message === 'csv.reopen' && record.annotations.outcome === 'opened');
+        expect(successfulOpen?.annotations.cleanup).toBe('succeeded');
+        expect(failedOpen?.annotations.cleanup).toBe('cleanup-failed');
+        expect(failedOpen?.annotations.failureCategory).toBe('recoverable-failure');
+        expect(failedOpen?.annotations.csvFailureCategory).toBe('engine');
+        expect(failedReopen?.annotations.failureCategory).toBe('recoverable-failure');
+        expect(failedReopen?.annotations.csvFailureCategory).toBe('dialect');
+        expect(failedReopen?.annotations.workingCsvId).toBe(opened.workingCsv.workingCsvId);
+        expect(committedReopen?.annotations.cleanup).toBe('cleanup-failed');
+        const retirement = records.find((record) => record.message === 'csv.release-retired' && record.annotations.requestId === committedReopen?.annotations.requestId);
+        expect(retirement?.annotations.outcome).toBe('cleanup-failed');
+        expect(retirement?.spans).toHaveProperty('csv.reopen');
+        for (const stage of ['csv.describe-source', 'csv.prepare-table', 'csv.access-and-load', 'csv.read-metadata', 'csv.release-staging']) {
+          const record = records.find((entry) => entry.message === stage && entry.annotations.requestId === failedOpen?.annotations.requestId);
+          expect(record?.spans).toHaveProperty('csv.open');
+        }
+        const release = records.find((record) => record.message === 'csv.release-staging' && record.annotations.requestId === failedOpen?.annotations.requestId);
+        expect(release?.annotations.cleanup).toBe('cleanup-failed');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose(); }
+    });
+
+    it('reports a retired-table deletion failure after an admitted reader finishes', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const original = await fixture.openSource('PRIVATE-reader.csv', 'name\nAda\n');
+        const hold = fixture.holdNextRowRead();
+        const reading = fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+        await hold.entered;
+        try {
+          await fixture.writeSource('PRIVATE-reader.csv', 'name\nGrace\n');
+          await expect(fixture.viewer.call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
+            .resolves.toMatchObject({ status: 'opened' });
+          fixture.failNextTableDrop();
+        } finally {
+          hold.release();
+        }
+        await expect(reading).resolves.toMatchObject({ rows: expect.arrayContaining([expect.objectContaining({ name: 'Ada' })]) });
+        const release = capture.completed().find((record) => record.message === 'csv.release-retired' && record.annotations.outcome === 'cleanup-failed');
+        expect(release?.annotations.workingCsvId).toBe(original.workingCsvId);
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+        await fixture.disposeWorkspace();
+      } finally { await fixture.dispose(); }
+    });
+
     it('completes comparison and disposal when diagnostic output throws', async () => {
       const fixture = await factory.create(undefined, { logger: Logger.make(() => { throw new Error('PRIVATE output failure'); }) });
       try {

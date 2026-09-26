@@ -3,13 +3,11 @@ import { toast } from '@/components/ui/toast';
 import { formatNumber } from './csv-format';
 import type { CsvTab } from './csv-tab';
 
-/** Ctrl+C or Cmd+C with no other modifier; Caps Lock reports `C`, so the key is lowercased. */
 export function isCopyCellShortcut(event: Event): boolean {
   if (!(event instanceof KeyboardEvent)) return false;
   return event.key.toLowerCase() === 'c' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
 }
 
-/** Ctrl+Shift+A or Cmd+Shift+A. */
 export function isCopyColumnShortcut(event: Event): boolean {
   if (!(event instanceof KeyboardEvent)) return false;
   return event.key.toLowerCase() === 'a' && (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey;
@@ -21,7 +19,6 @@ export async function copyColumn(tab: CsvTab): Promise<void> {
   if (result) confirmCopy(result.count, result.column);
 }
 
-/** Copies one cell's raw value (null as empty) and confirms it like the column copy. */
 export async function copyCell(column: string, value: CsvCellValue | undefined): Promise<void> {
   try {
     await navigator.clipboard.writeText(String(value ?? ''));

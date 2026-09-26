@@ -35,31 +35,6 @@ export function toCsvSortDescriptors(sortModel: AgSortModelItem[]): CsvSortDescr
   }));
 }
 
-/** One added name and one removed name: a header rename, not a different schema. */
-export function renamedColumnName(
-  previous: readonly string[],
-  next: readonly string[],
-): { from: string; to: string } | null {
-  const removed = previous.filter((name) => !next.includes(name));
-  const added = next.filter((name) => !previous.includes(name));
-  if (removed.length !== 1 || added.length !== 1) return null;
-  return { from: removed[0], to: added[0] };
-}
-
-export function remapAgFilterModel(model: AgFilterModel, from: string, to: string) {
-  if (from === to || !(from in model)) return model;
-  const next = { ...model };
-  const value = next[from];
-  delete next[from];
-  next[to] = value;
-  return next;
-}
-
-export function remapAgColumnState<T extends { colId?: string | null }>(state: T[], from: string, to: string): T[] {
-  if (from === to) return state;
-  return state.map((column) => (column.colId === from ? { ...column, colId: to } : column));
-}
-
 export function toAgSortState(sort: CsvSortDescriptor[]) {
   return sort.map((item, sortIndex) => ({
     colId: item.column,

@@ -1,4 +1,5 @@
 import { rm } from 'node:fs/promises';
+import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
@@ -24,13 +25,29 @@ afterEach(async () => {
 
 async function openWorkingCsv(fileName: string, contents: string) {
   const filePath = await fixture.writeSource(fileName, contents);
-  const outcome = await store.open(await fixture.sourceId(filePath));
-  if (outcome.status !== 'opened')
-    throw new Error(`Working CSV was ${outcome.status}.`);
-  return outcome.workingCsv;
+  const admission = store.admitOpenWork();
+  if (!admission) throw new Error('Working CSV open was not admitted.');
+  try {
+    const outcome = await Effect.runPromise(store.open(admission, await fixture.sourceId(filePath)));
+    if (outcome.status !== 'opened')
+      throw new Error(`Working CSV was ${outcome.status}.`);
+    return outcome.workingCsv;
+  } finally {
+    admission.release();
+  }
 }
 
 describe('WorkingCsvStore invariants', () => {
+  it('rejects a store open after its admission is released', async () => {
+    const sourceId = await fixture.registerSource('late-open.csv', 'name\nAda\n');
+    const admission = store.admitOpenWork();
+    if (!admission) throw new Error('Open was not admitted.');
+    admission.release();
+    store.beginDisposal();
+    await expect(Effect.runPromise(store.open(admission, sourceId))).resolves.toMatchObject({ status: 'failed' });
+    await store.disposeStore();
+  });
+
   it('closes database handles when disposal validation fails', async () => {
     await openWorkingCsv('dispose-failure.csv', ['id', '1'].join('\n'));
 

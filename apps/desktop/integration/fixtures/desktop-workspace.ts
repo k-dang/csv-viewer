@@ -22,6 +22,7 @@ import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/c
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
+import { failNextMetadataRead, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -32,6 +33,7 @@ export type ScriptedPrompts = {
   sourceConflictCount: number;
   /** Runs while the export destination prompt is open, so tests can hold it there. */
   holdExportPrompt?: () => Promise<void>;
+  holdDiscardPrompt?: () => Promise<void>;
 };
 
 /**
@@ -44,6 +46,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   private constructor(
     readonly directory: string,
     private readonly workspace: CsvWorkspaceImplementation,
+    private readonly database: DuckDbWorkspaceDatabase,
     readonly host: DesktopWorkspaceHost,
     readonly prompts: ScriptedPrompts,
   ) {
@@ -76,13 +79,16 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
           showSourceConflict: async () => {
             prompts.sourceConflictCount += 1;
           },
-          confirmDiscardChanges: async () =>
-            prompts.discardChoices.shift() ?? true,
+          confirmDiscardChanges: async () => {
+            await prompts.holdDiscardPrompt?.();
+            return prompts.discardChoices.shift() ?? true;
+          },
         },
         path.join(directory, 'recent-sources.json'),
       );
-      workspace = new CsvWorkspaceImplementation(host, new DuckDbWorkspaceDatabase(), executor, diagnostics);
-      return new CsvWorkspaceFixture(directory, workspace, host, prompts);
+      const database = new DuckDbWorkspaceDatabase();
+      workspace = new CsvWorkspaceImplementation(host, database, executor, diagnostics);
+      return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
     } catch (error) {
       await workspace?.dispose().catch(() => undefined);
       await rm(directory, { recursive: true, force: true });
@@ -107,6 +113,12 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
     return this.sourceId(await this.writeSource(fileName, contents));
   }
+
+  failNextMetadataRead(): void { failNextMetadataRead(this.database); }
+
+  failNextTableDrop(): void { failNextTableDrop(this.database); }
+
+  holdNextRowRead() { return holdNextRowRead(this.database); }
 
   async removeSource(fileName: string): Promise<void> {
     await unlink(this.file(fileName));
