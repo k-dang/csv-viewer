@@ -99,3 +99,7 @@ Completion requires both migration increments, preserved desktop and web behavio
 Use the installed Effect release as the implementation authority. Consult its source and matching documentation before choosing runtime, tracing, or scope APIs. Relevant references include [Effect resource scopes](https://effect.website/docs/v4/resource-management/scope), [structured logging and annotations](https://effect.website/docs/v4/observability/logging).
 
 ## Comments
+
+### Ticket 04 added 2026-09-25
+
+Ticket 03 connected reopen to the existing promise-based mutation queue instead of replacing the queue. The Working CSV store now has two mutation paths and two lease release paths. Ticket 04 consolidates them and sends every CsvViewer request through the shared entry adapter. The feature is complete when 04 is complete.
