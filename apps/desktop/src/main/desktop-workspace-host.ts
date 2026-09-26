@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { toError } from '@csv-viewer/workspace/errors';
@@ -47,6 +48,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   readonly capabilities = electronCsvViewerCapabilities;
   private readonly sources = new Map<CsvSourceId, RegisteredSource>();
   private readonly sourceIdsByIdentity = new Map<string, CsvSourceId>();
+  private recentEntriesUpdate: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly prompts: DesktopWorkspacePrompts,
@@ -87,10 +89,15 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
 
   async describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
     const filePath = this.requireSource(sourceId).filePath;
-    const fileStats = await stat(filePath).catch((cause: unknown) => {
+    let fileStats: Stats;
+    try {
+      fileStats = await stat(filePath);
+    } catch (cause: unknown) {
+      if (isFileSystemError(cause) && cause.code === 'ENOENT') await this.forgetRecentPath(filePath);
       throw toSourceUnavailableError(cause);
-    });
+    }
     if (!fileStats.isFile()) {
+      await this.forgetRecentPath(filePath);
       throw new CsvSourceUnavailableError('unreadable', 'Selected path is not a file.');
     }
 
@@ -125,8 +132,37 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
 
   async recentSources(): Promise<RecentCsvSource[]> {
     const entries = await this.readRecentEntries();
+    const gone = new Set<string>();
+    const hidden = new Set<string>();
+    for (const entry of entries) {
+      const resolvedPath = path.resolve(entry.path);
+      const state = await this.classifyRecentPath(entry.path);
+      switch (state) {
+        case 'file':
+          break;
+        case 'gone':
+          gone.add(resolvedPath);
+          break;
+        case 'inaccessible':
+          hidden.add(resolvedPath);
+          break;
+        default: {
+          const unreachable: never = state;
+          throw new Error(`Unexpected recent path state: ${unreachable}`);
+        }
+      }
+    }
+
+    const current = gone.size === 0
+      ? entries
+      : await this.modifyRecentEntries((latest) => latest.filter((entry) => !gone.has(path.resolve(entry.path))));
+    const available = current.filter((entry) => {
+      const resolvedPath = path.resolve(entry.path);
+      return !gone.has(resolvedPath) && !hidden.has(resolvedPath);
+    });
+
     return Promise.all(
-      entries.map(async (entry) => ({
+      available.map(async (entry) => ({
         sourceId: await this.registerSource(entry.path),
         name: entry.name,
         location: entry.path,
@@ -141,23 +177,15 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     if (!source) return;
     const normalizedPath = path.resolve(source.filePath);
     const fileStats = await stat(normalizedPath).catch(() => null);
-    const entries = await this.readRecentEntries();
-    const nextEntries = [
-      {
-        path: normalizedPath,
-        name: path.basename(normalizedPath),
-        sizeBytes: fileStats?.size ?? 0,
-        lastOpenedAt: new Date().toISOString(),
-      },
-      ...entries.filter((entry) => path.resolve(entry.path) !== normalizedPath),
-    ].slice(0, maxRecentSources);
-
-    try {
-      await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
-      await writeFile(this.recentSourcesPath, JSON.stringify(nextEntries, null, 2), 'utf8');
-    } catch (cause: unknown) {
-      console.warn('Unable to write Recent CSV Sources.', cause);
-    }
+    const nextEntry: RecentSourceEntry = {
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      sizeBytes: fileStats?.size ?? 0,
+      lastOpenedAt: new Date().toISOString(),
+    };
+    await this.modifyRecentEntries((entries) =>
+      [nextEntry, ...entries.filter((entry) => path.resolve(entry.path) !== normalizedPath)].slice(0, maxRecentSources),
+    );
   }
 
   confirmDiscardChanges(sourceName: string): Promise<boolean> {
@@ -177,6 +205,45 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       throw new CsvSourceUnavailableError('missing-source', 'The CSV Source is not available.');
     }
     return source;
+  }
+
+  private async classifyRecentPath(filePath: string): Promise<'file' | 'gone' | 'inaccessible'> {
+    try {
+      return (await stat(filePath)).isFile() ? 'file' : 'gone';
+    } catch (cause: unknown) {
+      if (!isFileSystemError(cause)) throw cause;
+      if (cause.code === 'ENOENT' || cause.code === 'ENOTDIR') return 'gone';
+      if (cause.code === 'EACCES' || cause.code === 'EPERM') return 'inaccessible';
+      throw cause;
+    }
+  }
+
+  private forgetRecentPath(filePath: string): Promise<RecentSourceEntry[]> {
+    const resolvedPath = path.resolve(filePath);
+    return this.modifyRecentEntries((entries) => entries.filter((entry) => path.resolve(entry.path) !== resolvedPath));
+  }
+
+  private modifyRecentEntries(
+    update: (entries: RecentSourceEntry[]) => RecentSourceEntry[],
+  ): Promise<RecentSourceEntry[]> {
+    const run = this.recentEntriesUpdate.then(async () => {
+      const entries = await this.readRecentEntries();
+      const next = update(entries);
+      if (next.length === entries.length && next.every((entry, index) => entry === entries[index])) return entries;
+      await this.writeRecentEntries(next);
+      return next;
+    });
+    this.recentEntriesUpdate = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async writeRecentEntries(entries: RecentSourceEntry[]): Promise<void> {
+    try {
+      await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
+      await writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8');
+    } catch (cause: unknown) {
+      console.warn('Unable to write Recent CSV Sources.', cause);
+    }
   }
 
   private async readRecentEntries(): Promise<RecentSourceEntry[]> {
