@@ -1,4 +1,5 @@
-import { link, readFile, rename } from 'node:fs/promises';
+import { link, mkdir, readFile, rename } from 'node:fs/promises';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
 
@@ -79,6 +80,60 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(recents[0].sizeBytes).toBeGreaterThan(0);
   });
 
+  it('drops a Recent CSV Source whose recorded path is missing', async () => {
+    await fixture.openSource('missing.csv', 'a\n1\n');
+    await fixture.openSource('present.csv', 'b\n2\n');
+    await fixture.removeSource('missing.csv');
+
+    const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+
+    expect(recents.map((recent) => recent.name)).toEqual(['present.csv']);
+    expect(await storedRecentNames(fixture)).toEqual(['present.csv']);
+  });
+
+  it('drops a Recent CSV Source that no longer points at a file', async () => {
+    await fixture.openSource('was-a-file.csv', 'a\n1\n');
+    await fixture.openSource('still-a-file.csv', 'b\n2\n');
+    await fixture.removeSource('was-a-file.csv');
+    await mkdir(fixture.file('was-a-file.csv'));
+
+    const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+
+    expect(recents.map((recent) => recent.name)).toEqual(['still-a-file.csv']);
+    expect(await storedRecentNames(fixture)).toEqual(['still-a-file.csv']);
+  });
+
+  it('drops a renamed Recent CSV Source instead of following the file to its new path', async () => {
+    await fixture.openSource('before-rename.csv', 'name\nAda\n');
+    await fixture.openSource('stays.csv', 'b\n2\n');
+    await rename(fixture.file('before-rename.csv'), fixture.file('after-rename.csv'));
+
+    const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+
+    expect(recents.map((recent) => recent.name)).toEqual(['stays.csv']);
+    expect(await storedRecentNames(fixture)).toEqual(['stays.csv']);
+    await expect(readFile(fixture.file('after-rename.csv'), 'utf8')).resolves.toBe('name\nAda\n');
+  });
+
+  it('clears a Recent CSV Source when opening it after the file is gone', async () => {
+    const gone = await fixture.openSource('gone.csv', 'a\n1\n');
+    await fixture.openSource('kept.csv', 'b\n2\n');
+    await fixture.viewer.call({ operation: 'csv.close', workingCsvId: gone.workingCsvId });
+    await fixture.removeSource('gone.csv');
+
+    await expect(
+      fixture.viewer.call({ operation: 'csv.open-recent', sourceId: gone.source.sourceId }),
+    ).resolves.toEqual({
+      status: 'failed',
+      message: 'Unable to open CSV: the file no longer exists.',
+    });
+    expect(await storedRecentNames(fixture)).toEqual(['kept.csv']);
+
+    const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+    expect(recents.map((recent) => recent.name)).toEqual(['kept.csv']);
+    expect(recents.map((recent) => recent.location)).toEqual([fixture.file('kept.csv')]);
+  });
+
   it('opens a CSV Source chosen through the desktop picker and cancels cleanly', async () => {
     const filePath = await fixture.writeSource('picked.csv', 'a\n1\n');
 
@@ -147,3 +202,10 @@ describe('DesktopWorkspaceHost behavior', () => {
     });
   });
 });
+
+async function storedRecentNames(fixture: CsvWorkspaceFixture): Promise<string[]> {
+  const stored = JSON.parse(await readFile(path.join(fixture.directory, 'recent-sources.json'), 'utf8')) as {
+    name: string;
+  }[];
+  return stored.map((entry) => entry.name);
+}
