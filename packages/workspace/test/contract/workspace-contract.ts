@@ -32,6 +32,8 @@ export interface WorkspaceContractFixture {
   failNextMetadataRead(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
+  /** Fail one Comparison snapshot deletion; a later cleanup attempt uses the real driver. */
+  failNextSnapshotDrop(): Promise<void>;
   holdNextRowRead(): { entered: Promise<void>; release: () => void };
   /** Writes `fileName` inside the fixture, creating it or replacing what is there. */
   writeSource(fileName: string, contents: string): Promise<string>;

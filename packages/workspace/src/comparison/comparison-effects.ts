@@ -1,7 +1,5 @@
-import { Context, Effect } from 'effect';
+import { Effect } from 'effect';
 import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
-
-export const ComparisonCleanup = Context.Service<{ failed: boolean }>('csv-viewer/ComparisonCleanup');
 
 export class ComparisonCleanupError extends DataEngineError {
   override name = 'ComparisonCleanupError';

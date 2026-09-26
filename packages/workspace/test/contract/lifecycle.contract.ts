@@ -673,6 +673,16 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
       });
     });
 
+    it('shares a Working CSV close already in flight with disposal', async () => {
+      const workingCsv = await fixture.openSource('closing.csv', 'id,value\n1,a\n');
+
+      const closing = fixture.viewer.call({ operation: 'csv.close', workingCsvId: workingCsv.workingCsvId });
+      const disposal = fixture.disposeWorkspace();
+
+      await expect(closing).resolves.toMatchObject({ status: 'closed' });
+      await expect(disposal).resolves.toBeUndefined();
+    });
+
     it('handles concurrent disposal requests idempotently', async () => {
       const first = fixture.disposeWorkspace();
       const second = fixture.disposeWorkspace();

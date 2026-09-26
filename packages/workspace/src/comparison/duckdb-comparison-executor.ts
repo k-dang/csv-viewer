@@ -1,6 +1,6 @@
-import { observeStage, recordOutcome, retainDiagnosticContext } from '../workspace-diagnostics';
+import { observeStage, retainDiagnosticContext } from '../workspace-diagnostics';
 import { Deferred, Effect, Exit, Cause, type Scope } from 'effect';
-import { ComparisonCleanup, cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
+import { cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
 import type {
   ComparisonRow,
   ComparisonOperationId,
@@ -31,18 +31,18 @@ import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 export type ComparisonSource = {
   tableName: string;
   columns: CsvColumn[];
-  release(): Promise<void | DataEngineError>;
 };
 
 export type DuckDbComparisonAccess = {
-  acquireSource(workingCsvId: WorkingCsvId): Promise<ComparisonSource>;
+  /** Leases a Working CSV's current table until the calling scope closes. */
+  acquireSource(workingCsvId: WorkingCsvId): Effect.Effect<ComparisonSource, DataEngineError, Scope.Scope>;
   getOwnerConnection(): Promise<WorkspaceDatabaseConnection>;
-  connectWorker(): Promise<WorkspaceDatabaseConnection>;
+  /** Admitted as workspace work, so disposal cannot close the database while it connects. */
+  connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError>;
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private readonly failedWorkers = new Map<WorkspaceDatabaseConnection, Effect.Effect<void>>();
-  private readonly failedSources = new Map<ComparisonSource, Effect.Effect<void>>();
   private readonly readers = new Map<ComparisonOperationId, {
     count: number;
     drained: Deferred.Deferred<void>;
@@ -59,7 +59,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
   ): Effect.fn.Return<ComparisonAttemptExecutor, DataEngineError, Scope.Scope> {
     const writer = yield* Effect.acquireRelease(
-      databaseEffect(() => this.database.connectWorker()),
+      this.database.connectWorker(),
       (connection) => Effect.gen({ self: this }, function* () {
         const release = yield* retainDiagnosticContext(observeStage('comparison.release-worker', cleanupEffect(async () => {
           await connection.close();
@@ -75,25 +75,6 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     };
   });
 
-  private acquireSource(workingCsvId: WorkingCsvId) {
-    return Effect.acquireRelease(
-      databaseEffect(() => this.database.acquireSource(workingCsvId)),
-      (source) => Effect.gen({ self: this }, function* () {
-        const release = yield* retainDiagnosticContext(observeStage('comparison.release-source', Effect.gen({ self: this }, function* () {
-          const deferredCleanup = yield* cleanupEffect(() => source.release());
-          this.failedSources.delete(source);
-          if (deferredCleanup) {
-            const cleanup = yield* Effect.serviceOption(ComparisonCleanup);
-            if (cleanup._tag === 'Some') cleanup.value.failed = true;
-            yield* recordOutcome('cleanup-failed', Cause.fail(deferredCleanup));
-          }
-        })).pipe(Effect.annotateSpans({ workingCsvId })));
-        this.failedSources.set(source, release);
-        yield* release;
-      }),
-    );
-  }
-
   private readonly validateKey = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     writer: WorkspaceDatabaseConnection,
@@ -101,7 +82,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     key: string[],
   ): Effect.fn.Return<SourceKeyDiagnostics, DataEngineError, Scope.Scope> {
     if (key.length === 0) throw new Error('Comparison key requires at least one column.');
-    const source = yield* this.acquireSource(workingCsvId);
+    const source = yield* this.database.acquireSource(workingCsvId);
     const known = new Set(source.columns.map((column) => column.name));
     key.forEach((column) => assertKnownColumn(column, known));
     const table = quoteIdentifier(source.tableName);
@@ -170,8 +151,8 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     writer: WorkspaceDatabaseConnection,
     request: CreateComparisonSnapshotRequest,
   ): Effect.fn.Return<ComparisonSummary, DataEngineError, Scope.Scope> {
-    const baseline = yield* this.acquireSource(request.baselineId);
-    const candidate = yield* this.acquireSource(request.candidateId);
+    const baseline = yield* this.database.acquireSource(request.baselineId);
+    const candidate = yield* this.database.acquireSource(request.candidateId);
     const tableName = buildComparisonTableName(request.artifactId);
     const table = quoteIdentifier(tableName);
     const join = request.key
@@ -328,10 +309,6 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
   ): Effect.fn.Return<void, DataEngineError> {
     const failures: Cause.Cause<DataEngineError>[] = [];
-    for (const release of [...this.failedSources.values()]) {
-      const result = yield* Effect.exit(release);
-      if (Exit.isFailure(result)) failures.push(result.cause);
-    }
     for (const release of [...this.failedWorkers.values()]) {
       const result = yield* Effect.exit(release);
       if (Exit.isFailure(result)) failures.push(result.cause);

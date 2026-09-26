@@ -31,7 +31,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextMetadataRead, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -248,6 +248,8 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+
+  failNextSnapshotDrop(): Promise<void> { return failNextSnapshotDrop(this.database); }
 
   holdNextRowRead() { return holdNextRowRead(this.database); }
 

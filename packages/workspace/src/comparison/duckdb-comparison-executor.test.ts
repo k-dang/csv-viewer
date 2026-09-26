@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Fiber } from 'effect';
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceDatabaseConnection } from '../database';
+import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
 import type { EngineRow } from '../query/csv-result-normalization';
 import { DuckDbComparisonExecutor, type ComparisonSource } from './duckdb-comparison-executor';
 
@@ -27,12 +27,12 @@ const snapshotRequest = {
   valueColumns: ['value'],
 };
 
-function source(release = async () => undefined): ComparisonSource {
-  return {
+/** A scoped source lease that runs `release` when the attempt scope closes. */
+function source(release: () => void = () => undefined) {
+  return Effect.acquireRelease(Effect.succeed<ComparisonSource>({
     tableName: 'source',
     columns: [{ name: 'id', type: 'VARCHAR' }, { name: 'value', type: 'VARCHAR' }],
-    release,
-  };
+  }), () => Effect.sync(release));
 }
 
 const summary = [{ changed: 0n, baseline_only: 0n, candidate_only: 0n, unchanged: 0n, total: 0n, changed_count_0: 0n }];
@@ -56,10 +56,10 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       },
     });
     const executor = new DuckDbComparisonExecutor({
-      acquireSource: async () => source(async () => {
+      acquireSource: () => source(() => {
         released.push('source');
       }),
-      connectWorker: async () => connection,
+      connectWorker: () => Effect.succeed(connection),
       getOwnerConnection: async () => {
         throw new Error('Cancellation must not use the owner connection.');
       },
@@ -84,14 +84,14 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     let closed = false;
     let queried = false;
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: () => {
+      connectWorker: () => Effect.promise(() => {
         requested.resolve();
         return connection.promise;
-      },
-      acquireSource: async () => {
+      }),
+      acquireSource: () => Effect.suspend(() => {
         queried = true;
         return source();
-      },
+      }),
       getOwnerConnection: async () => stubConnection(),
     });
     const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
@@ -118,14 +118,13 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       },
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: async () => connection,
+      connectWorker: () => Effect.succeed(connection),
       getOwnerConnection: async () => connection,
-      acquireSource: async (id) => {
-        if (id === 'candidate') throw new Error('candidate unavailable');
-        return source(async () => {
+      acquireSource: (id) => id === 'candidate'
+        ? Effect.fail(new DataEngineError(new Error('candidate unavailable')))
+        : source(() => {
           released.push('baseline');
-        });
-      },
+        }),
     });
     const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -140,9 +139,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
 
   it.each(['throws', 'rejects'] as const)('retains query and cleanup causes when the driver %s and retries cleanup', async (failureMode) => {
     const queryFailure = new Error('query failed');
-    let releaseFails = true;
     let closeFails = true;
-    let sourceReleased = false;
     let workerClosed = false;
     const connection = stubConnection({
       readObjectsCancellable: () => {
@@ -155,12 +152,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       },
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: async () => connection,
+      connectWorker: () => Effect.succeed(connection),
       getOwnerConnection: async () => connection,
-      acquireSource: async () => source(async () => {
-        if (releaseFails) throw new Error('lease release failed');
-        sourceReleased = true;
-      }),
+      acquireSource: () => source(),
     });
     const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -171,13 +165,10 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       { cause: queryFailure },
     ]);
     expect(exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)).toMatchObject([
-      { name: 'ComparisonCleanupError', cause: { message: 'lease release failed' } },
       { name: 'ComparisonCleanupError', cause: { message: 'close failed' } },
     ]);
-    releaseFails = false;
     closeFails = false;
     await Effect.runPromise(executor.dispose());
-    expect(sourceReleased).toBe(true);
     expect(workerClosed).toBe(true);
   });
 
@@ -195,9 +186,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       },
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: async () => worker,
+      connectWorker: () => Effect.succeed(worker),
       getOwnerConnection: async () => owner,
-      acquireSource: async () => source(),
+      acquireSource: () => source(),
     });
     await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -228,14 +219,14 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       },
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: async () => stubConnection({
+      connectWorker: () => Effect.succeed(stubConnection({
         readObjectsCancellable: async () => summary,
         close: async () => {
           workerClosed = true;
         },
-      }),
+      })),
       getOwnerConnection: async () => owner,
-      acquireSource: async () => source(),
+      acquireSource: () => source(),
     });
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -281,9 +272,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       run: async () => { dropped = true; },
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: async () => stubConnection({ readObjectsCancellable: async () => summary }),
+      connectWorker: () => Effect.succeed(stubConnection({ readObjectsCancellable: async () => summary })),
       getOwnerConnection: async () => owner,
-      acquireSource: async () => source(),
+      acquireSource: () => source(),
     });
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();

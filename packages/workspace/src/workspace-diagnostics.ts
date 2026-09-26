@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Logger, References, Schema, Tracer } from 'effect';
+import { Cause, Context, Effect, Exit, Logger, Option, References, Schema, Tracer } from 'effect';
 import { ComparisonCleanupError } from './comparison/comparison-effects';
 
 export interface WorkspaceDiagnostics {
@@ -9,7 +9,8 @@ const outcomes = new Set([
   'started', 'succeeded', 'applied', 'accepted', 'busy', 'rejected', 'ready', 'closed',
   'requested', 'already-requested', 'already-finished', 'operation-mismatch',
   'comparison-not-found', 'result-replaced', 'invalid-key', 'sources-changed',
-  'opened', 'already-open', 'revision-changed',
+  'opened', 'already-open', 'revision-changed', 'created', 'existing', 'changed', 'capacity-exceeded',
+  'exported', 'confirmation-required',
   'cancelled', 'failed', 'recoverable-failure', 'defect', 'interrupted', 'cleanup-failed',
 ]);
 const identifiers = new Set(['workspaceId', 'requestId', 'comparisonId', 'operationId', 'baselineId', 'candidateId', 'workingCsvId']);
@@ -48,6 +49,18 @@ export function observeStage<A, E, R>(stage: string, effect: Effect.Effect<A, E,
 export function recordOutcome(outcome: string, cause?: Cause.Cause<unknown>, cleanup?: 'succeeded' | 'cleanup-failed') {
   const fields = cause ? { outcome, cleanup, failureCategory: diagnosticCause(cause), recoverableFailure: Cause.hasFails(cause), defect: cause.reasons.some((reason) => reason._tag === 'Die' && !(reason.defect instanceof ComparisonCleanupError)), interrupted: Cause.hasInterrupts(cause) } : { outcome, cleanup, failureCategory: cleanup === 'cleanup-failed' ? 'cleanup-failed' : undefined };
   return Effect.annotateCurrentSpan(fields);
+}
+
+/** Cleanup status of the enclosing operation, reported as its `cleanup` result. */
+export const OperationCleanup = Context.Service<{ failed: boolean }>('csv-viewer/OperationCleanup');
+
+export const markCleanupFailed = Effect.serviceOption(OperationCleanup).pipe(Effect.map((cleanup) => {
+  if (Option.isSome(cleanup)) cleanup.value.failed = true;
+}));
+
+/** Reports a contained failure as its own stage without failing the enclosing operation. */
+export function reportFailure(stage: string, cause: Cause.Cause<unknown>): Effect.Effect<void> {
+  return observeStage(stage, Effect.failCause(cause)).pipe(Effect.catchCause(() => Effect.void));
 }
 
 export function diagnosticsLayer(configuration: WorkspaceDiagnostics = {}) {

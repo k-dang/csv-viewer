@@ -303,7 +303,7 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       await fixture.disposeWorkspace();
     });
 
-    it('lets an admitted reader finish on the retired table after replacement', async () => {
+    it('lets an admitted reader finish on the retired table while a later edit uses the replacement', async () => {
       const original = await fixture.openSource('reader.csv', 'name\nAda\n');
       const hold = fixture.holdNextRowRead();
       const previousRead = workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
@@ -312,13 +312,51 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         await fixture.writeSource('reader.csv', 'name\nGrace\n');
         const reopened = await workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
         expect(reopened).toMatchObject({ status: 'opened', workingCsv: { workingCsvId: original.workingCsvId, dataRevision: 1 } });
+        await workspace().call({ operation: 'csv.edit-cell', workingCsvId: original.workingCsvId, rowId: '1', column: 'name', value: 'Linus' });
         const currentRead = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
-        expectVisibleRows(currentRead.rows).toEqual([{ name: 'Grace' }]);
+        expectVisibleRows(currentRead.rows).toEqual([{ name: 'Linus' }]);
       } finally {
         hold.release();
       }
       const rows = await previousRead;
       expectVisibleRows(rows.rows).toEqual([{ name: 'Ada' }]);
+    });
+
+    it('waits for a reader on the retired table before closing a reopened Working CSV', async () => {
+      const original = await fixture.openSource('close-reader.csv', 'name\nAda\n');
+      const hold = fixture.holdNextRowRead();
+      const previousRead = workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      await hold.entered;
+      let closing: Promise<unknown>;
+      try {
+        await fixture.writeSource('close-reader.csv', 'name\nGrace\n');
+        await expect(workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
+          .resolves.toMatchObject({ status: 'opened' });
+        closing = workspace().call({ operation: 'csv.close', workingCsvId: original.workingCsvId });
+      } finally {
+        hold.release();
+      }
+      const rows = await previousRead;
+      expectVisibleRows(rows.rows).toEqual([{ name: 'Ada' }]);
+      await expect(closing).resolves.toMatchObject({ status: 'closed' });
+    });
+
+    it('runs an edit queued behind a reopen against the replacement', async () => {
+      const original = await fixture.openSource('queued.csv', 'name\nAda\n');
+      await fixture.writeSource('queued.csv', 'name\nGrace\n');
+
+      const reopening = workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId });
+      const editing = workspace().call({
+        operation: 'csv.edit-cell', workingCsvId: original.workingCsvId, rowId: '1', column: 'name', value: 'Linus',
+      });
+
+      await expect(reopening).resolves.toMatchObject({ status: 'opened', workingCsv: { dataRevision: 1 } });
+      await expect(editing).resolves.toMatchObject({ canUndo: true, hasUnexportedChanges: true });
+      const edited = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      expectVisibleRows(edited.rows).toEqual([{ name: 'Linus' }]);
+      await workspace().call({ operation: 'csv.undo', workingCsvId: original.workingCsvId });
+      const restored = await workspace().call({ operation: 'csv.get-rows', workingCsvId: original.workingCsvId, offset: 0, limit: 10 });
+      expectVisibleRows(restored.rows).toEqual([{ name: 'Grace' }]);
     });
 
     it('keeps multiple Working CSVs open with independent data', async () => {
