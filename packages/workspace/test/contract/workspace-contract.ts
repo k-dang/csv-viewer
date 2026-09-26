@@ -32,6 +32,10 @@ export interface WorkspaceContractFixture {
   failNextMetadataRead(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
+  /** Inject an unexpected failure from a real host request. */
+  failNextRecentSources(): void;
+  /** Inject an unexpected source-description failure during CSV open. */
+  failNextDescribeSource(): void;
   /** Fail one Comparison snapshot deletion; a later cleanup attempt uses the real driver. */
   failNextSnapshotDrop(): Promise<void>;
   holdNextRowRead(): { entered: Promise<void>; release: () => void };

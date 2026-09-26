@@ -9,7 +9,7 @@ import {
 describe('Electron CsvViewer proxy', () => {
   it('carries requests and results unchanged', async () => {
     const result = [{ sourceId: 'source-1' }];
-    const invoke = vi.fn().mockResolvedValue(result);
+    const invoke = vi.fn().mockResolvedValue({ ok: true, value: result });
     const ipc: CsvViewerIpcRenderer = { invoke, on: vi.fn(), removeListener: vi.fn() };
     const viewer = createElectronCsvViewer(ipc);
     const request = { operation: 'csv.get-recent-sources' } as const;

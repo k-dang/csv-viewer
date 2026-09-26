@@ -117,6 +117,24 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextDescribeSource(): void {
+    const describeSource = this.host.describeSource.bind(this.host);
+    this.host.describeSource = () => {
+      this.host.describeSource = describeSource;
+      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+        cause: new Error('PRIVATE nested driver detail'),
+      }));
+    };
+  }
+  failNextRecentSources(): void {
+    const recentSources = this.host.recentSources.bind(this.host);
+    this.host.recentSources = () => {
+      this.host.recentSources = recentSources;
+      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+        cause: new Error('PRIVATE nested driver detail'),
+      }));
+    };
+  }
 
   failNextSnapshotDrop(): Promise<void> { return failNextSnapshotDrop(this.database); }
 

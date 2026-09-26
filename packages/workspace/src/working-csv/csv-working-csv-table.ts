@@ -5,6 +5,7 @@ import type {
   CsvInsertRowPlacement,
 } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
+import { WorkspaceRequestError } from '../errors';
 import type { CsvEditDraft } from './csv-edit-history';
 import {
   buildAddColumnStatement,
@@ -67,7 +68,7 @@ export async function readCellValue(
 ): Promise<CsvCellValue> {
   const query = buildCellValueQuery(table.tableName, rowId, column);
   const [row] = await table.database.readObjects(query.sql, query.values);
-  if (!row) throw new Error('CSV row no longer exists.');
+  if (!row) throw new WorkspaceRequestError({ message: 'CSV row no longer exists.' });
   return normalizeCellValue(row.cell_value);
 }
 
@@ -100,7 +101,7 @@ export function renameCsvColumns(columns: CsvColumn[], from: string, to: string)
     renamed = true;
     return { ...column, name: to };
   });
-  if (!renamed) throw new Error(`Unknown CSV column: ${from}`);
+  if (!renamed) throw new WorkspaceRequestError({ message: `Unknown CSV column: ${from}` });
   return next;
 }
 
@@ -155,7 +156,7 @@ export async function assertRowsExist(table: CsvTable, rowIds: string[]): Promis
   const rows = await table.database.readObjects(query.sql, query.values);
   const foundRowIds = new Set(rows.map((row) => String(row.row_id)));
   const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
-  if (missingRowId) throw new Error(`CSV row no longer exists: ${missingRowId}`);
+  if (missingRowId) throw new WorkspaceRequestError({ message: `CSV row no longer exists: ${missingRowId}` });
 }
 
 export async function insertEmptyRow(
@@ -260,10 +261,10 @@ async function resolveInsertionOrder(
     return Number(row.source_order);
   }
 
-  if (!targetRowId) throw new Error('CSV row identifier is required for insertion.');
+  if (!targetRowId) throw new WorkspaceRequestError({ message: 'CSV row identifier is required for insertion.' });
 
   const query = buildRowSourceOrderQuery(table.tableName, targetRowId);
   const [row] = await table.database.readObjects(query.sql, query.values);
-  if (!row) throw new Error(`CSV row no longer exists: ${targetRowId}`);
+  if (!row) throw new WorkspaceRequestError({ message: `CSV row no longer exists: ${targetRowId}` });
   return Number(row.source_order) + (placement === 'below' ? 1 : 0);
 }

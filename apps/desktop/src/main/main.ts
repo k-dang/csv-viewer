@@ -10,7 +10,7 @@ import {
 } from 'electron';
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
-import { registerCsvViewerRequestHandler } from './csv-viewer-ipc';
+import { registerCsvViewerRequestHandler, registerDroppedSourceHandler } from './csv-viewer-ipc';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
@@ -251,12 +251,7 @@ app.whenReady().then(() => {
   registerContentSecurityPolicy();
   createApplicationMenu();
   registerCsvViewerRequestHandler(ipcMain, workspace);
-  ipcMain.handle(ipcChannels.acquireDroppedSource, (_event, filePath: string) => {
-    if (Object.prototype.toString.call(filePath) !== '[object String]' || !path.isAbsolute(filePath)) {
-      throw new Error('Drop a file from your device.');
-    }
-    return workspaceHost.acquireDroppedSource(filePath);
-  });
+  registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
   workspace.onEvent(sendEvent);
   createWindow();
 

@@ -1,11 +1,11 @@
-import type { WorkspaceDatabase } from '../../src/database';
+import { DataEngineError, type WorkspaceDatabase } from '../../src/database';
 
 export function failNextMetadataRead(database: WorkspaceDatabase): void {
   const read = database.readObjects.bind(database);
   database.readObjects = (sql, values) => {
     if (!sql.startsWith('DESCRIBE SELECT * FROM "csv_working_')) return read(sql, values);
     database.readObjects = read;
-    return Promise.reject(new Error('PRIVATE metadata failure'));
+    return Promise.reject(new DataEngineError(new Error('PRIVATE metadata failure')));
   };
 }
 

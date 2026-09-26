@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { toError } from '@csv-viewer/workspace/errors';
+import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import type { CsvSourceId, RecentCsvSource } from '@csv-viewer/workspace/csv-viewer';
 import {
@@ -77,10 +77,20 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   }
 
   async acquireDroppedSource(filePath: string): Promise<CsvSourceId> {
-    if (!/\.(csv|tsv|txt)$/i.test(filePath)) throw new Error('Only CSV, TSV, and TXT files can be dropped.');
-    const fileStats = await stat(filePath);
-    if (!fileStats.isFile()) throw new Error('Folders cannot be opened. Drop CSV, TSV, or TXT files.');
-    return this.registerSource(filePath);
+    if (!/\.(csv|tsv|txt)$/i.test(filePath)) {
+      throw new WorkspaceRequestError({ message: 'Only CSV, TSV, and TXT files can be dropped.' });
+    }
+    try {
+      const fileStats = await stat(filePath);
+      if (!fileStats.isFile()) {
+        throw new WorkspaceRequestError({ message: 'Folders cannot be opened. Drop CSV, TSV, or TXT files.' });
+      }
+      return await this.registerSource(filePath);
+    } catch (cause) {
+      if (cause instanceof WorkspaceRequestError) throw cause;
+      if (isFileSystemError(cause)) throw toSourceUnavailableError(cause);
+      throw cause;
+    }
   }
 
   releaseSource(): void {
@@ -241,8 +251,8 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     try {
       await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
       await writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8');
-    } catch (cause: unknown) {
-      console.warn('Unable to write Recent CSV Sources.', cause);
+    } catch {
+      console.warn('Unable to write Recent CSV Sources.');
     }
   }
 
@@ -253,7 +263,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       return parsed.filter(isRecentSourceEntry).slice(0, maxRecentSources);
     } catch (cause: unknown) {
       if (isFileSystemError(cause) && cause.code === 'ENOENT') return [];
-      console.warn('Unable to read Recent CSV Sources.', cause);
+      console.warn('Unable to read Recent CSV Sources.');
       return [];
     }
   }
@@ -279,14 +289,13 @@ function buildDefaultExportName(sourceName: string): string {
 }
 
 function toSourceUnavailableError(cause: unknown): Error {
-  if (!isFileSystemError(cause)) return toError(cause);
+  if (!isFileSystemError(cause)) return cause instanceof Error ? cause : new Error('CSV Source access failed.');
   if (cause.code === 'ENOENT') {
     return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
   }
   if (cause.code === 'EACCES' || cause.code === 'EPERM') {
     return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
   }
-  console.error('Unable to read the CSV Source.', cause);
   return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
 }
 

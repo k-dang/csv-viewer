@@ -11,6 +11,59 @@ import type { WorkspaceContractFactory } from './workspace-contract';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
+    it('separates expected synchronous and Promise failures from a host defect', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const opened = await fixture.openSource('PRIVATE-failure.csv', 'name\nAda\n');
+        const missingId = crypto.randomUUID();
+        await expect(fixture.viewer.call({ operation: 'csv.get-edit-state', workingCsvId: missingId }))
+          .rejects.toThrow(/^Working CSV is no longer active\.$/);
+        await expect(fixture.viewer.call({
+          operation: 'csv.rename-column', workingCsvId: opened.workingCsvId, column: 'name', name: ' ',
+        })).rejects.toThrow(/^CSV column name cannot be blank\.$/);
+        fixture.failNextRecentSources();
+        await expect(fixture.viewer.call({ operation: 'csv.get-recent-sources' }))
+          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+
+        const records = capture.completed();
+        for (const operation of ['csv.get-edit-state', 'csv.rename-column']) {
+          expect(records.find((record) => record.message === operation)?.annotations.failureCategory)
+            .toBe('recoverable-failure');
+        }
+        expect(records.find((record) => record.message === 'csv.get-recent-sources')?.annotations.failureCategory)
+          .toBe('defect');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+        expect(capture.logs.join('')).not.toContain('SELECT * FROM secrets');
+      } finally { await fixture.dispose(); }
+    });
+
+    it('reports unexpected source-description failures as defects during open and reopen', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const sourceId = await fixture.registerSource('PRIVATE-open.csv', 'name\nAda\n');
+        fixture.failNextDescribeSource();
+        await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId }))
+          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+
+        const opened = await fixture.viewer.call({ operation: 'csv.open-recent', sourceId });
+        if (opened.status !== 'opened') throw new Error(`Open was ${opened.status}.`);
+        fixture.failNextDescribeSource();
+        await expect(fixture.viewer.call({
+          operation: 'csv.reopen', workingCsvId: opened.workingCsv.workingCsvId,
+        })).rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+
+        const records = capture.completed();
+        for (const operation of ['csv.open-recent', 'csv.reopen']) {
+          expect(records.find((record) => record.message === operation && record.annotations.failureCategory === 'defect')
+            ?.annotations.outcome).toBe('failed');
+        }
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+        expect(capture.logs.join('')).not.toContain('SELECT * FROM secrets');
+      } finally { await fixture.dispose(); }
+    });
+
     it('traces CSV open, reopen, staged cleanup, and product outcomes without source data', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);
@@ -84,7 +137,12 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
     });
 
     it('correlates Working CSV reads, edits, export, and close without cell data', async () => {
-      const capture = diagnosticCapture();
+      const reopenReserved = Promise.withResolvers<void>();
+      const capture = diagnosticCapture((record) => {
+        if (record.message === 'csv.queue-wait' && record.annotations.outcome === 'started' && record.spans['csv.reopen'] !== undefined) {
+          reopenReserved.resolve();
+        }
+      });
       const fixture = await factory.create(undefined, capture.configuration);
       try {
         const original = await fixture.openSource('PRIVATE-EDITS.csv', 'PRIVATE-COLUMN\nPRIVATE-CELL\n');
@@ -93,6 +151,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         await fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId, offset: 0, limit: 10, search: 'PRIVATE-SEARCH' });
         await fixture.writeSource('PRIVATE-EDITS.csv', 'PRIVATE-COLUMN\nPRIVATE-RELOADED\n');
         const reopening = fixture.viewer.call({ operation: 'csv.reopen', workingCsvId });
+        await reopenReserved.promise;
         const queuedEdit = fixture.viewer.call({ operation: 'csv.edit-cell', ...request, value: 'PRIVATE-EDIT' });
         await expect(fixture.viewer.call({ operation: 'csv.edit-cell', ...request, column: 'PRIVATE-MISSING', value: 'PRIVATE-EDIT' }))
           .rejects.toThrow('Unknown CSV column');
@@ -117,22 +176,22 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
           ['csv.export', 'exported'],
           ['csv.close', 'closed'],
         ]);
+        expect(requests).toHaveLength(7);
         for (const record of requests) {
           expect(record.annotations.workspaceId).toBeDefined();
           expect(record.annotations.cleanup).toBe('succeeded');
         }
         const rejected = requests.find((record) => record.annotations.outcome === 'failed');
         expect(rejected?.annotations.failureCategory).toBe('recoverable-failure');
-        const read = requests[0];
-        const leaseRelease = records.find((record) => record.message === 'csv.release-lease' && record.annotations.requestId === read.annotations.requestId);
+        const read = requests.find((record) => record.message === 'csv.get-rows');
+        const leaseRelease = records.find((record) => record.message === 'csv.release-lease' && record.annotations.requestId === read?.annotations.requestId);
         expect(leaseRelease?.spans).toHaveProperty('csv.get-rows');
 
         const reopen = requests.find((record) => record.message === 'csv.reopen');
         const edit = requests.find((record) => record.message === 'csv.edit-cell' && record.annotations.outcome === 'succeeded');
-        const load = records.findIndex((record) => record.message === 'csv.access-and-load' && record.annotations.requestId === reopen?.annotations.requestId);
-        const waited = records.findIndex((record) => record.message === 'csv.queue-wait' && record.annotations.requestId === edit?.annotations.requestId);
-        expect(records[waited]?.spans).toHaveProperty('csv.edit-cell');
-        expect(waited).toBeGreaterThan(load);
+        const waited = records.find((record) => record.message === 'csv.queue-wait' && record.annotations.requestId === edit?.annotations.requestId);
+        expect(waited?.spans).toHaveProperty('csv.edit-cell');
+        expect(records.some((record) => record.message === 'csv.access-and-load' && record.annotations.requestId === reopen?.annotations.requestId)).toBe(true);
 
         const captured = capture.logs.join('');
         for (const secret of ['PRIVATE', original.source.location]) expect(captured).not.toContain(secret);
@@ -303,14 +362,16 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
   });
 }
 
-function diagnosticCapture() {
+function diagnosticCapture(onRecord?: (record: ReturnType<typeof Logger.formatStructured.log>) => void) {
   const logs: string[] = [];
   const records: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
   return {
     logs, records,
     configuration: { logger: Logger.make((options) => {
       logs.push(Logger.formatLogFmt.log(options));
-      records.push(Logger.formatStructured.log(options));
+      const record = Logger.formatStructured.log(options);
+      records.push(record);
+      onRecord?.(record);
     }) },
     completed: () => records.filter((record) => record.annotations.outcome !== 'started'),
   };

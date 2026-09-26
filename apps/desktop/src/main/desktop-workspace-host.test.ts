@@ -1,4 +1,4 @@
-import { chmod, link, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
@@ -12,6 +12,12 @@ describe('DesktopWorkspaceHost behavior', () => {
 
   afterEach(async () => {
     await fixture.dispose();
+  });
+
+  it('normalizes a missing dropped file without exposing its path', async () => {
+    const filePath = fixture.file('PRIVATE-missing.csv');
+    await expect(fixture.host.acquireDroppedSource(filePath))
+      .rejects.toThrow(/^The CSV Source no longer exists\.$/);
   });
 
   it('maps hard links for one CSV Source to one open Working CSV', async () => {
@@ -143,7 +149,7 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(recents.map((recent) => recent.location)).toEqual([fixture.file('kept.csv')]);
   });
 
-  it('keeps the other Recent CSV Sources when one path is inaccessible', async () => {
+  it('keeps the other Recent CSV Sources when one path loses access', async () => {
     await mkdir(fixture.file('locked'));
     const blockedPath = path.join(fixture.file('locked'), 'blocked.csv');
     await writeFile(blockedPath, 'a\n1\n');
@@ -153,8 +159,10 @@ describe('DesktopWorkspaceHost behavior', () => {
 
     try {
       const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
-
-      expect(recents.map((recent) => recent.name)).toEqual(['visible.csv']);
+      // Windows may still allow stat after chmod removes the directory mode bits.
+      const blockedCanBeRead = await stat(blockedPath).then(() => true, () => false);
+      expect(recents.map((recent) => recent.name)).toEqual(blockedCanBeRead
+        ? ['visible.csv', 'blocked.csv'] : ['visible.csv']);
       const stored = await readStoredRecents(fixture);
       expect(stored).toContain('"name": "visible.csv"');
       expect(stored).toContain('"name": "blocked.csv"');

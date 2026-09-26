@@ -8,6 +8,7 @@ import type {
 import { isCsvViewerIntent } from '@csv-viewer/workspace/csv-viewer';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import { ipcChannels } from '../ipc-channels';
+import { unwrapCsvViewerIpcResponse, type CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
 
 export type CsvViewerEventPayload = CsvViewerTransportValue;
 
@@ -15,7 +16,7 @@ export type CsvViewerIpcRenderer = {
   invoke<Request extends CsvViewerRequest>(
     channel: string,
     request: Request,
-  ): Promise<CsvViewerResult<Request>>;
+  ): Promise<CsvViewerIpcResponse<CsvViewerResult<Request>>>;
   on(
     channel: string,
     listener: (event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => void,
@@ -32,7 +33,7 @@ export function createElectronCsvViewer(
 ): CsvViewer {
   return {
     capabilities: electronCsvViewerCapabilities,
-    call: (request) => ipc.invoke(ipcChannels.request, request),
+    call: async (request) => unwrapCsvViewerIpcResponse(await ipc.invoke(ipcChannels.request, request)),
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => {
         if (isCsvViewerEvent(value)) callback(value);

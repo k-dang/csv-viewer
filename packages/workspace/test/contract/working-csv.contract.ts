@@ -275,7 +275,7 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       });
       try {
         await expect(workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
-          .resolves.toMatchObject({ status: 'failed' });
+          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
       } finally {
         injected.mockRestore();
       }
