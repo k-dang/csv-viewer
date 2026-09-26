@@ -35,6 +35,20 @@ async function openWorkingCsv(fileName: string, contents: string) {
 }
 
 describe('WorkingCsvStore invariants', () => {
+  it('rejects a store open once disposal begins', async () => {
+    const workingCsv = await openWorkingCsv('open-before-disposal.csv', 'name\nAda\n');
+    const lateSourceId = await fixture.registerSource('late-open.csv', 'name\nGrace\n');
+    store.beginDisposal();
+
+    for (const sourceId of [workingCsv.source.sourceId, lateSourceId]) {
+      await expect(Effect.runPromise(store.open(sourceId))).resolves.toMatchObject({
+        status: 'failed',
+        failure: { message: 'The CSV workspace is closing.' },
+      });
+    }
+    await Effect.runPromise(store.disposeStore());
+  });
+
   it('closes database handles when disposal validation fails', async () => {
     await openWorkingCsv('dispose-failure.csv', ['id', '1'].join('\n'));
 

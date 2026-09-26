@@ -104,11 +104,15 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
 
         const records = capture.completed();
         const requests = records.filter((record) => record.annotations.workingCsvId === workingCsvId && record.spans[String(record.message)] !== undefined && Object.keys(record.spans).length === 1);
-        expect(requests.map((record) => [record.message, record.annotations.outcome])).toEqual([
-          ['csv.get-rows', 'succeeded'],
+        // The queued edits can complete before the reopen request records its Recent CSV Source.
+        const summary = requests.map((record) => [record.message, record.annotations.outcome]);
+        expect(summary[0]).toEqual(['csv.get-rows', 'succeeded']);
+        expect(summary.slice(1, 4)).toEqual(expect.arrayContaining([
           ['csv.reopen', 'opened'],
           ['csv.edit-cell', 'succeeded'],
           ['csv.edit-cell', 'failed'],
+        ]));
+        expect(summary.slice(4)).toEqual([
           ['csv.undo', 'succeeded'],
           ['csv.export', 'exported'],
           ['csv.close', 'closed'],

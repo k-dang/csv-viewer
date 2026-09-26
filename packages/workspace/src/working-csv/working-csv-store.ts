@@ -96,8 +96,10 @@ export class WorkingCsvStore {
   private tableLeases = new Map<string, TableLease>();
   /** The most recently reserved mutation turn of each Working CSV. */
   private mutationTails = new Map<WorkingCsvId, Deferred.Deferred<void>>();
+  /** The table release in flight for each closing Working CSV. */
+  private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, Error>>();
   private admittedWork = 0;
-  /** Open while no admitted open, reopen, or worker connection is running. */
+  /** Open while no admitted open, reopen, or worker connection setup is running. */
   private readonly workSettled = Latch.makeUnsafe(true);
   private comparisonExecutor: ComparisonExecutor | null = null;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
@@ -113,7 +115,7 @@ export class WorkingCsvStore {
 
   /**
    * Admits work that disposal must wait for until the scope closes: opens, reopens, and Comparison
-   * worker connections. Returns false once disposal begins.
+   * worker connection setup. Returns false once disposal begins.
    */
   admit(): Effect.Effect<boolean, never, Scope.Scope> {
     return Effect.acquireRelease(
@@ -131,9 +133,15 @@ export class WorkingCsvStore {
     );
   }
 
-  /** Opens a CSV Source. The caller holds an admission from `admit` for the whole request. */
+  /**
+   * Opens a CSV Source as admitted work, so it cannot start once disposal begins. A caller that
+   * must also cover later steps, such as the Recent CSV Source write, holds its own admission.
+   */
   open(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome> {
     return Effect.gen({ self: this }, function* () {
+      if (!(yield* this.admit())) {
+        return { status: 'failed', failure: { code: 'open-failed', message: 'The CSV workspace is closing.', retryable: false } } satisfies OpenWorkingCsvOutcome;
+      }
       const existing = this.findBySource(sourceId);
       if (existing) return { status: 'existing', workingCsv: existing } satisfies OpenWorkingCsvOutcome;
       return yield* this.createWorkingCsv(sourceId, options, crypto.randomUUID(), 0, 0).pipe(
@@ -150,7 +158,7 @@ export class WorkingCsvStore {
           Effect.as({ status: 'failed', failure: workingCsvFailure('open-failed', Cause.squash(cause)) } satisfies OpenWorkingCsvOutcome),
         )),
       );
-    }).pipe(Effect.uninterruptible);
+    }).pipe(Effect.scoped, Effect.uninterruptible);
   }
 
   private findBySource(sourceId: CsvSourceId): WorkingCsvView | null {
@@ -269,7 +277,25 @@ export class WorkingCsvStore {
     }
   }
 
+  /**
+   * Releases the Working CSV's tables and forgets it. One release runs per Working CSV at a time:
+   * a caller that arrives while another is running, such as disposal during a user close, awaits
+   * that release rather than dropping the same tables twice.
+   */
   closeWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, Error> {
+    return Effect.suspend(() => {
+      const pending = this.pendingCloses.get(workingCsvId);
+      if (pending) return pending;
+      return Effect.cached(this.releaseWorkingCsv(workingCsvId).pipe(
+        Effect.ensuring(Effect.sync(() => this.pendingCloses.delete(workingCsvId))),
+      )).pipe(Effect.flatMap((close) => {
+        this.pendingCloses.set(workingCsvId, close);
+        return close;
+      }));
+    });
+  }
+
+  private releaseWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, Error> {
     return observeStage('csv.release-working-csv', Effect.gen({ self: this }, function* () {
       while (true) {
         const state = this.workingCsvs.get(workingCsvId);

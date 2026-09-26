@@ -6,9 +6,9 @@ Every `CsvViewer` request runs as an Effect through one shared entry adapter. `C
 
 Working CSV work coordinates through three primitives in the store:
 
-- **Lease.** One scoped Effect leases a Working CSV's current table for reads, export serialization, mutations, reopen, and Comparison sources. Each table keeps an explicit lease count. Closing a Working CSV waits until no lease holds its current table. The last release of a retired table drops it. If that drop fails, the releasing operation reports `cleanup-failed` and the table stays registered for close or disposal to retry.
+- **Lease.** One scoped Effect leases a Working CSV's current table for reads, export serialization, mutations, reopen, and Comparison sources. Each table keeps an explicit lease count. Closing a Working CSV waits until no lease holds its current or retired tables. The last release of a retired table drops it. If that drop fails, the releasing operation reports `cleanup-failed` and the table stays registered for close or disposal to retry.
 - **Mutation queue.** Cell edits, row and column edits, undo, redo, and reopen run one at a time per Working CSV, in call order. A mutation takes its lease and its queue position when the request starts, so a close waits for queued work. When its turn begins, it resolves the current Working CSV state, so work queued behind a reopen runs against the replacement. Reads stay off the queue and run concurrently.
-- **Admission.** Opens, reopens, and Comparison worker connections hold an admission until their scope closes. Disposal stops new admission and waits for admitted work before it releases tables and closes the database.
+- **Admission.** Opens and reopens hold an admission until their scope closes. A Comparison worker connection holds one only while it connects. Comparison disposal closes open worker connections before the store releases tables. Disposal stops new admission and waits for admitted work before it releases tables and closes the database.
 
 ## Open and reopen
 
