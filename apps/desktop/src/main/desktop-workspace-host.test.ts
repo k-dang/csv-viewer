@@ -1,4 +1,4 @@
-import { link, mkdir, readFile, rename } from 'node:fs/promises';
+import { chmod, link, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
@@ -141,6 +141,41 @@ describe('DesktopWorkspaceHost behavior', () => {
     const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
     expect(recents.map((recent) => recent.name)).toEqual(['kept.csv']);
     expect(recents.map((recent) => recent.location)).toEqual([fixture.file('kept.csv')]);
+  });
+
+  it('keeps the other Recent CSV Sources when one path is inaccessible', async () => {
+    await mkdir(fixture.file('locked'));
+    const blockedPath = path.join(fixture.file('locked'), 'blocked.csv');
+    await writeFile(blockedPath, 'a\n1\n');
+    await fixture.open(blockedPath);
+    await fixture.openSource('visible.csv', 'b\n2\n');
+    await chmod(fixture.file('locked'), 0o000);
+
+    try {
+      const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+
+      expect(recents.map((recent) => recent.name)).toEqual(['visible.csv']);
+      const stored = await readStoredRecents(fixture);
+      expect(stored).toContain('"name": "visible.csv"');
+      expect(stored).toContain('"name": "blocked.csv"');
+    } finally {
+      await chmod(fixture.file('locked'), 0o755);
+    }
+  });
+
+  it('keeps a Recent CSV Source recorded while a stale path is removed', async () => {
+    await fixture.openSource('stale.csv', 'a\n1\n');
+    await fixture.removeSource('stale.csv');
+    const freshId = await fixture.sourceId(await fixture.writeSource('fresh.csv', 'b\n2\n'));
+
+    await Promise.all([
+      fixture.viewer.call({ operation: 'csv.get-recent-sources' }),
+      fixture.host.recordRecentSource(freshId),
+    ]);
+
+    const stored = await readStoredRecents(fixture);
+    expect(stored).toContain('"name": "fresh.csv"');
+    expect(stored).not.toContain('stale.csv');
   });
 
   it('opens a CSV Source chosen through the desktop picker and cancels cleanly', async () => {
