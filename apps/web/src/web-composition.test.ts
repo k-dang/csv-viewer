@@ -153,16 +153,16 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
     });
   }
 
-  override withRegisteredFile<T>(
-    _name: string,
-    _contents: Uint8Array,
-    use: (reference: string) => Promise<T>,
-  ): Promise<T> {
-    return use('/startup-check.csv');
+  override open(): Promise<this> {
+    return Promise.resolve(this);
   }
 
-  override readObjects(): Promise<Array<Record<string, string>>> {
-    return Promise.resolve([{ ready: 'true' }]);
+  override closeOwnerConnection(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  override closeEngine(): Promise<void> {
+    return Promise.resolve();
   }
 
   override onFatalError(listener: (error: Error) => void): () => void {
@@ -182,7 +182,7 @@ it('cancels a pending startup query on page hide without waiting for its respons
     mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
     createWorker: () => new Promise(() => {}),
   });
-  const close = vi.spyOn(database, 'close');
+  const closeEngine = vi.spyOn(database, 'closeEngine');
   const controller = new AbortController();
   const startup = startWebCsvViewer(database, async () => null, undefined, controller.signal);
   const settled = vi.fn();
@@ -195,5 +195,5 @@ it('cancels a pending startup query on page hide without waiting for its respons
   page.dispatchEvent(new Event('pagehide'));
   dispose();
   await vi.waitFor(() => expect(settled).toHaveBeenCalledWith({ status: 'unsupported' }));
-  expect(close).toHaveBeenCalledOnce();
+  expect(closeEngine).toHaveBeenCalledOnce();
 });

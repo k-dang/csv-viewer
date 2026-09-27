@@ -1,4 +1,3 @@
-import { quoteLiteral } from '@csv-viewer/workspace/csv-query';
 import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import type {
   ConfirmWorkspaceCloseOutcome,
@@ -17,7 +16,7 @@ export type WebCsvViewerStartup =
   | { status: 'ready'; viewer: CsvWorkspaceOwner; acquireDroppedSource: (file: File) => Promise<CsvSourceId | CsvCapacityExceeded> }
   | { status: 'unsupported' };
 
-/** Starts the pinned Worker and proves its in-memory CSV path before file selection is enabled. */
+/** Acquires the pinned Worker, which proves its in-memory CSV path, before file selection is enabled. */
 export async function startWebCsvViewer(
   database: DuckDbWasmWorkspaceDatabase,
   pickFile: WebCsvFilePicker,
@@ -30,10 +29,9 @@ export async function startWebCsvViewer(
   signal?.addEventListener('abort', cancel, { once: true });
   try {
     if (signal?.aborted) cancel();
-    await Promise.race([verifyRequiredWasmFeatures(database), fatalError.promise]);
-    stopWatchingStartup();
     const host = new WebWorkspaceHost(database, pickFile, limits);
-    const workspace = createCsvViewer(host, database);
+    const workspace = await Promise.race([createCsvViewer(() => database.open(), host), fatalError.promise]);
+    stopWatchingStartup();
     return {
       status: 'ready',
       viewer: new WebCsvViewerSession(workspace, database),
@@ -42,8 +40,8 @@ export async function startWebCsvViewer(
   } catch (error) {
     stopWatchingStartup();
     if (!signal?.aborted) console.error('CSV Viewer Web startup check failed.', error);
-    const failures = await database.close();
-    failures.forEach((failure) => console.error('CSV Viewer Web cleanup failed.', failure));
+    // A failed build already released the engine. After a fatal stop, wait for its termination.
+    await database.closeEngine().catch((failure) => console.error('CSV Viewer Web cleanup failed.', failure));
     return { status: 'unsupported' };
   } finally {
     signal?.removeEventListener('abort', cancel);
@@ -141,8 +139,7 @@ class WebCsvViewerSession implements CsvWorkspaceOwner {
       await this.workspace.dispose();
       return;
     }
-    const failures = await this.database.close();
-    if (failures.length > 0) console.error('CSV Viewer Web cleanup failed.');
+    await this.database.closeEngine().catch(() => console.error('CSV Viewer Web cleanup failed.'));
   }
 
   private fail(): void {
@@ -162,17 +159,4 @@ class WebCsvViewerSession implements CsvWorkspaceOwner {
 
 function workspaceStoppedError(): Error {
   return new Error('The data engine has stopped. Reload CSV Viewer to start a new workspace.');
-}
-
-async function verifyRequiredWasmFeatures(database: DuckDbWasmWorkspaceDatabase): Promise<void> {
-  // Encoded per call: registering hands the buffer to the Worker, which may detach it.
-  const probe = new TextEncoder().encode('ready\ntrue\n');
-  const rows = await database.withRegisteredFile('startup-check.csv', probe, (reference) =>
-    database.readObjects(
-      `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
-    ),
-  );
-  if (rows.length !== 1 || rows[0]?.ready !== 'true') {
-    throw new Error('The browser could not run the required in-memory CSV query.');
-  }
 }

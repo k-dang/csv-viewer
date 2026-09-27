@@ -17,7 +17,7 @@ import type {
   WorkingCsvView,
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
-import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
+import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
@@ -31,7 +31,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -200,8 +200,8 @@ export async function closeSharedWasmEngine(): Promise<void> {
 }
 
 /**
- * Shares the file's compiled engine. Releasing drops the registered files, which outlive the
- * database itself, and reopening gives the next database an empty `:memory:` database.
+ * Shares the file's compiled engine. Releasing the engine drops the registered files, which
+ * outlive the database itself, and the next `open` gives its database an empty `:memory:` database.
  */
 export class SharedEngineWasmDatabase extends DuckDbWasmWorkspaceDatabase {
   constructor() {
@@ -227,7 +227,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   private readonly observer: WorkspaceContractObserver;
 
   private constructor(
-    private readonly workspace: CsvWorkspaceImplementation,
+    private readonly workspace: CsvWorkspaceOwner,
     private readonly database: DuckDbWasmWorkspaceDatabase,
     private readonly host: WasmContractHost,
   ) {
@@ -241,13 +241,14 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = new CsvWorkspaceImplementation(host, database, executor, diagnostics);
+    const workspace = await createCsvViewer(() => database.open(), host, executor, diagnostics);
     return new WasmWorkspaceFixture(workspace, database, host);
   }
 
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {

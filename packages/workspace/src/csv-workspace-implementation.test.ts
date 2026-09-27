@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvSourceId } from './csv-viewer';
-import type { WorkspaceDatabase } from './database';
+import type { OwnedWorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';
-import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
+import { createCsvViewer } from './csv-workspace';
 
 describe('CSV source selection during workspace disposal', () => {
   it('finishes disposal while the picker is pending and releases a later selection', async () => {
@@ -23,15 +23,15 @@ describe('CSV source selection during workspace disposal', () => {
       recordRecentSource: async () => undefined,
       confirmDiscardChanges: async () => true,
     };
-    const database: WorkspaceDatabase = {
+    const database: OwnedWorkspaceDatabase = {
       ownerConnection: async () => { throw new Error('No database work expected.'); },
       connectWorker: async () => { throw new Error('No database work expected.'); },
-      isOpen: () => true,
       run: async () => { throw new Error('No database work expected.'); },
       readObjects: async () => { throw new Error('No database work expected.'); },
-      close: vi.fn(async () => []),
+      closeOwnerConnection: async () => undefined,
+      closeEngine: async () => undefined,
     };
-    const workspace = new CsvWorkspaceImplementation(host, database);
+    const workspace = await createCsvViewer(async () => database, host);
     const opening = workspace.call({ operation: 'csv.open' });
     await pickerEntered.promise;
     let disposed = false;

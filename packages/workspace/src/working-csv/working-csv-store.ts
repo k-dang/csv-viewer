@@ -1,8 +1,8 @@
 import { DataEngineError } from '../database';
-import { Cause, Deferred, Effect, Exit, Latch, type Scope, type Types } from 'effect';
+import { Cause, Deferred, Effect, Latch, type Scope, type Types } from 'effect';
 import { markCleanupFailed, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
 import { databaseEffect } from '../comparison/comparison-effects';
-import { attemptWorkspacePromise, attemptWorkspaceSync, toError, WorkspaceRequestError } from '../errors';
+import { attemptWorkspacePromise, attemptWorkspaceSync, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
   CsvCellEditRequest,
@@ -327,20 +327,17 @@ export class WorkingCsvStore {
     }));
   }
 
-  /** Waits for admitted work, releases every table, then closes the database even if release failed. */
+  /** Waits for admitted work and releases every table. The runtime releases the database afterward. */
   disposeStore(): Effect.Effect<void, Error> {
-    return Effect.gen({ self: this }, function* () {
+    return Effect.suspend(() => {
       this.beginDisposal();
-      const released = yield* Effect.exit(this.releaseAllTables());
-      const teardownFailures = yield* attempt(() => this.database.close());
-      this.lifecycle = 'disposed';
-
-      const failures = Exit.isFailure(released) ? [toError(Cause.squash(released.cause)), ...teardownFailures] : teardownFailures;
-      if (failures.length === 1) return yield* Effect.fail(failures[0]);
-      if (failures.length > 1) {
-        return yield* Effect.fail(new AggregateError(failures, 'Unable to dispose all Working CSV resources.'));
-      }
-    }).pipe(Effect.uninterruptible);
+      return this.releaseAllTables();
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        this.lifecycle = 'disposed';
+      })),
+      Effect.uninterruptible,
+    );
   }
 
   private releaseAllTables(): Effect.Effect<void, Error> {

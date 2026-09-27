@@ -1,9 +1,9 @@
 import { OperationCleanup, markCleanupFailed, observeStage, recordOutcome, reportFailure, type WorkspaceDiagnostics } from './workspace-diagnostics';
-import { Cause, type Context, Effect, Exit, Option, Schema } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Option, Schema, Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
-import { Comparisons, WorkingCsv, makeWorkspaceRuntime } from './workspace-runtime';
+import { Comparisons, Host, WorkingCsv, makeWorkspaceLayer } from './workspace-runtime';
 import type { ComparisonExecutor } from './comparison/comparison-executor';
-import type { WorkspaceDatabase } from './database';
+import type { OwnedWorkspaceDatabase } from './database';
 import type { CsvComparisonService } from './comparison/csv-comparison-service';
 import type { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
@@ -29,6 +29,7 @@ import type {
 } from './csv-viewer';
 
 type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
+type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>['layer']>;
 
 /** The opaque identifiers a request carries. Diagnostics drop anything that is not a UUID. */
 const RequestIdentifiers = Schema.Struct({
@@ -50,23 +51,38 @@ const sameCloseImpact = Schema.toEquivalence(CloseImpact);
  * comparison orchestration, and database access - is internal implementation.
  */
 export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
+  private disposal: Promise<void> | null = null;
+  private readonly host: CsvWorkspaceHost;
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
-  private readonly workspaceId = crypto.randomUUID();
-  private disposal: Promise<void> | null = null;
-  private readonly runtime: ReturnType<typeof makeWorkspaceRuntime>;
-  private readonly context: Context.Context<never>;
 
-  constructor(
-    private readonly host: CsvWorkspaceHost,
-    database: WorkspaceDatabase,
+  private constructor(
+    private readonly workspaceId: string,
+    private readonly context: Context.Context<WorkspaceServices>,
+    private readonly scope: Scope.Closeable,
+    private readonly databaseRelease: { readonly failed: boolean },
+  ) {
+    this.host = Context.get(context, Host);
+    this.csvStore = Context.get(context, WorkingCsv);
+    this.comparisonStore = Context.get(context, Comparisons);
+  }
+
+  /** Builds the workspace runtime into its own scope. A failed build closes that scope and rejects. */
+  static async create(
+    openDatabase: () => Promise<OwnedWorkspaceDatabase>,
+    host: CsvWorkspaceHost,
     executor?: ComparisonExecutor,
     diagnostics?: WorkspaceDiagnostics,
-  ) {
-    this.runtime = makeWorkspaceRuntime(host, database, executor, diagnostics);
-    this.context = this.runtime.runSync(Effect.context());
-    this.csvStore = this.runtime.runSync(WorkingCsv);
-    this.comparisonStore = this.runtime.runSync(Comparisons);
+  ): Promise<CsvWorkspaceImplementation> {
+    const workspaceId = crypto.randomUUID();
+    const scope = Scope.makeUnsafe();
+    const { layer, databaseRelease } = makeWorkspaceLayer(openDatabase, host, executor, diagnostics);
+    const built = await Effect.runPromiseExit(Layer.buildWithScope(layer, scope).pipe(Effect.annotateSpans({ workspaceId })));
+    if (Exit.isFailure(built)) {
+      await Effect.runPromise(Scope.close(scope, built));
+      throw Cause.squash(built.cause);
+    }
+    return new CsvWorkspaceImplementation(workspaceId, built.value, scope, databaseRelease);
   }
 
   get capabilities() {
@@ -332,14 +348,12 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     }), 'workspace.confirm-close');
   }
 
+  /** Runs once. Every later call, concurrent or not, returns the same result. */
   dispose(): Promise<void> {
     if (!this.disposal) {
       this.csvStore.beginDisposal();
       this.comparisonStore.beginDisposal();
-      this.disposal = this.disposeWorkspace().catch((error) => {
-        this.disposal = null;
-        throw error;
-      });
+      this.disposal = this.disposeWorkspace();
     }
     return this.disposal;
   }
@@ -397,12 +411,24 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     });
   }
 
-  private async disposeWorkspace(): Promise<void> {
-    await this.runEffect(Effect.gen({ self: this }, function* () {
-      yield* observeStage('comparison.dispose', this.comparisonStore.dispose());
-      yield* observeStage('workspace.release-csvs', this.csvStore.disposeStore());
+  /**
+   * Settles Comparisons and releases the Working CSV tables, then closes the runtime scope even if
+   * that failed, which releases the database. Finalizers cannot fail, so the
+   * database release outcome is read from `databaseRelease` rather than from closing the scope.
+   */
+  private disposeWorkspace(): Promise<void> {
+    return this.runEffect(Effect.gen({ self: this }, function* () {
+      const released = yield* Effect.exit(Effect.gen({ self: this }, function* () {
+        yield* observeStage('comparison.dispose', this.comparisonStore.dispose());
+        yield* observeStage('workspace.release-csvs', this.csvStore.disposeStore());
+      }));
+      yield* Scope.close(this.scope, Exit.void);
+      yield* released;
+      if (this.databaseRelease.failed) {
+        yield* markCleanupFailed;
+        return yield* Effect.fail(new Error('The workspace database could not be released.'));
+      }
     }), 'workspace.dispose');
-    await this.runtime.dispose();
   }
 }
 

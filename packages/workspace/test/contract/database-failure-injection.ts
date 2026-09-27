@@ -1,4 +1,4 @@
-import { DataEngineError, type WorkspaceDatabase } from '../../src/database';
+import { DataEngineError, type OwnedWorkspaceDatabase, type WorkspaceDatabase } from '../../src/database';
 
 export function failNextMetadataRead(database: WorkspaceDatabase): void {
   const read = database.readObjects.bind(database);
@@ -15,6 +15,15 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_working_')) return run(sql, values);
     database.run = run;
     return Promise.reject(new Error('PRIVATE table cleanup failure'));
+  };
+}
+
+export function failNextDatabaseRelease(database: OwnedWorkspaceDatabase): void {
+  const close = database.closeOwnerConnection.bind(database);
+  database.closeOwnerConnection = async () => {
+    database.closeOwnerConnection = close;
+    await close();
+    throw new Error('PRIVATE database release failure');
   };
 }
 

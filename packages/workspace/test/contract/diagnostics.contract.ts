@@ -41,6 +41,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
     it('records malformed requests under one fixed stage without request content', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);
+      const acquired = capture.records.length;
       try {
         const workingCsvId = crypto.randomUUID();
         const malformed = [
@@ -52,7 +53,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
           await expect(fixture.viewer.call(request as never)).rejects.toThrow(/^Malformed CSV Viewer request\.$/);
         }
 
-        const records = capture.completed();
+        const records = capture.completed(acquired);
         expect(records.map((record) => [record.message, record.annotations.outcome])).toEqual([
           ['csv-viewer.request', 'malformed-request'],
           ['csv-viewer.request', 'malformed-request'],
@@ -383,6 +384,43 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         for (const secret of ['PRIVATE-SOURCE', 'PRIVATE-CANDIDATE', 'PRIVATE-CELL', baseline.source.location]) expect(captured).not.toContain(secret);
       } finally { await fixture.dispose(); }
     });
+
+    it('correlates database acquisition and release with the workspace', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+        await fixture.disposeWorkspace();
+        const records = capture.completed();
+        const workspaceId = records.find((record) => record.message === 'csv.get-recent-sources')?.annotations.workspaceId;
+        expect(workspaceId).toEqual(expect.any(String));
+        for (const stage of ['workspace.acquire-database', 'workspace.release-database']) {
+          const matching = records.filter((record) => record.message === stage);
+          expect(matching.map((record) => [record.annotations.outcome, record.annotations.workspaceId])).toEqual([['succeeded', workspaceId]]);
+        }
+      } finally { await fixture.dispose(); }
+    });
+
+    it('rejects disposal when the database cannot be released, without driver detail', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        await fixture.openSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
+        fixture.failNextDatabaseRelease();
+        const rejection = await fixture.disposeWorkspace().then(() => null, (error: Error) => error.message);
+        expect(rejection).toBe('The CSV workspace could not complete the request.');
+        await expect(fixture.disposeWorkspace()).rejects.toThrow(rejection);
+        const records = capture.completed();
+        expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).toBe('succeeded');
+        expect(records.filter((record) => record.message === 'workspace.release-database').map((record) => record.annotations.outcome))
+          .toEqual(['recoverable-failure']);
+        for (const [stage, outcome] of [['workspace.close-database-connection', 'recoverable-failure'], ['workspace.close-database-engine', 'succeeded']]) {
+          expect(records.filter((record) => record.message === stage).map((record) => record.annotations.outcome)).toEqual([outcome]);
+        }
+        expect(records.find((record) => record.message === 'workspace.dispose')?.annotations.outcome).toBe('failed');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose().catch(() => undefined); }
+    });
   });
 }
 
@@ -397,7 +435,8 @@ function diagnosticCapture(onRecord?: (record: ReturnType<typeof Logger.formatSt
       records.push(record);
       onRecord?.(record);
     }) },
-    completed: () => records.filter((record) => record.annotations.outcome !== 'started'),
+    /** Completion records, optionally only those logged after the first `from` records. */
+    completed: (from = 0) => records.slice(from).filter((record) => record.annotations.outcome !== 'started'),
   };
 }
 

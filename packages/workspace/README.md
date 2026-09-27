@@ -2,13 +2,17 @@
 
 Every `CsvViewer` request runs as an Effect through one shared entry adapter. `CsvViewer` remains the promise and event boundary for desktop IPC and the web renderer. Requests use the workspace runtime's services but not its scope, so disposal settles admitted work by the rules below instead of interrupting it. Background Comparison work belongs to the workspace scope.
 
+## Resource lifetimes
+
+Each runtime builds the workspace through `createCsvViewer`, which builds one Layer in acquisition order: the database and the runtime's host, then the Working CSV, Comparison, and diagnostics services built on both. The database acquires its engine and owner connection eagerly, so the workspace exists only after acquisition succeeds, and a failed acquisition releases whatever it acquired. Disposal stops admission, settles Comparisons, and releases every Working CSV table, then closes the runtime scope once, which releases the database. The database finalizer closes the owner connection, then the engine. Finalizers cannot fail, so disposal carries the release outcome explicitly: a failed release rejects disposal, and every later call returns the same rejection.
+
 ## Coordination
 
 Working CSV work coordinates through three primitives in the store:
 
 - **Lease.** One scoped Effect leases a Working CSV's current table for reads, export serialization, mutations, reopen, and Comparison sources. Each table keeps an explicit lease count. Closing a Working CSV waits until no lease holds its current or retired tables. The last release of a retired table drops it. If that drop fails, the releasing operation reports `cleanup-failed` and the table stays registered for close or disposal to retry.
 - **Mutation queue.** Cell edits, row and column edits, undo, redo, and reopen run one at a time per Working CSV, in call order. A mutation takes its lease and its queue position when the request starts, so a close waits for queued work. When its turn begins, it resolves the current Working CSV state, so work queued behind a reopen runs against the replacement. Reads stay off the queue and run concurrently.
-- **Admission.** Opens and reopens hold an admission until their scope closes. A Comparison worker connection holds one only while it connects. Comparison disposal closes open worker connections before the store releases tables. Disposal stops new admission and waits for admitted work before it releases tables and closes the database.
+- **Admission.** Opens and reopens hold an admission until their scope closes. A Comparison worker connection holds one only while it connects. Comparison disposal closes open worker connections before the store releases tables. Disposal stops new admission and waits for admitted work before it releases tables and the database.
 
 ## Open and reopen
 
@@ -18,4 +22,4 @@ Reopen prepares a new table, columns, row count, and fresh edit history before p
 
 ## Diagnostics
 
-Each request logs a stage named after its operation, such as `csv.get-rows`, `csv.edit-cell`, or `csv.reopen`. Child stages cover source description, table preparation, source access and load, metadata, queue waits (`csv.queue-wait`), lease releases (`csv.release-lease`, `csv.release-retired`), and staging release. Log records carry opaque workspace, request, Working CSV, and Comparison identifiers, stage timings, product outcomes, and cleanup results. Source names, locations, column names, cell values, search and filter text, SQL, and driver errors are excluded. See [Read diagnostics](../../.agents/skills/verify-csv-viewer/SKILL.md#read-diagnostics) for desktop and web capture commands.
+Each request logs a stage named after its operation, such as `csv.get-rows`, `csv.edit-cell`, or `csv.reopen`. Workspace stages cover database acquisition and release (`workspace.acquire-database`, `workspace.release-database`, with `workspace.close-database-connection` and `workspace.close-database-engine` per release step). Child stages cover source description, table preparation, source access and load, metadata, queue waits (`csv.queue-wait`), lease releases (`csv.release-lease`, `csv.release-retired`), and staging release. Log records carry opaque workspace, request, Working CSV, and Comparison identifiers, stage timings, product outcomes, and cleanup results. Source names, locations, column names, cell values, search and filter text, SQL, and driver errors are excluded. See [Read diagnostics](../../.agents/skills/verify-csv-viewer/SKILL.md#read-diagnostics) for desktop and web capture commands.

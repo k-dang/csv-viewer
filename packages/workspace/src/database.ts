@@ -16,14 +16,23 @@ export interface WorkspaceDatabaseConnection {
   close(): Promise<void>;
 }
 
-/** One in-memory database with an owner connection and isolated operation connections. */
+/**
+ * One acquired in-memory database with an owner connection and isolated operation connections.
+ * The workspace runtime acquires it before the workspace exists and releases it after every
+ * Working CSV table, so it is open for the whole life of every caller.
+ */
 export interface WorkspaceDatabase {
   ownerConnection(): Promise<WorkspaceDatabaseConnection>;
   connectWorker(): Promise<WorkspaceDatabaseConnection>;
-  isOpen(): boolean;
   run(sql: string, values?: QueryValues): Promise<void>;
   readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]>;
-  close(): Promise<Error[]>;
+}
+
+/** A runtime's database with the release steps the database Layer's finalizer runs in order. */
+export interface OwnedWorkspaceDatabase extends WorkspaceDatabase {
+  closeOwnerConnection(): Promise<void>;
+  /** Stops the engine: the native instance, or the Wasm Worker. Runs even if the connection close failed. */
+  closeEngine(): Promise<void>;
 }
 
 export class DataEngineError extends Error {

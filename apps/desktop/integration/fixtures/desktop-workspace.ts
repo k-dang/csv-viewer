@@ -18,11 +18,11 @@ import type {
 } from '../../../../packages/workspace/src/csv-viewer';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
-import { CsvWorkspaceImplementation } from '../../../../packages/workspace/src/csv-workspace-implementation';
+import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -45,7 +45,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   private constructor(
     readonly directory: string,
-    private readonly workspace: CsvWorkspaceImplementation,
+    private readonly workspace: CsvWorkspaceOwner,
     private readonly database: DuckDbWorkspaceDatabase,
     readonly host: DesktopWorkspaceHost,
     readonly prompts: ScriptedPrompts,
@@ -66,7 +66,6 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
       defaultExportPaths: [],
       sourceConflictCount: 0,
     };
-    let workspace: CsvWorkspaceImplementation | undefined;
     try {
       const host = new DesktopWorkspaceHost(
         {
@@ -86,11 +85,11 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      const database = new DuckDbWorkspaceDatabase();
-      workspace = new CsvWorkspaceImplementation(host, database, executor, diagnostics);
+      const opening = DuckDbWorkspaceDatabase.open();
+      const workspace = await createCsvViewer(() => opening, host, executor, diagnostics);
+      const database = await opening;
       return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
     } catch (error) {
-      await workspace?.dispose().catch(() => undefined);
       await rm(directory, { recursive: true, force: true });
       throw error;
     }
@@ -117,6 +116,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {
