@@ -266,8 +266,9 @@ app.whenReady().then(async () => {
       createWindow(workspace);
     }
   });
-}).catch(() => {
-  // Any startup failure leaves no usable window. Only a failed database acquisition is in diagnostics.
+}).catch((error) => {
+  // Any startup failure leaves no usable window.
+  console.error('CSV Viewer failed to start.', error);
   app.exit(1);
 });
 

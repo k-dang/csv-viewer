@@ -421,6 +421,24 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         expect(capture.logs.join('')).not.toContain('PRIVATE');
       } finally { await fixture.dispose().catch(() => undefined); }
     });
+
+    it('reports a database release failure that follows a table release failure', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        await fixture.openSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
+        fixture.failNextTableDrop();
+        fixture.failNextDatabaseRelease();
+        await expect(fixture.disposeWorkspace()).rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        const records = capture.completed();
+        expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).not.toBe('succeeded');
+        expect(records.find((record) => record.message === 'workspace.release-database')?.annotations.outcome).toBe('recoverable-failure');
+        const disposal = records.find((record) => record.message === 'workspace.dispose');
+        expect(disposal?.annotations.outcome).toBe('failed');
+        expect(disposal?.annotations.cleanup).toBe('cleanup-failed');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose().catch(() => undefined); }
+    });
   });
 }
 

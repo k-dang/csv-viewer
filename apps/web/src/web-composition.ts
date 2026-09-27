@@ -27,10 +27,12 @@ export async function startWebCsvViewer(
   const stopWatchingStartup = database.onFatalError(fatalError.reject);
   const cancel = () => database.cancelStartup();
   signal?.addEventListener('abort', cancel, { once: true });
+  let building: Promise<CsvWorkspaceOwner> | undefined;
   try {
     if (signal?.aborted) cancel();
     const host = new WebWorkspaceHost(database, pickFile, limits);
-    const workspace = await Promise.race([createCsvViewer(() => database.open(), host), fatalError.promise]);
+    building = createCsvViewer(() => database.open(), host);
+    const workspace = await Promise.race([building, fatalError.promise]);
     stopWatchingStartup();
     return {
       status: 'ready',
@@ -39,6 +41,8 @@ export async function startWebCsvViewer(
     };
   } catch (error) {
     stopWatchingStartup();
+    // A fatal stop can win the race while the build still finishes; release that workspace too.
+    void building?.then((late) => late.dispose()).catch(() => undefined);
     if (!signal?.aborted) console.error('CSV Viewer Web startup check failed.', error);
     // A failed build already released the engine. After a fatal stop, wait for its termination.
     await database.closeEngine().catch((failure) => console.error('CSV Viewer Web cleanup failed.', failure));

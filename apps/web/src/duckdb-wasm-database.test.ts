@@ -163,6 +163,25 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       'The data engine has stopped. Reload CSV Viewer to start a new workspace.',
     );
   });
+
+  it('holds a failed Worker termination after a crash for the engine release', async () => {
+    const worker = new ControllableWorker();
+    worker.terminate.mockImplementation(() => {
+      throw new Error('Worker termination failed.');
+    });
+    const crashed = new DuckDbWasmWorkspaceDatabase({
+      mainModule: 'duckdb.wasm',
+      mainWorker: 'duckdb.worker.js',
+      createWorker: () => Promise.resolve(worker),
+    });
+    void crashed.open().catch(() => undefined);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+
+    worker.emitError(new Error('Worker crashed.'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(crashed.closeEngine()).rejects.toThrow('Worker termination failed.');
+  });
 });
 
 class ControllableWorker extends EventTarget implements Worker {

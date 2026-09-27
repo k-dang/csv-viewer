@@ -134,6 +134,25 @@ describe('web CsvViewer composition', () => {
       'Reload CSV Viewer to start a new workspace.',
     );
   });
+
+  it('releases a workspace whose build finishes after a fatal Worker failure', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const database = new FatalTestDatabase();
+    const opening = Promise.withResolvers<void>();
+    vi.spyOn(database, 'open').mockImplementation(async () => {
+      await opening.promise;
+      return database;
+    });
+    const release = vi.spyOn(database, 'closeOwnerConnection');
+    const startup = startWebCsvViewer(database, async () => null);
+
+    database.failWorker();
+    await expect(startup).resolves.toEqual({ status: 'unsupported' });
+    opening.resolve();
+
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    consoleError.mockRestore();
+  });
 });
 
 function pageTransitionEvent(type: 'pagehide' | 'pageshow', persisted: boolean): Event {

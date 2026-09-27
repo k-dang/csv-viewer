@@ -423,11 +423,9 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         yield* observeStage('workspace.release-csvs', this.csvStore.disposeStore());
       }));
       yield* Scope.close(this.scope, Exit.void);
-      yield* released;
-      if (this.databaseRelease.failed) {
-        yield* markCleanupFailed;
-        return yield* Effect.fail(new Error('The workspace database could not be released.'));
-      }
+      if (!this.databaseRelease.failed) return yield* released;
+      yield* markCleanupFailed;
+      yield* Exit.asVoidAll([released, Exit.fail(new Error('The workspace database could not be released.'))]);
     }), 'workspace.dispose');
   }
 }

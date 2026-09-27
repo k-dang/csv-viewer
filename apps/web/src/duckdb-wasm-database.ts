@@ -99,7 +99,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private connection: DuckDbWasmConnection | null = null;
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
-  private fatalCleanup: Promise<void> | null = null;
+  private fatalCleanup: Promise<Error | null> | null = null;
   private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private readonly handleWorkerError = (event: ErrorEvent) => {
     this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
@@ -213,9 +213,13 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     await connection?.close();
   }
 
-  /** Stops the Worker. After a fatal stop, waits for the termination that stop already began. */
+  /** Stops the Worker. After a fatal stop, reports the outcome of the termination that stop began. */
   async closeEngine(): Promise<void> {
-    if (this.fatalCleanup) return this.fatalCleanup;
+    if (this.fatalCleanup) {
+      const failure = await this.fatalCleanup;
+      if (failure) throw failure;
+      return;
+    }
     const database = this.database;
     this.database = null;
     if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
@@ -279,7 +283,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     this.connection = null;
     this.database = null;
     this.stopObservingWorker();
-    this.fatalCleanup = database ? database.terminate() : Promise.resolve();
+    this.fatalCleanup = database ? database.terminate().then(() => null, toError) : Promise.resolve(null);
     for (const listener of this.fatalErrorListeners) listener(this.fatalError);
   }
 
