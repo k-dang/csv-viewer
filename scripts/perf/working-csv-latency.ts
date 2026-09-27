@@ -345,8 +345,8 @@ export function planRun(argv: readonly string[]): readonly LaunchPlan[] {
   const runtimes = choose('runtime', RUNTIMES, flags.runtime);
   const fixtures = choose('fixture', FIXTURE_NAMES, flags.fixture);
   const paths = choose('path', PATHS, flags.path);
-  const cold = countFlag('cold', flags.cold, DEFAULT_COLD);
-  const warm = countFlag('warm', flags.warm, DEFAULT_WARM);
+  const cold = countFlag('cold', flags.cold, DEFAULT_COLD, 1);
+  const warm = countFlag('warm', flags.warm, DEFAULT_WARM, 0);
   const launches: LaunchPlan[] = [];
   let desktopSeen = false;
   for (const runtime of runtimes) {
@@ -401,12 +401,14 @@ function choose<Name extends string>(label: string, registry: readonly Name[], c
   return registry.filter((name) => chosen.includes(name));
 }
 
-function countFlag(label: string, raw: string | undefined, fallback: number): number {
+function countFlag(label: string, raw: string | undefined, fallback: number, minimum: number): number {
   if (raw === undefined) return fallback;
   if (!/^(?:0|[1-9]\d*)$/.test(raw)) {
     throw new UsageError(`--${label} must be a non-negative integer.`);
   }
-  return Number(raw);
+  const value = Number(raw);
+  if (value < minimum) throw new UsageError(`--${label} must be at least ${minimum}.`);
+  return value;
 }
 
 function launchPlan(runtime: Runtime, fixture: FixtureName, pathName: PathName, warm: number, desktopSeen: boolean): LaunchPlan {
@@ -655,6 +657,7 @@ function isMarkKind(value: string): value is MarkKind {
 
 /**
  * Runs in the page. A second install keeps the first. It reads the DOM and never calls into the product API.
+ * A mark is stamped when the DOM matches, which can be a frame before pixels.
  * Ready is recorded only after Querying in the same sample, so the idle Ready text cannot finish one.
  */
 const PAGE_PROBE_SOURCE = String.raw`
@@ -1102,11 +1105,12 @@ async function takeSample(page: Page, launch: LaunchPlan, phase: Phase): Promise
 }
 
 async function withFreshApp<T>(launch: LaunchPlan, use: (page: Page) => Promise<T>): Promise<T> {
-  ownsSession = true;
   let socket: Cdp | null = null;
+  let outcome: { ok: true; value: T } | { ok: false; cause: unknown } | null = null;
   try {
     await runHelper(launchArgs(launch));
     const run = await readRequiredRun();
+    ownsSession = true;
     ownedRun = run;
     const version = parseBrowserVersion(await fetchText(`http://127.0.0.1:${run.cdpPort}/json/version`));
     const target = await waitForAppPage(run.cdpPort, run.webUrl);
@@ -1117,14 +1121,28 @@ async function withFreshApp<T>(launch: LaunchPlan, use: (page: Page) => Promise<
     await forceViewport(cdp);
     const probe = await attachProbe((expression) => cdp.evaluate(expression));
     await probe.settle([{ kind: 'empty-window' }], QUIET_MS, SAMPLE_TIMEOUT_MS);
-    return await use(createPage(cdp, probe, browserFact(launch.runtime, version)));
+    outcome = { ok: true, value: await use(createPage(cdp, probe, browserFact(launch.runtime, version))) };
   } catch (cause) {
+    outcome = { ok: false, cause };
     await explainFailure(launch);
-    throw cause;
   } finally {
     socket?.close();
-    await cleanupOwnedSession();
+    try {
+      await cleanupOwnedSession();
+    } catch (cleanupCause) {
+      if (outcome?.ok === false) {
+        const message = cleanupCause instanceof Error ? cleanupCause.message : 'cleanup failed';
+        process.stderr.write(`cleanup failed: ${message}\n`);
+      } else {
+        outcome = { ok: false, cause: cleanupCause };
+      }
+    }
   }
+  if (outcome === null || !outcome.ok) {
+    const cause = outcome?.ok === false ? outcome.cause : new Error('launch failed');
+    throw cause;
+  }
+  return outcome.value;
 }
 
 function createPage(cdp: Cdp, probe: Probe, browser: string): Page {
@@ -1505,30 +1523,46 @@ function runHelper(args: readonly string[]): Promise<void> {
 }
 
 async function cleanupOwnedSession(): Promise<void> {
-  if (!ownsSession) return;
-  ownsSession = false;
-  signalOwnedGroups();
-  await runHelper(['cleanup']);
+  const run = takeOwnedRun();
+  if (run === null) return;
+  signalRecordedGroups(run);
+  if (await currentRunIs(run)) await runHelper(['cleanup']);
 }
 
 function stopOwnedSession(): void {
-  if (!ownsSession) return;
-  ownsSession = false;
-  signalOwnedGroups();
+  const run = takeOwnedRun();
+  if (run === null) return;
+  signalRecordedGroups(run);
+  if (!currentRunIsSync(run)) return;
   spawnSync(process.execPath, [path.join(REPO_ROOT, HELPER), 'cleanup'], {
     cwd: REPO_ROOT,
     stdio: ['ignore', 2, 2],
   });
 }
 
-function signalOwnedGroups(): void {
-  const run = ownedRun ?? readOwnedRunSync();
+function takeOwnedRun(): VerifyRun | null {
+  if (!ownsSession) return null;
+  ownsSession = false;
+  const run = ownedRun;
   ownedRun = null;
-  if (run === null) return;
+  return run;
+}
+
+function signalRecordedGroups(run: VerifyRun): void {
   // The helper records detached leaders. Signaling the group also stops children
   // such as Vite, which survive a signal sent only to that leader.
   signalProcessGroup(run.pid);
   signalProcessGroup(run.vitePid);
+}
+
+async function currentRunIs(run: VerifyRun): Promise<boolean> {
+  const current = await readVerifyRun();
+  return current === null || current.pid === run.pid;
+}
+
+function currentRunIsSync(run: VerifyRun): boolean {
+  const current = readOwnedRunSync();
+  return current === null || current.pid === run.pid;
 }
 
 function signalProcessGroup(pid: number | null): void {
@@ -1673,7 +1707,7 @@ function usageText(): string {
     '  --fixture  phase-2-sample | large-phase-3-test             every fixture when absent',
     '  --path     open | sort | filter | search | edit-cell |',
     '             insert-column | delete-column | rename-column   every path when absent',
-    '  --cold     cold samples per path, each its own launch      1 when absent',
+    '  --cold     cold samples per path, each its own launch      1 when absent, at least 1',
     '  --warm     warm samples per launch, a non-negative integer 3 when absent',
   ].join('\n');
 }

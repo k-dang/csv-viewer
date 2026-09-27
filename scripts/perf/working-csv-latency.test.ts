@@ -41,6 +41,10 @@ describe('planRun', () => {
     ]);
   });
 
+  it('rejects a run with no cold sample', () => {
+    expect(() => planRun(['--cold', '0'])).toThrow('--cold must be at least 1.');
+  });
+
   it('names the valid paths when a path is unknown', () => {
     expect(() => planRun(['--path', 'sorting'])).toThrow(
       'Unknown path "sorting". Valid paths are open, sort, filter, search, edit-cell, insert-column, delete-column, rename-column.',
