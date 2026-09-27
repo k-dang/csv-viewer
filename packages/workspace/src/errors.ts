@@ -7,6 +7,9 @@ export class WorkspaceRequestError extends Data.TaggedError('WorkspaceRequestErr
 
 export const genericWorkspaceFailure = 'The CSV workspace could not complete the request.';
 
+/** The only rejection for a payload that does not decode as a CsvViewer request. It never includes decode issues. */
+export const malformedRequestMessage = 'Malformed CSV Viewer request.';
+
 export function isExpectedWorkspaceError(cause: unknown): cause is WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError {
   return cause instanceof WorkspaceRequestError || cause instanceof DataEngineError || cause instanceof CsvSourceUnavailableError;
 }

@@ -1,3 +1,11 @@
+import type {
+  CloseImpact,
+  CsvDialectOptions,
+  CsvViewerRequest,
+} from './csv-viewer-requests';
+
+export type * from './csv-viewer-requests';
+
 export type WorkingCsvId = string;
 /** Opaque, runtime-scoped identity of a CSV Source. Never parsed or interpreted by consumers. */
 export type CsvSourceId = string;
@@ -16,11 +24,6 @@ export type CsvSourceMetadata = {
   /** Where the CSV Source lives, in whatever terms the runtime can show the user. */
   location: string;
   sizeBytes: number;
-};
-
-export type CsvDialectOptions = {
-  delimiter?: string;
-  header?: boolean;
 };
 
 export const csvInternalRowIdField = '__csvViewerRowId' as const;
@@ -53,64 +56,6 @@ export type CsvRow = Record<string, CsvCellValue> & {
   [csvInternalRowIdField]: string;
 };
 
-export type CsvSortDescriptor = {
-  column: string;
-  direction: 'asc' | 'desc';
-};
-
-export type CsvTextFilterOperator = 'contains' | 'notContains' | 'equals' | 'notEqual' | 'startsWith' | 'endsWith';
-
-export type CsvNumberFilterOperator =
-  | 'equals'
-  | 'notEqual'
-  | 'greaterThan'
-  | 'greaterThanOrEqual'
-  | 'lessThan'
-  | 'lessThanOrEqual'
-  | 'inRange';
-
-export type CsvDateFilterOperator =
-  | 'equals'
-  | 'notEqual'
-  | 'greaterThan'
-  | 'greaterThanOrEqual'
-  | 'lessThan'
-  | 'lessThanOrEqual'
-  | 'inRange';
-
-export type CsvBlankFilterOperator = 'blank' | 'notBlank';
-
-export type CsvFilterDescriptor =
-  | {
-      column: string;
-      kind: 'text';
-      operator: CsvTextFilterOperator | CsvBlankFilterOperator;
-      value?: string;
-    }
-  | {
-      column: string;
-      kind: 'number';
-      operator: CsvNumberFilterOperator | CsvBlankFilterOperator;
-      value?: number;
-      valueTo?: number;
-    }
-  | {
-      column: string;
-      kind: 'date';
-      operator: CsvDateFilterOperator | CsvBlankFilterOperator;
-      value?: string;
-      valueTo?: string;
-    };
-
-export type CsvRowWindowRequest = {
-  workingCsvId: WorkingCsvId;
-  offset: number;
-  limit: number;
-  sort?: CsvSortDescriptor[];
-  filters?: CsvFilterDescriptor[];
-  search?: string;
-};
-
 export type CsvRowWindow = {
   workingCsvId: WorkingCsvId;
   offset: number;
@@ -118,26 +63,10 @@ export type CsvRowWindow = {
   filteredRowCount: number;
 };
 
-/** One column under the row window's full query, so the copy matches what the grid shows. */
-export type CsvColumnValuesRequest = {
-  workingCsvId: WorkingCsvId;
-  column: string;
-  sort?: CsvSortDescriptor[];
-  filters?: CsvFilterDescriptor[];
-  search?: string;
-};
-
 export type CsvColumnValues = {
   workingCsvId: WorkingCsvId;
   column: string;
   values: CsvCellValue[];
-};
-
-export type CsvColumnValueCountsRequest = {
-  workingCsvId: WorkingCsvId;
-  column: string;
-  filters?: CsvFilterDescriptor[];
-  search?: string;
 };
 
 export type CsvColumnValueCount = {
@@ -153,13 +82,6 @@ export type CsvColumnValueCounts = {
   values: CsvColumnValueCount[];
 };
 
-export type CsvCellEditRequest = {
-  workingCsvId: WorkingCsvId;
-  rowId: string;
-  column: string;
-  value: string;
-};
-
 export type CsvCellEditResult = {
   workingCsvId: WorkingCsvId;
   rowId: string;
@@ -167,47 +89,6 @@ export type CsvCellEditResult = {
   hasUnexportedChanges: boolean;
   canUndo: boolean;
   canRedo: boolean;
-};
-
-export type CsvDeleteRowsRequest = {
-  workingCsvId: WorkingCsvId;
-  rowIds: string[];
-};
-
-export type CsvInsertRowPlacement = 'above' | 'below' | 'append';
-
-export type CsvInsertRowRequest = {
-  workingCsvId: WorkingCsvId;
-  placement: CsvInsertRowPlacement;
-  rowIds: string[];
-  hasActiveQuery: boolean;
-};
-
-export type CsvRenameColumnRequest = {
-  workingCsvId: WorkingCsvId;
-  column: string;
-  name: string;
-};
-
-export type CsvColumnPlacement = 'before' | 'after';
-
-export type CsvInsertColumnRequest = {
-  workingCsvId: WorkingCsvId;
-  column: string;
-  placement: CsvColumnPlacement;
-};
-
-export type CsvDeleteColumnRequest = {
-  workingCsvId: WorkingCsvId;
-  column: string;
-};
-
-export type CsvEditStateRequest = {
-  workingCsvId: WorkingCsvId;
-};
-
-export type CsvExportRequest = {
-  workingCsvId: WorkingCsvId;
 };
 
 /** Tagged like every other outcome in this contract, so a second non-success arm costs no caller a reshape. */
@@ -236,20 +117,6 @@ export type CsvCapacityExceeded = {
   limit: 'source-bytes' | 'workspace-source-bytes';
   limitBytes: number;
   message: string;
-};
-
-export type CloseImpact = {
-  hasUnexportedChanges: boolean;
-  dependentComparisons: Array<{
-    comparisonId: ComparisonId;
-    baselineName: string;
-    candidateName: string;
-  }>;
-};
-
-export type CloseWorkingCsvRequest = {
-  workingCsvId: WorkingCsvId;
-  confirmedImpact?: CloseImpact;
 };
 
 export type CloseWorkingCsvOutcome =
@@ -282,8 +149,6 @@ export type ConfirmWorkspaceCloseOutcome =
 
 export type ComparisonSide = 'baseline' | 'candidate';
 export type ComparisonPhase = 'validating' | 'comparing' | 'summarizing';
-export type ComparisonRowsMode = 'differences' | 'all';
-export type ComparisonColumnsMode = 'changed-first' | 'csv-order';
 
 export type ComparisonFault = {
   code:
@@ -310,11 +175,6 @@ export type ComparisonCandidate = {
         missingFromBaseline: string[];
         missingFromCandidate: string[];
       };
-};
-
-export type OpenComparisonRequest = {
-  baselineId: WorkingCsvId;
-  candidateId: WorkingCsvId;
 };
 
 export type ComparisonSummary = {
@@ -398,10 +258,6 @@ export type OpenComparisonResult =
   | { status: 'created' | 'existing'; comparison: ComparisonView }
   | { status: 'rejected'; fault: ComparisonFault };
 
-export type BeginComparisonRequest =
-  | { kind: 'apply-key'; comparisonId: ComparisonId; key: string[] }
-  | { kind: 'refresh'; comparisonId: ComparisonId };
-
 export type BeginComparisonResult =
   | { status: 'accepted'; operationId: ComparisonOperationId }
   | { status: 'busy'; activeOperationId: ComparisonOperationId }
@@ -414,26 +270,12 @@ export type CancelComparisonResult =
   | { status: 'operation-mismatch' }
   | { status: 'comparison-not-found' };
 
-export type CancelComparisonRequest = {
-  comparisonId: ComparisonId;
-  operationId: ComparisonOperationId;
-};
-
 export type ComparisonRow = {
   classification: 'changed' | 'baseline-only' | 'candidate-only' | 'unchanged';
   keyValues: string[];
   baseline: { rowId: string; values: Array<string | null> } | null;
   candidate: { rowId: string; values: Array<string | null> } | null;
   changed: boolean[];
-};
-
-export type ComparisonWindowRequest = {
-  comparisonId: ComparisonId;
-  resultToken: ComparisonResultToken;
-  offset: number;
-  limit: number;
-  rows: ComparisonRowsMode;
-  columns: ComparisonColumnsMode;
 };
 
 export type ComparisonWindow = {
@@ -463,13 +305,7 @@ export type ComparisonMutationOutcome =
  * Application-level requests raised outside React - today the desktop application menu. Runtimes
  * translate their own command mechanics into these intents before they reach the renderer.
  */
-export const csvViewerIntents = ['open-csv', 'reopen-csv', 'export-csv', 'close-tab'] as const;
-
-export type CsvViewerIntent = (typeof csvViewerIntents)[number];
-
-export function isCsvViewerIntent(value: string): value is CsvViewerIntent {
-  return csvViewerIntents.some((intent) => intent === value);
-}
+export type CsvViewerIntent = 'open-csv' | 'reopen-csv' | 'export-csv' | 'close-tab';
 
 /**
  * Genuine differences between runtimes, stated up front rather than discovered through failures.
@@ -484,120 +320,38 @@ export type CsvViewerCapabilities = {
   warnOnPageUnload: boolean;
 };
 
+/** The result of each operation. `csv-viewer-requests.ts` defines each operation's request. */
 export type CsvViewerOperationMap = {
-  'csv.open': {
-    /** Omit sourceId to show the picker; otherwise open a source reserved by the runtime. */
-    request: { sourceId?: CsvSourceId; options?: CsvDialectOptions };
-    result: OpenCsvResult;
-  };
-  'csv.open-recent': {
-    request: { sourceId: CsvSourceId; options?: CsvDialectOptions };
-    result: OpenCsvResult;
-  };
-  'csv.reopen': {
-    request: { workingCsvId: WorkingCsvId; options?: CsvDialectOptions };
-    result: OpenCsvResult;
-  };
-  'csv.get-recent-sources': {
-    request: Record<never, never>;
-    result: RecentCsvSource[];
-  };
-  'csv.get-rows': {
-    request: CsvRowWindowRequest;
-    result: CsvRowWindow;
-  };
-  'csv.get-column-values': {
-    request: CsvColumnValuesRequest;
-    result: CsvColumnValues;
-  };
-  'csv.get-column-value-counts': {
-    request: CsvColumnValueCountsRequest;
-    result: CsvColumnValueCounts;
-  };
-  'csv.edit-cell': {
-    request: CsvCellEditRequest;
-    result: CsvCellEditResult;
-  };
-  'csv.delete-rows': {
-    request: CsvDeleteRowsRequest;
-    result: CsvEditState;
-  };
-  'csv.insert-row': {
-    request: CsvInsertRowRequest;
-    result: CsvEditState;
-  };
-  'csv.rename-column': {
-    request: CsvRenameColumnRequest;
-    result: CsvSchemaEditState;
-  };
-  'csv.insert-column': {
-    request: CsvInsertColumnRequest;
-    result: CsvSchemaEditState;
-  };
-  'csv.delete-column': {
-    request: CsvDeleteColumnRequest;
-    result: CsvSchemaEditState;
-  };
-  'csv.get-edit-state': {
-    request: CsvEditStateRequest;
-    result: CsvEditState;
-  };
-  'csv.undo': {
-    request: CsvEditStateRequest;
-    result: CsvSchemaEditState;
-  };
-  'csv.redo': {
-    request: CsvEditStateRequest;
-    result: CsvSchemaEditState;
-  };
-  'csv.export': {
-    request: CsvExportRequest;
-    result: CsvExportOutcome;
-  };
-  'csv.close': {
-    request: CloseWorkingCsvRequest;
-    result: CloseWorkingCsvOutcome;
-  };
-  'comparison.get-candidates': {
-    request: { baselineId: WorkingCsvId };
-    result: ComparisonCandidate[];
-  };
-  'comparison.open': {
-    request: OpenComparisonRequest;
-    result: OpenComparisonResult;
-  };
-  'comparison.begin': {
-    request: BeginComparisonRequest;
-    result: BeginComparisonResult;
-  };
-  'comparison.cancel': {
-    request: CancelComparisonRequest;
-    result: CancelComparisonResult;
-  };
-  'comparison.get-window': {
-    request: ComparisonWindowRequest;
-    result: ComparisonWindowOutcome;
-  };
-  'comparison.swap': {
-    request: { comparisonId: ComparisonId };
-    result: ComparisonMutationOutcome;
-  };
-  'comparison.close': {
-    request: { comparisonId: ComparisonId };
-    result: CloseComparisonResult;
-  };
+  'csv.open': OpenCsvResult;
+  'csv.open-recent': OpenCsvResult;
+  'csv.reopen': OpenCsvResult;
+  'csv.get-recent-sources': RecentCsvSource[];
+  'csv.get-rows': CsvRowWindow;
+  'csv.get-column-values': CsvColumnValues;
+  'csv.get-column-value-counts': CsvColumnValueCounts;
+  'csv.edit-cell': CsvCellEditResult;
+  'csv.delete-rows': CsvEditState;
+  'csv.insert-row': CsvEditState;
+  'csv.rename-column': CsvSchemaEditState;
+  'csv.insert-column': CsvSchemaEditState;
+  'csv.delete-column': CsvSchemaEditState;
+  'csv.get-edit-state': CsvEditState;
+  'csv.undo': CsvSchemaEditState;
+  'csv.redo': CsvSchemaEditState;
+  'csv.export': CsvExportOutcome;
+  'csv.close': CloseWorkingCsvOutcome;
+  'comparison.get-candidates': ComparisonCandidate[];
+  'comparison.open': OpenComparisonResult;
+  'comparison.begin': BeginComparisonResult;
+  'comparison.cancel': CancelComparisonResult;
+  'comparison.get-window': ComparisonWindowOutcome;
+  'comparison.swap': ComparisonMutationOutcome;
+  'comparison.close': CloseComparisonResult;
 };
-
-/** One structured-clone-safe request for every operation available through CSV Viewer. */
-export type CsvViewerRequest = {
-  [Operation in keyof CsvViewerOperationMap]: {
-    operation: Operation;
-  } & CsvViewerOperationMap[Operation]['request'];
-}[keyof CsvViewerOperationMap];
 
 /** Distributes over `Request`, so a caller holding a union of requests gets the union of results. */
 export type CsvViewerResult<Request extends CsvViewerRequest> = Request extends CsvViewerRequest
-  ? CsvViewerOperationMap[Request['operation']]['result']
+  ? CsvViewerOperationMap[Request['operation']]
   : never;
 
 export type CsvViewerEvent =
@@ -609,22 +363,4 @@ export interface CsvViewer {
   readonly capabilities: CsvViewerCapabilities;
   call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>>;
   onEvent(listener: (event: CsvViewerEvent) => void): () => void;
-}
-
-export type CsvViewerTransportValue =
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | CsvViewerTransportValue[]
-  | { [key: string]: CsvViewerTransportValue };
-
-export type CsvViewerRequestPayload = CsvViewerTransportValue;
-
-/** Validates the transport envelope. CsvViewer rejects unknown operation names in its dispatcher. */
-export function isCsvViewerRequestEnvelope(value: CsvViewerRequestPayload): value is { operation: string } {
-  if (!(value instanceof Object) || Array.isArray(value)) return false;
-  const operation = Object.getOwnPropertyDescriptor(value, 'operation')?.value;
-  return Object.prototype.toString.call(operation) === '[object String]';
 }

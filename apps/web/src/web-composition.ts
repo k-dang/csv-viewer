@@ -110,9 +110,16 @@ class WebCsvViewerSession implements CsvWorkspaceOwner {
     return this.workspace.capabilities;
   }
 
-  call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>> {
+  call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>>;
+  call(request: CsvViewerRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
+    return this.receive(request);
+  }
+
+  // The wrapped workspace decodes the payload.
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters
+  receive(payload: unknown): Promise<CsvViewerResult<CsvViewerRequest>> {
     if (this.fatalEvent) return Promise.reject(workspaceStoppedError());
-    return this.workspace.call(request);
+    return this.workspace.receive(payload);
   }
 
   onEvent(listener: (event: CsvViewerEvent) => void): () => void {

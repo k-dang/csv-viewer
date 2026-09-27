@@ -38,6 +38,30 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose(); }
     });
 
+    it('records malformed requests under one fixed stage without request content', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const workingCsvId = crypto.randomUUID();
+        const malformed = [
+          { operation: 'PRIVATE-OPERATION', workingCsvId, value: 'PRIVATE-VALUE' },
+          { operation: 'csv.edit-cell', workingCsvId, rowId: 'PRIVATE-ROW', column: 'PRIVATE-COLUMN', value: 42 },
+        ];
+        for (const request of malformed) {
+          // SAFETY: Each payload is deliberately outside the public request union.
+          await expect(fixture.viewer.call(request as never)).rejects.toThrow(/^Malformed CSV Viewer request\.$/);
+        }
+
+        const records = capture.completed();
+        expect(records.map((record) => [record.message, record.annotations.outcome])).toEqual([
+          ['csv-viewer.request', 'malformed-request'],
+          ['csv-viewer.request', 'malformed-request'],
+        ]);
+        for (const record of records) expect(record.annotations).not.toHaveProperty('workingCsvId');
+        for (const secret of ['PRIVATE', workingCsvId, 'csv.edit-cell']) expect(capture.logs.join('')).not.toContain(secret);
+      } finally { await fixture.dispose(); }
+    });
+
     it('reports unexpected source-description failures as defects during open and reopen', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);

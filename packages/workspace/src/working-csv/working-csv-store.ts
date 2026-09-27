@@ -1,5 +1,5 @@
 import { DataEngineError } from '../database';
-import { Cause, Deferred, Effect, Exit, Latch, type Scope } from 'effect';
+import { Cause, Deferred, Effect, Exit, Latch, type Scope, type Types } from 'effect';
 import { markCleanupFailed, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
 import { databaseEffect } from '../comparison/comparison-effects';
 import { attemptWorkspacePromise, attemptWorkspaceSync, toError, WorkspaceRequestError } from '../errors';
@@ -383,9 +383,7 @@ export class WorkingCsvStore {
 
   getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, Error> {
     return this.read(request.workingCsvId, async (state) => {
-      const offset = validateWindowInteger(request.offset, 'offset');
-      const limit = validateWindowInteger(request.limit, 'limit');
-
+      const { offset, limit } = request;
       if (limit > maxRowWindowLimit) {
         throw new WorkspaceRequestError({ message: `Row window limit must be ${maxRowWindowLimit} or less.` });
       }
@@ -991,7 +989,7 @@ function buildWorkingCsvView(state: WorkingCsvState): WorkingCsvView {
 }
 
 function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
-  const dialect: CsvDialectOptions = {};
+  const dialect: Types.Mutable<CsvDialectOptions> = {};
 
   if (options.delimiter !== undefined && options.delimiter !== '') {
     if (options.delimiter.length !== 1) {
@@ -1013,14 +1011,6 @@ function isSupportedCsvSourceName(name: string): boolean {
   return supportedCsvFileExtensions.some((extension) => lowerCaseName.endsWith(`.${extension}`));
 }
 
-function validateWindowInteger(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new WorkspaceRequestError({ message: `Row window ${label} must be a non-negative integer.` });
-  }
-
-  return value;
-}
-
 function buildWorkingCsvTableName(physicalTableId: string): string {
   return `${workingCsvTablePrefix}${physicalTableId.replaceAll('-', '_')}`;
 }
@@ -1037,7 +1027,7 @@ function isDeclaredOpenFailure(cause: Cause.Cause<unknown>): boolean {
   return cause.reasons.length === 1 && cause.reasons[0]._tag === 'Fail' && cause.reasons[0].error instanceof CsvOpenError;
 }
 
-function normalizeRowIds(rowIds: string[]): string[] {
+function normalizeRowIds(rowIds: readonly string[]): string[] {
   const normalizedRowIds = rowIds.map((rowId) => rowId.trim()).filter((rowId) => rowId.length > 0);
   return [...new Set(normalizedRowIds)];
 }

@@ -20,8 +20,8 @@ export function buildDialectOptions(
     return 'Delimiter must be one character, or blank for automatic detection.';
   }
 
-  const options: CsvDialectOptions = {};
-  if (normalizedDelimiter) options.delimiter = normalizedDelimiter;
-  if (headerMode !== 'auto') options.header = headerMode === 'yes';
-  return options;
+  return {
+    delimiter: normalizedDelimiter || undefined,
+    header: headerMode === 'auto' ? undefined : headerMode === 'yes',
+  };
 }

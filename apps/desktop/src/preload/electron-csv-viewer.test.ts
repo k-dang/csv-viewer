@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ipcChannels } from '../ipc-channels';
-import {
-  createElectronCsvViewer,
-  type CsvViewerEventPayload,
-  type CsvViewerIpcRenderer,
-} from './electron-csv-viewer';
+import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
+import { createElectronCsvViewer, type CsvViewerIpcRenderer } from './electron-csv-viewer';
 
 describe('Electron CsvViewer proxy', () => {
   it('carries requests and results unchanged', async () => {
@@ -18,8 +15,8 @@ describe('Electron CsvViewer proxy', () => {
     expect(invoke).toHaveBeenCalledWith(ipcChannels.request, request);
   });
 
-  it('validates events and removes the exact listener on unsubscribe', () => {
-    let listener: ((event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => void) | undefined;
+  it('forwards events and removes the exact listener on unsubscribe', () => {
+    let listener: ((ipcEvent: Electron.IpcRendererEvent, event: CsvViewerEvent) => void) | undefined;
     const on = vi.fn((_channel, registered) => {
       listener = registered;
     });
@@ -30,24 +27,11 @@ describe('Electron CsvViewer proxy', () => {
 
     const unsubscribe = viewer.onEvent(received);
     if (!listener) throw new Error('Event listener was not registered.');
-    // SAFETY: The proxy ignores the Electron event object; this test drives only the payload parser.
-    const event = {} as Electron.IpcRendererEvent;
-    listener(event, { type: 'intent', intent: 'open-csv' });
-    listener(event, { type: 'intent', intent: 'unknown' });
-    listener(event, { type: 'comparison', event: { kind: 'changed' } });
-    listener(event, { type: 'comparison', event: { kind: 'closed' } });
-    listener(
-      event,
-      { type: 'comparison', event: { kind: 'closed', comparisonId: 'comparison-1' } },
-    );
+    // SAFETY: The proxy ignores the Electron event object.
+    listener({} as Electron.IpcRendererEvent, { type: 'intent', intent: 'open-csv' });
     unsubscribe();
 
-    expect(received).toHaveBeenCalledTimes(2);
-    expect(received).toHaveBeenNthCalledWith(1, { type: 'intent', intent: 'open-csv' });
-    expect(received).toHaveBeenNthCalledWith(2, {
-      type: 'comparison',
-      event: { kind: 'closed', comparisonId: 'comparison-1' },
-    });
+    expect(received).toHaveBeenCalledExactlyOnceWith({ type: 'intent', intent: 'open-csv' });
     expect(removeListener).toHaveBeenCalledWith(ipcChannels.event, listener);
   });
 });
