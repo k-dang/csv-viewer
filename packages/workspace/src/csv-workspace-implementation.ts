@@ -412,16 +412,15 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   /**
-   * Settles Comparisons and releases the Working CSV tables, then closes the runtime scope even if
-   * that failed, which releases the database. Finalizers cannot fail, so the
+   * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
+   * the runtime scope to release the database. Finalizers cannot fail, so the
    * database release outcome is read from `databaseRelease` rather than from closing the scope.
    */
   private disposeWorkspace(): Promise<void> {
     return this.runEffect(Effect.gen({ self: this }, function* () {
-      const released = yield* Effect.exit(Effect.gen({ self: this }, function* () {
-        yield* observeStage('comparison.dispose', this.comparisonStore.dispose());
-        yield* observeStage('workspace.release-csvs', this.csvStore.disposeStore());
-      }));
+      const comparisonsReleased = yield* Effect.exit(observeStage('comparison.dispose', this.comparisonStore.dispose()));
+      const csvsReleased = yield* Effect.exit(observeStage('workspace.release-csvs', this.csvStore.disposeStore()));
+      const released = Exit.asVoidAll([comparisonsReleased, csvsReleased]);
       yield* Scope.close(this.scope, Exit.void);
       if (!this.databaseRelease.failed) return yield* released;
       yield* markCleanupFailed;

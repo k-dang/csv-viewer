@@ -422,6 +422,53 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose().catch(() => undefined); }
     });
 
+    it.each([false, true])('drains admitted CSV reads after Comparison cleanup fails (CSV cleanup failure: %s)', async (failCsvCleanup) => {
+      const releaseStarted = Promise.withResolvers<void>();
+      const capture = diagnosticCapture((record) => {
+        if (record.annotations.outcome === 'started'
+          && (record.message === 'workspace.release-csvs' || record.message === 'workspace.release-database')) {
+          releaseStarted.resolve();
+        }
+      });
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const { comparisonId, baselineId } = await prepareComparison(fixture);
+        const started = await fixture.viewer.call({ operation: 'comparison.begin', comparisonId, kind: 'apply-key', key: ['id'] });
+        if (started.status !== 'accepted') throw new Error('Not accepted');
+        expect((await fixture.awaitComparisonOutcome(started.operationId)).status).toBe('applied');
+        await fixture.failNextSnapshotDrop();
+        if (failCsvCleanup) fixture.failNextTableDrop();
+        const hold = fixture.holdNextRowRead();
+        const reading = fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId: baselineId, offset: 0, limit: 10 });
+        await hold.entered;
+        const disposal = fixture.disposeWorkspace();
+        const rejection = disposal.then(() => null, (error: Error) => error);
+        try {
+          await releaseStarted.promise;
+          expect(capture.records.some((record) => record.message === 'workspace.release-database')).toBe(false);
+        } finally {
+          hold.release();
+          await Promise.allSettled([reading, disposal]);
+        }
+        await expect(reading).resolves.toMatchObject({ filteredRowCount: 1, rows: [{ id: '1', value: 'PRIVATE-CELL' }] });
+        expect(await rejection).toMatchObject({ message: failCsvCleanup
+          ? 'The CSV workspace could not complete the request.'
+          : 'The data engine could not complete the operation.' });
+        await expect(fixture.disposeWorkspace()).rejects.toBe(await rejection);
+        const records = capture.completed();
+        expect(records.find((record) => record.message === 'comparison.dispose')?.annotations.outcome).toBe('failed');
+        expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome)
+          .toBe(failCsvCleanup ? 'defect' : 'succeeded');
+        expect(records.filter((record) => record.message === 'workspace.release-database').map((record) => record.annotations.outcome))
+          .toEqual(['succeeded']);
+        const outcome = records.find((record) => record.message === 'workspace.dispose');
+        expect(outcome?.annotations.cleanup).toBe('cleanup-failed');
+        expect(outcome?.annotations.recoverableFailure).toBe(true);
+        expect(outcome?.annotations.defect).toBe(failCsvCleanup);
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose().catch(() => undefined); }
+    });
+
     it('reports a database release failure that follows a table release failure', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);
