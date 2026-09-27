@@ -33,7 +33,7 @@ export function sharedColumnNames(baseline: WorkingCsvView, candidate: WorkingCs
     .filter((column) => candidateColumns.has(column));
 }
 
-export function validateKeySelection(key: string[], available: string[]): ComparisonFault | null {
+export function validateKeySelection(key: readonly string[], available: string[]): ComparisonFault | null {
   if (key.length === 0 || new Set(key).size !== key.length) {
     return fault('invalid-key-shape', 'Choose one or more distinct Comparison Key columns.');
   }

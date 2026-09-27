@@ -1,9 +1,4 @@
-import type {
-  CsvViewer,
-  CsvViewerRequest,
-  CsvViewerTransportValue,
-} from '@csv-viewer/workspace/csv-viewer';
-import { isCsvViewerRequestEnvelope } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { genericWorkspaceFailure, isExpectedWorkspaceError, WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import path from 'node:path';
 import { Schema } from 'effect';
@@ -15,20 +10,18 @@ type CsvViewerIpcMain = {
     channel: string,
     listener: (
       event: Electron.IpcMainInvokeEvent,
-      request: CsvViewerTransportValue,
+      // Renderer payloads are untrusted; each handler decodes its own.
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters
+      payload: unknown,
     ) => Promise<CsvViewerIpcResponse<unknown>>,
   ): void;
 };
 
-/** Registers the single mechanical request bridge from Electron to CsvViewer. */
-export function registerCsvViewerRequestHandler(ipc: CsvViewerIpcMain, viewer: CsvViewer): void {
-  ipc.handle(ipcChannels.request, async (_event, request) => {
-    if (!isCsvViewerRequestEnvelope(request)) {
-      return { ok: false, message: 'Malformed CSV Viewer request.' };
-    }
+/** Registers the single mechanical request bridge from Electron to CsvViewer. The workspace decodes each payload. */
+export function registerCsvViewerRequestHandler(ipc: CsvViewerIpcMain, workspace: Pick<CsvWorkspaceOwner, 'receive'>): void {
+  ipc.handle(ipcChannels.request, async (_event, payload) => {
     try {
-      // SAFETY: The envelope guard establishes an operation string; workspace dispatch owns field validation.
-      return { ok: true, value: await viewer.call(request as CsvViewerRequest) };
+      return { ok: true, value: await workspace.receive(payload) };
     } catch (error) {
       // The shared entry adapter has already translated this request failure.
       return { ok: false, message: error instanceof Error ? error.message : genericWorkspaceFailure };

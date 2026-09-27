@@ -10,7 +10,7 @@ const outcomes = new Set([
   'requested', 'already-requested', 'already-finished', 'operation-mismatch',
   'comparison-not-found', 'result-replaced', 'invalid-key', 'sources-changed',
   'opened', 'already-open', 'revision-changed', 'created', 'existing', 'changed', 'capacity-exceeded',
-  'exported', 'confirmation-required',
+  'exported', 'confirmation-required', 'malformed-request',
   'cancelled', 'failed', 'recoverable-failure', 'defect', 'interrupted', 'cleanup-failed',
 ]);
 const identifiers = new Set(['workspaceId', 'requestId', 'comparisonId', 'operationId', 'baselineId', 'candidateId', 'workingCsvId']);

@@ -18,7 +18,7 @@ type RequestFor<Operation extends keyof CsvViewerOperationMap> = Extract<CsvView
 type TestCsvViewerHandlers = {
   [Operation in keyof CsvViewerOperationMap]?: (
     request: RequestFor<Operation>,
-  ) => Promise<CsvViewerOperationMap[Operation]['result']>;
+  ) => Promise<CsvViewerOperationMap[Operation]>;
 };
 
 type TestCsvViewerOverrides = {
@@ -29,10 +29,10 @@ type TestCsvViewerOverrides = {
 
 /** A minimal CsvViewer for renderer tests. Tests stub only the protocol calls they exercise. */
 export function createTestCsvViewer(overrides: TestCsvViewerOverrides = {}): CsvViewer {
-  const dispatch = (request: CsvViewerRequest): Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]['result']> => {
+  const dispatch = (request: CsvViewerRequest): Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]> => {
     // SAFETY: The mapped handlers bind each operation to its exact request and result pair.
     const handler = overrides.handlers?.[request.operation] as
-      | ((request: CsvViewerRequest) => Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]['result']>)
+      | ((request: CsvViewerRequest) => Promise<CsvViewerOperationMap[keyof CsvViewerOperationMap]>)
       | undefined;
     if (!handler) {
       throw new Error(`${request.operation} was called but is not stubbed in this test.`);

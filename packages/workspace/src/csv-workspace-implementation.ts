@@ -7,21 +7,20 @@ import type { WorkspaceDatabase } from './database';
 import type { CsvComparisonService } from './comparison/csv-comparison-service';
 import type { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
-import { attemptWorkspacePromise, genericWorkspaceFailure, isExpectedWorkspaceError, WorkspaceRequestError } from './errors';
+import type { CsvWorkspaceOwner } from './csv-workspace';
+import { attemptWorkspacePromise, genericWorkspaceFailure, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError } from './errors';
+import { CloseImpact, CsvViewerRequest } from './csv-viewer-requests';
 import type {
   BeginComparisonResult,
   BeginComparisonRequest,
-  CloseImpact,
   CloseWorkingCsvOutcome,
   CloseWorkingCsvRequest,
   ComparisonId,
   CsvDialectOptions,
   CsvExportOutcome,
   CsvSourceId,
-  CsvViewerRequest,
   CsvViewerEvent,
   CsvViewerResult,
-  CsvViewer,
   OpenCsvResult,
   WorkingCsvId,
   WorkingCsvView,
@@ -40,6 +39,9 @@ const RequestIdentifiers = Schema.Struct({
   candidateId: Schema.optional(Schema.String),
 });
 const ProductResult = Schema.Struct({ status: Schema.String });
+const decodeRequest = Schema.decodeUnknownOption(CsvViewerRequest);
+const decodeIdentifiers = Schema.decodeUnknownOption(RequestIdentifiers);
+const sameCloseImpact = Schema.toEquivalence(CloseImpact);
 
 /**
  * The one shared, runtime-neutral domain seam. Every operation is asynchronous and every request,
@@ -47,7 +49,7 @@ const ProductResult = Schema.Struct({ status: Schema.String });
  * up in the page. Everything below it - the Working CSV store, edit history, query construction,
  * comparison orchestration, and database access - is internal implementation.
  */
-export class CsvWorkspaceImplementation implements CsvViewer {
+export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   private readonly csvStore: WorkingCsvStore;
   private readonly comparisonStore: CsvComparisonService;
   private readonly workspaceId = crypto.randomUUID();
@@ -72,9 +74,23 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>>;
-  async call(request: CsvViewerRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
-    const identifiers = Option.getOrElse(Schema.decodeUnknownOption(RequestIdentifiers)(request), () => ({}));
-    return this.runEffect(this.handle(request), request.operation, identifiers);
+  call(request: CsvViewerRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
+    return this.receive(request);
+  }
+
+  /**
+   * Decodes an untrusted payload, then dispatches it. A malformed payload never names a span or
+   * log: it records the fixed `csv-viewer.request` stage and rejects with one fixed message.
+   */
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters
+  receive(payload: unknown): Promise<CsvViewerResult<CsvViewerRequest>> {
+    const request = decodeRequest(payload);
+    if (Option.isNone(request)) {
+      const malformed = Effect.fail(new WorkspaceRequestError({ message: malformedRequestMessage }));
+      return this.runEffect(malformed, 'csv-viewer.request', {}, 'malformed-request');
+    }
+    const identifiers = Option.getOrElse(decodeIdentifiers(request.value), () => ({}));
+    return this.runEffect(this.handle(request.value), request.value.operation, identifiers);
   }
 
   private handle(request: CsvViewerRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, Error> {
@@ -144,8 +160,6 @@ export class CsvWorkspaceImplementation implements CsvViewer {
         return Effect.suspend(() => this.comparisonStore.getState(request.comparisonId)
           ? this.comparisonStore.close(request.comparisonId)
           : Effect.succeed({ status: 'closed', comparisonId: request.comparisonId } as const));
-      default:
-        return unsupportedOperation(request);
     }
   }
 
@@ -155,12 +169,17 @@ export class CsvWorkspaceImplementation implements CsvViewer {
    * services but outside the workspace scope: disposal settles admitted work by its own rules
    * rather than interrupting it. When operation and cleanup both fail, all causes are retained.
    */
-  private async runEffect<A, E>(effect: Effect.Effect<A, E>, stage: string, identifiers: typeof RequestIdentifiers.Type = {}): Promise<A> {
+  private async runEffect<A, E>(
+    effect: Effect.Effect<A, E>,
+    stage: string,
+    identifiers: typeof RequestIdentifiers.Type = {},
+    failureOutcome: 'failed' | 'malformed-request' = 'failed',
+  ): Promise<A> {
     const cleanup = { failed: false };
     const cleanupResult = () => cleanup.failed ? 'cleanup-failed' : 'succeeded';
     const observed = observeStage(stage, effect.pipe(
       Effect.onExit((exit) => Exit.isFailure(exit)
-        ? recordOutcome('failed', exit.cause, cleanupResult())
+        ? recordOutcome(failureOutcome, exit.cause, cleanupResult())
         : Effect.annotateCurrentSpan({
             outcome: Schema.is(ProductResult)(exit.value) ? exit.value.status : 'succeeded',
             cleanup: cleanupResult(),
@@ -280,7 +299,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       return yield* Effect.gen({ self: this }, function* () {
         yield* this.csvStore.waitForActiveWork(workingCsvId);
         const impact = yield* this.closeImpact(workingCsvId);
-        if (requiresConfirmation(impact) && !sameImpact(impact, confirmedImpact)) {
+        if (requiresConfirmation(impact) && !(confirmedImpact && sameCloseImpact(impact, confirmedImpact))) {
           return { status: 'confirmation-required', impact } satisfies CloseWorkingCsvOutcome;
         }
         const closedComparisonIds = impact.dependentComparisons.map((comparison) => comparison.comparisonId);
@@ -306,7 +325,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
     return this.runEffect(Effect.gen({ self: this }, function* () {
       const impact = yield* this.windowCloseImpact();
-      if (requiresWorkspaceConfirmation(impact) && !sameImpact(impact, confirmedImpact)) {
+      if (requiresWorkspaceConfirmation(impact) && !sameWorkspaceCloseImpact(impact, confirmedImpact)) {
         return { status: 'confirmation-required', impact } satisfies ConfirmWorkspaceCloseOutcome;
       }
       return { status: 'ready' } satisfies ConfirmWorkspaceCloseOutcome;
@@ -396,15 +415,10 @@ function requiresWorkspaceConfirmation(impact: WorkspaceCloseImpact): boolean {
 }
 
 /**
- * Both impacts are deterministically ordered value objects, so comparing their serialized form
- * answers the only question that matters: did the user confirm exactly this impact, or has it
- * changed since we asked? Anything unrecognised compares unequal, which re-prompts.
+ * The impact is a deterministically ordered value object that never crosses a decoder, so
+ * comparing its serialized form answers the only question that matters: did the owner confirm
+ * exactly this impact, or has it changed since we asked? Anything unrecognised re-prompts.
  */
-function sameImpact<T extends CloseImpact | WorkspaceCloseImpact>(current: T, confirmed: T | undefined): boolean {
+function sameWorkspaceCloseImpact(current: WorkspaceCloseImpact, confirmed: WorkspaceCloseImpact | undefined): boolean {
   return confirmed !== undefined && JSON.stringify(current) === JSON.stringify(confirmed);
-}
-
-function unsupportedOperation(request: never): never {
-  const operation = Object.getOwnPropertyDescriptor(request, 'operation')?.value;
-  throw new Error(`Unsupported CSV Viewer operation: ${String(operation)}`);
 }

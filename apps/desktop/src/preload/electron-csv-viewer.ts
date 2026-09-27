@@ -3,14 +3,10 @@ import type {
   CsvViewerEvent,
   CsvViewerRequest,
   CsvViewerResult,
-  CsvViewerTransportValue,
 } from '@csv-viewer/workspace/csv-viewer';
-import { isCsvViewerIntent } from '@csv-viewer/workspace/csv-viewer';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import { ipcChannels } from '../ipc-channels';
 import { unwrapCsvViewerIpcResponse, type CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
-
-export type CsvViewerEventPayload = CsvViewerTransportValue;
 
 export type CsvViewerIpcRenderer = {
   invoke<Request extends CsvViewerRequest>(
@@ -19,11 +15,11 @@ export type CsvViewerIpcRenderer = {
   ): Promise<CsvViewerIpcResponse<CsvViewerResult<Request>>>;
   on(
     channel: string,
-    listener: (event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => void,
+    listener: (ipcEvent: Electron.IpcRendererEvent, event: CsvViewerEvent) => void,
   ): void;
   removeListener(
     channel: string,
-    listener: (event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => void,
+    listener: (ipcEvent: Electron.IpcRendererEvent, event: CsvViewerEvent) => void,
   ): void;
 };
 
@@ -35,32 +31,9 @@ export function createElectronCsvViewer(
     capabilities: electronCsvViewerCapabilities,
     call: async (request) => unwrapCsvViewerIpcResponse(await ipc.invoke(ipcChannels.request, request)),
     onEvent: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, value: CsvViewerEventPayload) => {
-        if (isCsvViewerEvent(value)) callback(value);
-      };
+      const listener = (_ipcEvent: Electron.IpcRendererEvent, event: CsvViewerEvent) => callback(event);
       ipc.on(ipcChannels.event, listener);
       return () => ipc.removeListener(ipcChannels.event, listener);
     },
   };
-}
-
-/** The main process owns event payloads. Check their routing fields before trusting that channel. */
-function isCsvViewerEvent(value: CsvViewerEventPayload): value is CsvViewerEvent {
-  if (!(value instanceof Object) || Array.isArray(value)) return false;
-  const type = Object.getOwnPropertyDescriptor(value, 'type')?.value;
-  if (type === 'intent') {
-    const intent = Object.getOwnPropertyDescriptor(value, 'intent')?.value;
-    return isCsvViewerIntent(intent);
-  }
-  if (type !== 'comparison') return false;
-
-  const event = Object.getOwnPropertyDescriptor(value, 'event')?.value;
-  if (!(event instanceof Object)) return false;
-  const kind = Object.getOwnPropertyDescriptor(event, 'kind')?.value;
-  if (kind === 'closed') {
-    const comparisonId = Object.getOwnPropertyDescriptor(event, 'comparisonId')?.value;
-    return Object.prototype.toString.call(comparisonId) === '[object String]';
-  }
-  const comparison = Object.getOwnPropertyDescriptor(event, 'comparison')?.value;
-  return kind === 'changed' && comparison instanceof Object;
 }

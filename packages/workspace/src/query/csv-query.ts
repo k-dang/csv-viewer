@@ -1,9 +1,12 @@
 import type {
   CsvCellValue,
   CsvColumn,
+  CsvDateFilterOperator,
   CsvDialectOptions,
   CsvFilterDescriptor,
+  CsvNumberFilterOperator,
   CsvSortDescriptor,
+  CsvTextFilterOperator,
 } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
 import { WorkspaceRequestError } from '../errors';
@@ -182,9 +185,9 @@ export function buildRowsQuery({
 }: {
   tableName: string;
   columns: CsvColumn[];
-  filters: CsvFilterDescriptor[];
+  filters: readonly CsvFilterDescriptor[];
   search: string;
-  sort: CsvSortDescriptor[];
+  sort: readonly CsvSortDescriptor[];
   limit: number;
   offset: number;
 }) {
@@ -214,9 +217,9 @@ export function buildColumnValuesQuery({
   tableName: string;
   columns: CsvColumn[];
   column: string;
-  filters: CsvFilterDescriptor[];
+  filters: readonly CsvFilterDescriptor[];
   search: string;
-  sort: CsvSortDescriptor[];
+  sort: readonly CsvSortDescriptor[];
 }): CsvStatement {
   const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
   assertKnownColumn(column, knownColumns);
@@ -238,7 +241,7 @@ export function buildColumnValueCountsQuery({
   tableName: string;
   columns: CsvColumn[];
   column: string;
-  filters: CsvFilterDescriptor[];
+  filters: readonly CsvFilterDescriptor[];
   search: string;
 }) {
   assertKnownColumn(column, new Set(columns.map((knownColumn) => knownColumn.name)));
@@ -280,7 +283,7 @@ function buildCountScopeWhere({
   search,
 }: {
   columns: CsvColumn[];
-  filters: CsvFilterDescriptor[];
+  filters: readonly CsvFilterDescriptor[];
   search: string;
 }) {
   const knownColumns = new Set(columns.map((column) => column.name));
@@ -293,7 +296,7 @@ function buildCountScopeWhere({
 }
 
 /** The grid's sort, else source order, so every query over the row window agrees on row order. */
-function buildOrderSql(sort: CsvSortDescriptor[], knownColumns: Set<string>): string {
+function buildOrderSql(sort: readonly CsvSortDescriptor[], knownColumns: Set<string>): string {
   const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
   return orderClauses.length > 0
     ? ` ORDER BY ${orderClauses.join(', ')}`
@@ -372,7 +375,7 @@ function buildFilterClause(
 
 function buildTextFilterClause(
   columnSql: string,
-  operator: Extract<CsvFilterDescriptor, { kind: 'text' }>['operator'],
+  operator: CsvTextFilterOperator,
   value: string,
   values: QueryValues,
 ): string {
@@ -396,14 +399,12 @@ function buildTextFilterClause(
     case 'endsWith':
       values.push(`%${escapeLike(value)}`);
       return `${textSql} ILIKE ? ESCAPE '\\'`;
-    default:
-      throw new Error(`Unsupported text filter operator: ${operator}`);
   }
 }
 
 function buildScalarFilterClause(
   columnSql: string,
-  operator: string,
+  operator: CsvNumberFilterOperator | CsvDateFilterOperator,
   value: string | number | undefined,
   valueTo: string | number | undefined,
   values: QueryValues,
@@ -433,8 +434,6 @@ function buildScalarFilterClause(
     case 'inRange':
       values.push(textValue, textValueTo);
       return `${textSql} BETWEEN ? AND ?`;
-    default:
-      throw new Error(`Unsupported scalar filter operator: ${operator}`);
   }
 }
 
