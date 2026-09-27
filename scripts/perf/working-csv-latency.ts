@@ -4,34 +4,995 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  FIXTURES,
-  START_EVENT,
-  UsageError,
-  VIEWPORT,
-  formatReport,
-  launchSteps,
-  parseSession,
-  planRun,
-} from './latency-plan.ts';
-import type {
-  Field,
-  FixtureName,
-  LaunchPlan,
-  LaunchStep,
-  MachineFacts,
-  PathName,
-  RawTimeline,
-  Runtime,
-  Sample,
-  SamplePlan,
-  Step,
-  Target,
-  UserInput,
-  ViewportSize,
-} from './latency-plan.ts';
-import { SAMPLE_TIMEOUT_MS, attachProbe } from './page-probe.ts';
-import type { Probe, ViewportPoint } from './page-probe.ts';
+import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+
+export const PATHS = [
+  'open',
+  'sort',
+  'filter',
+  'search',
+  'edit-cell',
+  'insert-column',
+  'delete-column',
+  'rename-column',
+] as const;
+export type PathName = (typeof PATHS)[number];
+
+export const RUNTIMES = ['desktop', 'web'] as const;
+export type Runtime = (typeof RUNTIMES)[number];
+
+export type Phase = 'cold' | 'warm';
+
+/** `web-dev` is the Vite dev server, so those rows are development React under StrictMode. */
+const RUNTIME_LABEL = { desktop: 'desktop-prod', web: 'web-dev' } as const satisfies Record<Runtime, string>;
+
+export type Session = 'local' | 'ci';
+export type Environment = { os: NodeJS.Platform; session: Session };
+
+export const VIEWPORT = { width: 1440, height: 900 } as const;
+export type ViewportSize = { width: number; height: number };
+
+/**
+ * What a fixture shows in the grid. The shell checks `sha256` of the file bytes before any launch.
+ * Every sample checks the rest on screen, so a changed fixture fails the run.
+ */
+export type Fixture = {
+  file: `fixtures/${string}.csv`;
+  bytes: number;
+  sha256: string;
+  rows: number;
+  columns: number;
+  /** `name` in data row 0, unsorted. */
+  firstName: string;
+  /** `name` in data row 1, unsorted and after one ascending sort on `name`. */
+  secondName: { unsorted: string; ascending: string };
+  /** A term that matches exactly one row, both as a `name` contains filter and as a global search. */
+  needle: { term: string; name: string };
+  /** `email` in data row 0, unsorted. */
+  firstEmail: string;
+};
+
+const FIXTURE_NAMES = ['phase-2-sample', 'large-phase-3-test'] as const;
+
+export const FIXTURES = {
+  'phase-2-sample': {
+    file: 'fixtures/phase-2-sample.csv',
+    bytes: 656,
+    sha256: '11c9574936c742b604f7ed8ced895112fee76f2504701cc3550a43e7627e4e06',
+    rows: 5,
+    columns: 10,
+    firstName: 'Ada Lovelace',
+    secondName: { unsorted: 'Grace Hopper', ascending: 'Dorothy Vaughan' },
+    needle: { term: 'Grace', name: 'Grace Hopper' },
+    firstEmail: 'ada@example.com',
+  },
+  'large-phase-3-test': {
+    file: 'fixtures/large-phase-3-test.csv',
+    bytes: 28_858_844,
+    sha256: 'a7d18e7d71182bcd4e254b64e13640b828c29a93867174f4fe485099d9f06a5a',
+    rows: 100_000,
+    columns: 14,
+    firstName: 'Person 1',
+    secondName: { unsorted: 'Person 2', ascending: 'Person 10' },
+    needle: { term: 'Person 99999', name: 'Person 99999' },
+    firstEmail: 'person1@example.test',
+  },
+} as const satisfies Record<(typeof FIXTURE_NAMES)[number], Fixture>;
+export type FixtureName = keyof typeof FIXTURES;
+
+/**
+ * Something the page shows. `querying` and `ready` are edges after the input.
+ * `ready` is the return from Querying to Ready, so the idle Ready text cannot stop a clock.
+ */
+export type Mark =
+  | { kind: 'querying' }
+  | { kind: 'ready' }
+  | { kind: 'dirty' }
+  | { kind: 'clean' }
+  | { kind: 'title'; text: string }
+  | { kind: 'cell'; row: number; column: string; text: string }
+  | { kind: 'count'; visible: number; total: number }
+  | { kind: 'columns'; count: number }
+  | { kind: 'header'; column: string; state: 'shown' | 'gone' }
+  | { kind: 'visible'; target: Target }
+  | { kind: 'empty-window' };
+export type MarkKind = Mark['kind'];
+
+export type ReportedInterval = {
+  from: 'input' | 'querying';
+  to: MarkKind;
+  includes?: 'filter debounce';
+};
+
+export type Field = 'search' | 'filter-input' | 'cell-editor' | 'column-name';
+export type MenuItem = 'Rename column' | 'Insert column left' | 'Delete column';
+
+export type Target =
+  | { kind: 'header-label' | 'filter-button'; column: string }
+  | { kind: 'cell'; row: number; column: string }
+  | { kind: 'menu-item'; label: MenuItem }
+  | { kind: 'close-tab'; file: string }
+  | { kind: 'undo' | 'clear-query' }
+  | { kind: 'field'; field: Field };
+
+export type UserInput =
+  | { kind: 'drop'; file: Fixture['file'] }
+  | { kind: 'click' | 'double-click' | 'right-click'; target: Target }
+  | { kind: 'fill'; field: Field; text: string }
+  | { kind: 'key'; key: 'Enter' | 'Escape' };
+
+export type StartEvent = 'drop' | 'click' | 'dblclick' | 'contextmenu' | 'input' | 'keydown';
+
+export const START_EVENT = {
+  drop: 'drop',
+  click: 'click',
+  'double-click': 'dblclick',
+  'right-click': 'contextmenu',
+  fill: 'input',
+  key: 'keydown',
+} as const satisfies Record<UserInput['kind'], StartEvent>;
+
+export type Step = { input: UserInput; until: readonly Mark[] };
+
+export type SamplePlan = {
+  startsFrom: readonly Mark[];
+  arrange: readonly Step[];
+  act: UserInput;
+  marks: readonly Mark[];
+  reset: readonly Step[];
+};
+
+type Recipe = {
+  plan(fixture: Fixture): SamplePlan;
+  report: readonly ReportedInterval[];
+};
+
+const querying = { kind: 'querying' } as const;
+const ready = { kind: 'ready' } as const;
+const dirty = { kind: 'dirty' } as const;
+const clean = { kind: 'clean' } as const;
+const cell = (row: number, column: string, text: string) => ({ kind: 'cell', row, column, text }) as const;
+const count = (visible: number, total: number) => ({ kind: 'count', visible, total }) as const;
+const header = (column: string, state: 'shown' | 'gone') => ({ kind: 'header', column, state }) as const;
+const visible = (target: Target) => ({ kind: 'visible', target }) as const;
+const step = (input: UserInput, ...until: Mark[]): Step => ({ input, until });
+const click = (target: Target): UserInput => ({ kind: 'click', target });
+const fileName = (fixture: Fixture) => path.posix.basename(fixture.file);
+const nameHeader = { kind: 'header-label', column: 'name' } as const;
+const undo = (...until: Mark[]) => step(click({ kind: 'undo' }), clean, ...until);
+const emailMenu = (item: MenuItem) =>
+  step({ kind: 'right-click', target: { kind: 'header-label', column: 'email' } }, visible({ kind: 'menu-item', label: item }));
+
+/** A freshly opened fixture. Unsorted, unfiltered, clean, every row visible. */
+const idle = (fixture: Fixture): readonly Mark[] => [
+  clean,
+  cell(0, 'name', fixture.firstName),
+  cell(1, 'name', fixture.secondName.unsorted),
+  count(fixture.rows, fixture.rows),
+  header('email', 'shown'),
+];
+
+/** Rows a cleared filter or search must bring back. Clean and the email header already hold, so they are not stops. */
+const restoredRows = (fixture: Fixture): Mark[] => [
+  cell(0, 'name', fixture.firstName),
+  cell(1, 'name', fixture.secondName.unsorted),
+  count(fixture.rows, fixture.rows),
+];
+
+export const RECIPES = {
+  open: {
+    plan: (fixture) => ({
+      startsFrom: [{ kind: 'empty-window' }],
+      arrange: [],
+      act: { kind: 'drop', file: fixture.file },
+      marks: [
+        { kind: 'title', text: fileName(fixture) },
+        cell(0, 'name', fixture.firstName),
+        count(fixture.rows, fixture.rows),
+        { kind: 'columns', count: fixture.columns },
+      ],
+      // Closing first keeps a warm open from returning already-open on desktop.
+      reset: [step(click({ kind: 'close-tab', file: fileName(fixture) }), { kind: 'empty-window' })],
+    }),
+    // The title lands before the first csv.get-rows, so it is a mark and not a printed row.
+    report: [{ from: 'input', to: 'cell' }],
+  },
+  sort: {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [],
+      act: click(nameHeader),
+      marks: [querying, ready, cell(1, 'name', fixture.secondName.ascending)],
+      reset: [
+        step(click(nameHeader), querying, ready),
+        step(click(nameHeader), querying, ready, cell(1, 'name', fixture.secondName.unsorted)),
+      ],
+    }),
+    report: [
+      { from: 'input', to: 'cell' },
+      { from: 'querying', to: 'ready' },
+    ],
+  },
+  filter: {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [step(click({ kind: 'filter-button', column: 'name' }), visible({ kind: 'field', field: 'filter-input' }))],
+      act: { kind: 'fill', field: 'filter-input', text: fixture.needle.term },
+      marks: [querying, ready, cell(0, 'name', fixture.needle.name), count(1, fixture.rows)],
+      // The filter popup closes when a large grid refreshes, so the input is gone.
+      // Escape is a no-op once it has closed. Clear query restores the unfiltered rows.
+      reset: [
+        step({ kind: 'key', key: 'Escape' }),
+        step(click({ kind: 'clear-query' }), querying, ready, ...restoredRows(fixture)),
+      ],
+    }),
+    report: [
+      { from: 'input', to: 'cell', includes: 'filter debounce' },
+      { from: 'querying', to: 'ready' },
+    ],
+  },
+  search: {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [],
+      act: { kind: 'fill', field: 'search', text: fixture.needle.term },
+      marks: [querying, ready, cell(0, 'name', fixture.needle.name), count(1, fixture.rows)],
+      reset: [step({ kind: 'fill', field: 'search', text: '' }, querying, ready, ...restoredRows(fixture))],
+    }),
+    report: [
+      { from: 'input', to: 'cell' },
+      { from: 'querying', to: 'ready' },
+    ],
+  },
+  'edit-cell': {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [
+        step({ kind: 'double-click', target: { kind: 'cell', row: 0, column: 'name' } }, visible({ kind: 'field', field: 'cell-editor' })),
+        step({ kind: 'fill', field: 'cell-editor', text: `${fixture.firstName} edited` }),
+      ],
+      act: { kind: 'key', key: 'Enter' },
+      marks: [dirty, querying, ready],
+      reset: [undo(querying, ready, cell(0, 'name', fixture.firstName))],
+    }),
+    report: [
+      { from: 'input', to: 'ready' },
+      { from: 'input', to: 'dirty' },
+    ],
+  },
+  'insert-column': {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [emailMenu('Insert column left')],
+      act: click({ kind: 'menu-item', label: 'Insert column left' }),
+      marks: [dirty, header('New column', 'shown'), cell(0, 'New column', '[empty]')],
+      // Undo matters twice: dirty state never reaches close, and the next insert is named "New column" again.
+      reset: [undo(header('New column', 'gone'), querying, ready)],
+    }),
+    report: [
+      { from: 'input', to: 'cell' },
+      { from: 'input', to: 'dirty' },
+    ],
+  },
+  'delete-column': {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [emailMenu('Delete column')],
+      act: click({ kind: 'menu-item', label: 'Delete column' }),
+      marks: [dirty, header('email', 'gone'), querying, ready],
+      reset: [undo(header('email', 'shown'), querying, ready, cell(0, 'email', fixture.firstEmail))],
+    }),
+    report: [
+      { from: 'input', to: 'ready' },
+      { from: 'input', to: 'dirty' },
+    ],
+  },
+  'rename-column': {
+    plan: (fixture) => ({
+      startsFrom: idle(fixture),
+      arrange: [
+        emailMenu('Rename column'),
+        step(click({ kind: 'menu-item', label: 'Rename column' }), visible({ kind: 'field', field: 'column-name' })),
+        step({ kind: 'fill', field: 'column-name', text: 'email_renamed' }),
+      ],
+      act: { kind: 'key', key: 'Enter' },
+      marks: [dirty, header('email_renamed', 'shown'), cell(0, 'email_renamed', fixture.firstEmail)],
+      reset: [undo(header('email', 'shown'), querying, ready)],
+    }),
+    report: [
+      { from: 'input', to: 'cell' },
+      { from: 'input', to: 'dirty' },
+    ],
+  },
+} satisfies Record<PathName, Recipe>;
+
+export type LaunchPlan =
+  | { runtime: 'desktop'; build: 'rebuild' | 'reuse'; fixture: FixtureName; path: PathName; warm: number }
+  | { runtime: 'web'; fixture: FixtureName; path: PathName; warm: number };
+
+export type RawTimeline = { input: number; marks: readonly number[] };
+
+export type Sample = {
+  runtime: Runtime;
+  fixture: FixtureName;
+  path: PathName;
+  phase: Phase;
+  intervals: readonly { label: string; ms: number }[];
+};
+
+export type MachineFacts = {
+  recordedAt: string;
+  commit: string;
+  tree: 'clean' | 'modified';
+  cpu: string;
+  cores: number;
+  memoryGiB: number;
+  loadAverage: number;
+  osRelease: string;
+  node: string;
+  browsers: Partial<Record<Runtime, string>>;
+  command: string;
+};
+
+export class UsageError extends Error {}
+
+const DEFAULT_COLD = 1;
+const DEFAULT_WARM = 3;
+
+export function planRun(argv: readonly string[]): readonly LaunchPlan[] {
+  const flags = parseFlags(argv);
+  const runtimes = choose('runtime', RUNTIMES, flags.runtime);
+  const fixtures = choose('fixture', FIXTURE_NAMES, flags.fixture);
+  const paths = choose('path', PATHS, flags.path);
+  const cold = countFlag('cold', flags.cold, DEFAULT_COLD);
+  const warm = countFlag('warm', flags.warm, DEFAULT_WARM);
+  const launches: LaunchPlan[] = [];
+  let desktopSeen = false;
+  for (const runtime of runtimes) {
+    for (const fixture of fixtures) {
+      for (const pathName of paths) {
+        for (let index = 0; index < cold; index += 1) {
+          launches.push(launchPlan(runtime, fixture, pathName, warm, desktopSeen));
+          if (runtime === 'desktop') desktopSeen = true;
+        }
+      }
+    }
+  }
+  return launches;
+}
+
+type FlagValues = {
+  runtime?: string[];
+  fixture?: string[];
+  path?: string[];
+  cold?: string;
+  warm?: string;
+};
+
+function parseFlags(argv: readonly string[]): FlagValues {
+  try {
+    const parsed = parseArgs({
+      args: [...argv],
+      strict: true,
+      allowPositionals: false,
+      options: {
+        runtime: { type: 'string', multiple: true },
+        fixture: { type: 'string', multiple: true },
+        path: { type: 'string', multiple: true },
+        cold: { type: 'string' },
+        warm: { type: 'string' },
+      },
+    });
+    return parsed.values;
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'Invalid arguments';
+    throw new UsageError(message);
+  }
+}
+
+function choose<Name extends string>(label: string, registry: readonly Name[], chosen: readonly string[] | undefined): readonly Name[] {
+  if (chosen === undefined || chosen.length === 0) return registry;
+  for (const name of chosen) {
+    if (!registry.some((item) => item === name)) {
+      throw new UsageError(`Unknown ${label} "${name}". Valid ${label}s are ${registry.join(', ')}.`);
+    }
+  }
+  return registry.filter((name) => chosen.includes(name));
+}
+
+function countFlag(label: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  if (!/^(?:0|[1-9]\d*)$/.test(raw)) {
+    throw new UsageError(`--${label} must be a non-negative integer.`);
+  }
+  return Number(raw);
+}
+
+function launchPlan(runtime: Runtime, fixture: FixtureName, pathName: PathName, warm: number, desktopSeen: boolean): LaunchPlan {
+  switch (runtime) {
+    case 'desktop':
+      return { runtime, build: desktopSeen ? 'reuse' : 'rebuild', fixture, path: pathName, warm };
+    case 'web':
+      return { runtime, fixture, path: pathName, warm };
+    default: {
+      const unreachable: never = runtime;
+      throw new Error(`Unexpected runtime ${unreachable}`);
+    }
+  }
+}
+
+export function finishSample(launch: LaunchPlan, phase: Phase, raw: RawTimeline): Sample {
+  const plan = RECIPES[launch.path].plan(FIXTURES[launch.fixture]);
+  if (raw.marks.length !== plan.marks.length) {
+    throw new Error(
+      `${launch.runtime} ${launch.fixture} ${launch.path} expected ${plan.marks.length} mark times and got ${raw.marks.length}`,
+    );
+  }
+  const intervals = RECIPES[launch.path].report.map((interval) => {
+    const start = interval.from === 'input' ? raw.input : markTime(plan, raw, interval.from);
+    const end = markTime(plan, raw, interval.to);
+    if (start === undefined || end === undefined || !Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+      throw new Error(
+        `${launch.runtime} ${launch.fixture} ${launch.path} ${intervalLabel(interval)} is missing, not finite, or earlier than its start`,
+      );
+    }
+    return { label: intervalLabel(interval), ms: end - start };
+  });
+  return { runtime: launch.runtime, fixture: launch.fixture, path: launch.path, phase, intervals };
+}
+
+function markTime(plan: SamplePlan, raw: RawTimeline, kind: MarkKind): number | undefined {
+  const index = plan.marks.findIndex((mark) => mark.kind === kind);
+  if (index < 0) return undefined;
+  return raw.marks[index];
+}
+
+function intervalLabel(interval: ReportedInterval): string {
+  const base = `${interval.from}-to-${interval.to}`;
+  if (interval.includes === undefined) return base;
+  return `${base}, includes ${interval.includes}`;
+}
+
+export function parseSession(ci: string | undefined): Session {
+  if (ci === undefined || ci.length === 0 || ci === 'false' || ci === '0') return 'local';
+  return 'ci';
+}
+
+const TABLE_HEADER =
+  '| runtime | fixture | path | phase | interval | median ms | samples ms | bytes | rows | columns | os | session |';
+const TABLE_DIVIDER = '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |';
+
+export function formatReport(facts: MachineFacts, environment: Environment, samples: readonly Sample[]): string {
+  const lines = [formatFacts(facts, environment), '', TABLE_HEADER, TABLE_DIVIDER];
+  for (const group of groupSamples(samples)) {
+    const fixture = FIXTURES[group.fixture];
+    lines.push(
+      `| ${RUNTIME_LABEL[group.runtime]} | ${group.fixture} | ${group.path} | ${group.phase} | ${group.label} | ${medianMs(group.samples)} | ${group.samples.join(' ')} | ${fixture.bytes} | ${fixture.rows} | ${fixture.columns} | ${environment.os} | ${environment.session} |`,
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+type ReportGroup = {
+  runtime: Runtime;
+  fixture: FixtureName;
+  path: PathName;
+  phase: Phase;
+  label: string;
+  samples: number[];
+};
+
+function formatFacts(facts: MachineFacts, environment: Environment): string {
+  return [
+    `- Recorded at ${facts.recordedAt}`,
+    `- Commit ${facts.commit}, working tree ${facts.tree}`,
+    `- CPU ${facts.cpu}, ${facts.cores} cores, ${facts.memoryGiB} GiB memory, load average ${formatLoad(facts.loadAverage)}`,
+    `- OS ${environment.os} ${facts.osRelease}`,
+    `- Node ${facts.node}. ${formatBrowsers(facts.browsers)}`,
+    `- viewport: ${VIEWPORT.width}x${VIEWPORT.height}`,
+    `- Command \`${facts.command}\``,
+  ].join('\n');
+}
+
+function formatBrowsers(browsers: Partial<Record<Runtime, string>>): string {
+  const parts: string[] = [];
+  if (browsers.desktop !== undefined) parts.push(`Desktop ${browsers.desktop}`);
+  if (browsers.web !== undefined) parts.push(`Web ${browsers.web}`);
+  if (parts.length === 0) return 'No browser attached.';
+  return `${parts.join('. ')}.`;
+}
+
+function formatLoad(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+function groupSamples(samples: readonly Sample[]): ReportGroup[] {
+  const groups: ReportGroup[] = [];
+  for (const sample of samples) {
+    for (const interval of sample.intervals) {
+      const rounded = Math.round(interval.ms);
+      const existing = groups.find(
+        (group) =>
+          group.runtime === sample.runtime &&
+          group.fixture === sample.fixture &&
+          group.path === sample.path &&
+          group.phase === sample.phase &&
+          group.label === interval.label,
+      );
+      if (existing) existing.samples.push(rounded);
+      else {
+        groups.push({
+          runtime: sample.runtime,
+          fixture: sample.fixture,
+          path: sample.path,
+          phase: sample.phase,
+          label: interval.label,
+          samples: [rounded],
+        });
+      }
+    }
+  }
+  return groups;
+}
+
+function medianMs(samples: readonly number[]): number {
+  const ordered = [...samples].sort((left, right) => left - right);
+  const middle = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 1) return ordered[middle] ?? 0;
+  const lower = ordered[middle - 1] ?? 0;
+  const upper = ordered[middle] ?? 0;
+  return Math.round((lower + upper) / 2);
+}
+
+const PROBE_GLOBAL = '__workingCsvLatency';
+
+/** Collecting a sample waits this long for every armed mark. Settle uses the same bound. */
+export const SAMPLE_TIMEOUT_MS = 120_000;
+
+export type ViewportPoint = { x: number; y: number };
+
+/** The page half of a sample. `measure` arms, sends the gesture, and collects on one call. */
+export type Probe = {
+  measure(start: StartEvent, marks: readonly Mark[], send: () => Promise<void>): Promise<RawTimeline>;
+  settle(marks: readonly Mark[], quietMs: number, timeoutMs: number): Promise<void>;
+  point(target: Target): Promise<ViewportPoint>;
+  focus(field: Field): Promise<void>;
+};
+
+type ProbeArg = string | number | boolean | readonly Mark[] | Target;
+
+const MARK_KINDS = [
+  'querying',
+  'ready',
+  'dirty',
+  'clean',
+  'title',
+  'cell',
+  'count',
+  'columns',
+  'header',
+  'visible',
+  'empty-window',
+] as const satisfies readonly MarkKind[];
+
+/**
+ * Installs the page clock once and returns its Node handle.
+ * `evaluate` runs one expression with awaitPromise and resolves with its string value.
+ */
+export async function attachProbe(evaluate: (expression: string) => Promise<string>): Promise<Probe> {
+  await evaluate(`JSON.stringify((${PAGE_PROBE_SOURCE})(${JSON.stringify(PROBE_GLOBAL)}))`);
+  return {
+    async measure(start, marks, send) {
+      const held = parseHeld(await ask(evaluate, 'arm', [start, marks]));
+      if (held.length > 0) {
+        throw new Error(`${held.join(', ')} held before the input, so the stop would measure nothing`);
+      }
+      await send();
+      return parseTimeline(await ask(evaluate, 'result', [SAMPLE_TIMEOUT_MS]));
+    },
+    async settle(marks, quietMs, timeoutMs) {
+      const reply = await ask(evaluate, 'settle', [marks, quietMs, timeoutMs]);
+      if (reply !== true) throw new Error('settle did not confirm the page was quiet');
+    },
+    async point(target) {
+      return parsePoint(await ask(evaluate, 'point', [target]));
+    },
+    async focus(field) {
+      const reply = await ask(evaluate, 'focus', [field]);
+      if (reply !== true) throw new Error(`focus did not confirm ${field}`);
+    },
+  };
+}
+
+async function ask(evaluate: (expression: string) => Promise<string>, method: string, args: readonly ProbeArg[]): Promise<JsonValue> {
+  // Runtime.evaluate parses a classic script, where a bare await is a syntax error.
+  const expression = `(async () => JSON.stringify(await window[${JSON.stringify(PROBE_GLOBAL)}][${JSON.stringify(method)}](${args
+    .map((arg) => JSON.stringify(arg))
+    .join(', ')})))()`;
+  let text: string;
+  try {
+    text = await evaluate(expression);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'probe call failed';
+    throw new Error(`${method} failed: ${message}`);
+  }
+  try {
+    return parseJson(text);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'unreadable reply';
+    throw new Error(`${method} reply did not parse: ${text} (${message})`);
+  }
+}
+
+function parseHeld(value: JsonValue): MarkKind[] {
+  if (!Array.isArray(value)) throw new Error('arm reply must be an array');
+  return value.map((item, index) => {
+    const kind = expectString(item, `held[${index}]`);
+    if (!isMarkKind(kind)) throw new Error(`arm reply has unknown mark ${kind}`);
+    return kind;
+  });
+}
+
+function parseTimeline(value: JsonValue): RawTimeline {
+  const record = expectObject(value, 'timeline');
+  const marksValue = own(record, 'marks');
+  if (!Array.isArray(marksValue)) throw new Error('timeline marks must be an array');
+  return {
+    input: expectNumber(own(record, 'input'), 'input'),
+    marks: marksValue.map((item, index) => expectNumber(item, `marks[${index}]`)),
+  };
+}
+
+function parsePoint(value: JsonValue): ViewportPoint {
+  const record = expectObject(value, 'point');
+  return { x: expectNumber(own(record, 'x'), 'x'), y: expectNumber(own(record, 'y'), 'y') };
+}
+
+function isMarkKind(value: string): value is MarkKind {
+  return MARK_KINDS.some((kind) => kind === value);
+}
+
+/**
+ * Runs in the page. A second install keeps the first. It reads the DOM and never calls into the product API.
+ * Ready is recorded only after Querying in the same sample, so the idle Ready text cannot finish one.
+ */
+const PAGE_PROBE_SOURCE = String.raw`
+function installProbe(globalName) {
+  if (Object.prototype.hasOwnProperty.call(window, globalName)) return true;
+  let generation = 0;
+  let current = null;
+  let observer = null;
+  let removeStart = null;
+
+  function textOf(node) {
+    if (!node) return '';
+    return (node.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function digits(value) {
+    const matched = String(value).replace(/[^\d]/g, '');
+    if (matched.length === 0) return null;
+    return Number(matched);
+  }
+
+  function attr(value) {
+    return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  }
+
+  function statusNode() {
+    return document.querySelector('.csv-view > :last-child > [aria-live="polite"]');
+  }
+
+  function statusText() {
+    return textOf(statusNode());
+  }
+
+  function countLine() {
+    const root = document.querySelector('.csv-view');
+    if (!root) return null;
+    const nodes = root.querySelectorAll('span');
+    for (let index = 0; index < nodes.length; index += 1) {
+      const match = textOf(nodes[index]).match(/^(\d[\d.,\s]*)\s+visible of\s+(\d[\d.,\s]*)\s+rows$/);
+      if (!match) continue;
+      const visible = digits(match[1]);
+      const total = digits(match[2]);
+      if (visible === null || total === null) return null;
+      return { visible: visible, total: total };
+    }
+    return null;
+  }
+
+  function columnCount() {
+    const root = document.querySelector('.csv-view');
+    if (!root) return null;
+    const nodes = root.querySelectorAll('span');
+    for (let index = 0; index < nodes.length; index += 1) {
+      const match = textOf(nodes[index]).match(/^(\d[\d.,\s]*)\s+columns$/);
+      if (!match) continue;
+      return digits(match[1]);
+    }
+    return null;
+  }
+
+  function headerCell(column) {
+    return document.querySelector('.ag-header-cell[col-id=' + attr(column) + ']');
+  }
+
+  function cellNode(row, column) {
+    return document.querySelector(
+      '.ag-center-cols-container .ag-row[row-index=' + attr(String(row)) + '] .ag-cell[col-id=' + attr(column) + ']',
+    );
+  }
+
+  function fieldNode(field) {
+    if (field === 'search') return document.querySelector('#global-search');
+    if (field === 'filter-input') return document.querySelector('.ag-popup .ag-filter-body input, .ag-menu .ag-filter-body input');
+    if (field === 'cell-editor') return document.querySelector('.ag-cell-inline-editing input');
+    if (field === 'column-name') return document.querySelector('input[aria-label="Column name"]');
+    throw new Error('Unknown field ' + field);
+  }
+
+  function targetNode(target) {
+    if (target.kind === 'header-label') {
+      const header = headerCell(target.column);
+      return header ? header.querySelector('.ag-header-cell-label') : null;
+    }
+    if (target.kind === 'filter-button') {
+      const header = headerCell(target.column);
+      return header ? header.querySelector('.ag-header-cell-filter-button') : null;
+    }
+    if (target.kind === 'cell') return cellNode(target.row, target.column);
+    if (target.kind === 'menu-item') {
+      const items = document.querySelectorAll('[role="menuitem"]');
+      for (let index = 0; index < items.length; index += 1) {
+        if (textOf(items[index]).indexOf(target.label) === 0) return items[index];
+      }
+      return null;
+    }
+    if (target.kind === 'close-tab') return document.querySelector('button[aria-label=' + attr('Close ' + target.file) + ']');
+    if (target.kind === 'undo') return document.querySelector('button[aria-label="Undo edit"]');
+    if (target.kind === 'clear-query') return document.querySelector('button[aria-label="Clear query"]');
+    if (target.kind === 'field') return fieldNode(target.field);
+    throw new Error('Unknown target ' + target.kind);
+  }
+
+  function markHolds(mark) {
+    if (mark.kind === 'querying') return statusText() === 'Querying';
+    if (mark.kind === 'ready') return statusText() === 'Ready';
+    if (mark.kind === 'dirty') {
+      const badge = document.querySelector('[role="img"][aria-label="Unexported Changes"]');
+      const undo = document.querySelector('button[aria-label="Undo edit"]');
+      return Boolean(badge) && undo !== null && undo.disabled === false;
+    }
+    if (mark.kind === 'clean') {
+      const badge = document.querySelector('[role="img"][aria-label="Unexported Changes"]');
+      const undo = document.querySelector('button[aria-label="Undo edit"]');
+      return badge === null && undo !== null && undo.disabled === true;
+    }
+    if (mark.kind === 'title') return textOf(document.querySelector('#metadata-title')) === mark.text;
+    if (mark.kind === 'cell') {
+      const cell = cellNode(mark.row, mark.column);
+      return cell !== null && textOf(cell) === mark.text;
+    }
+    if (mark.kind === 'count') {
+      const count = countLine();
+      return count !== null && count.visible === mark.visible && count.total === mark.total;
+    }
+    if (mark.kind === 'columns') return columnCount() === mark.count;
+    if (mark.kind === 'header') {
+      const shown = headerCell(mark.column) !== null;
+      return mark.state === 'shown' ? shown : !shown;
+    }
+    if (mark.kind === 'visible') {
+      const node = targetNode(mark.target);
+      return node !== null && node.getClientRects().length > 0;
+    }
+    if (mark.kind === 'empty-window') {
+      const title = textOf(document.querySelector('#empty-state-title'));
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]');
+      return title === 'No CSV open' && dialog === null;
+    }
+    throw new Error('Unknown mark ' + mark.kind);
+  }
+
+  function isLevel(kind) {
+    return kind !== 'querying' && kind !== 'ready';
+  }
+
+  function cancel(reason) {
+    generation += 1;
+    if (removeStart) removeStart();
+    removeStart = null;
+    if (observer) observer.disconnect();
+    observer = null;
+    const previous = current;
+    current = null;
+    if (previous && previous.settle) previous.settle(new Error(reason));
+  }
+
+  function finish(sample) {
+    if (!sample.settle) return;
+    const settle = sample.settle;
+    sample.settle = null;
+    if (sample.failed) settle(new Error(sample.failed));
+    else settle(null);
+  }
+
+  function inspect(sample) {
+    if (current !== sample || sample.state === 'complete') return;
+    const status = statusText();
+    if (status === 'Query failed') {
+      sample.failed = 'Query failed';
+      sample.state = 'complete';
+      finish(sample);
+      return;
+    }
+    if (sample.state === 'armed') return;
+    if (sample.state === 'started' && status === 'Querying') sample.state = 'querying';
+    for (let index = 0; index < sample.marks.length; index += 1) {
+      if (sample.times[index] !== null) continue;
+      const mark = sample.marks[index];
+      if (mark.kind === 'ready') {
+        if (sample.state !== 'querying' || status !== 'Ready') continue;
+        sample.times[index] = performance.now();
+        continue;
+      }
+      if (mark.kind === 'querying') {
+        if (sample.state !== 'querying') continue;
+        sample.times[index] = performance.now();
+        continue;
+      }
+      if (markHolds(mark)) sample.times[index] = performance.now();
+    }
+    let done = sample.input !== null;
+    for (let index = 0; index < sample.times.length; index += 1) {
+      if (sample.times[index] === null) done = false;
+    }
+    if (!done) return;
+    sample.state = 'complete';
+    finish(sample);
+  }
+
+  function arm(start, marks) {
+    cancel('Sample replaced');
+    const id = generation;
+    const times = [];
+    const held = [];
+    for (let index = 0; index < marks.length; index += 1) {
+      times.push(null);
+      if (isLevel(marks[index].kind) && markHolds(marks[index])) held.push(marks[index].kind);
+    }
+    const sample = {
+      id: id,
+      start: start,
+      marks: marks,
+      times: times,
+      input: null,
+      state: 'armed',
+      failed: null,
+      settle: null,
+    };
+    current = sample;
+    function onStart(event) {
+      if (current !== sample || sample.state !== 'armed' || event.type !== start) return;
+      sample.input = event.timeStamp;
+      sample.state = 'started';
+      inspect(sample);
+    }
+    window.addEventListener(start, onStart, true);
+    removeStart = function () {
+      window.removeEventListener(start, onStart, true);
+    };
+    observer = new MutationObserver(function () {
+      inspect(sample);
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+    });
+    return held;
+  }
+
+  function missing(sample) {
+    const names = [];
+    if (sample.input === null) names.push('input');
+    for (let index = 0; index < sample.marks.length; index += 1) {
+      if (sample.times[index] === null) names.push(sample.marks[index].kind);
+    }
+    return names.join(', ');
+  }
+
+  function result(timeoutMs) {
+    const sample = current;
+    if (!sample) return Promise.reject(new Error('No armed sample'));
+    if (sample.failed) return Promise.reject(new Error(sample.failed));
+    if (sample.state === 'complete' && sample.input !== null) {
+      return Promise.resolve({ input: sample.input, marks: sample.times.slice() });
+    }
+    return new Promise(function (resolve, reject) {
+      const timer = setTimeout(function () {
+        sample.settle = null;
+        reject(new Error('Timed out waiting for ' + missing(sample) + ' (state ' + sample.state + ')'));
+      }, timeoutMs);
+      sample.settle = function (error) {
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve({ input: sample.input, marks: sample.times.slice() });
+      };
+      if (sample.state === 'complete' || sample.failed) finish(sample);
+    });
+  }
+
+  function settle(marks, quietMs, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      let quietTimer = null;
+      const watcher = new MutationObserver(function () {
+        schedule();
+      });
+      function stop(error) {
+        watcher.disconnect();
+        if (quietTimer !== null) clearTimeout(quietTimer);
+        clearTimeout(limit);
+        if (error) reject(error);
+        else resolve(true);
+      }
+      function holds() {
+        for (let index = 0; index < marks.length; index += 1) {
+          if (!markHolds(marks[index])) return false;
+        }
+        return true;
+      }
+      function schedule() {
+        if (quietTimer !== null) clearTimeout(quietTimer);
+        if (!holds()) return;
+        quietTimer = setTimeout(function () {
+          stop(null);
+        }, quietMs);
+      }
+      const limit = setTimeout(function () {
+        const names = [];
+        for (let index = 0; index < marks.length; index += 1) {
+          if (!markHolds(marks[index])) names.push(marks[index].kind);
+        }
+        stop(new Error('Timed out settling ' + (names.join(', ') || 'quiet page')));
+      }, timeoutMs);
+      watcher.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+      });
+      schedule();
+    });
+  }
+
+  function point(target) {
+    const node = targetNode(target);
+    if (!node) throw new Error('Missing target ' + target.kind);
+    node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const box = node.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) throw new Error('Target has no box ' + target.kind);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
+  function focus(field) {
+    const node = fieldNode(field);
+    if (!node || !node.focus) throw new Error('Missing field ' + field);
+    node.focus();
+    if (node.select) node.select();
+    return true;
+  }
+
+  Object.defineProperty(window, globalName, {
+    configurable: true,
+    value: { arm: arm, result: result, settle: settle, point: point, focus: focus },
+  });
+  return true;
+}
+`;
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
 const HELPER = '.claude/skills/verify-csv-viewer/bin/control-csv-viewer.mjs';
@@ -41,7 +1002,7 @@ const PAGE_WAIT_MS = 10_000;
 
 type Page = {
   browser: string;
-  sample(plan: SamplePlan<PathName>): Promise<RawTimeline>;
+  sample(plan: SamplePlan): Promise<RawTimeline>;
   steps(steps: readonly Step[]): Promise<void>;
 };
 
@@ -82,23 +1043,6 @@ type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonO
 let ownsSession = false;
 let ownedRun: VerifyRun | null = null;
 
-try {
-  process.on('SIGINT', () => {
-    stopOwnedSession();
-    process.exit(130);
-  });
-  await main(process.argv.slice(2));
-} catch (cause) {
-  if (cause instanceof UsageError) {
-    process.stderr.write(`${cause.message}\n${usageText()}\n`);
-    process.exitCode = 2;
-  } else {
-    const message = cause instanceof Error ? (cause.stack ?? cause.message) : 'Latency run failed';
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
-  }
-}
-
 async function main(argv: readonly string[]): Promise<void> {
   const launches = planRun(argv);
   await assertFixtures(launches);
@@ -138,25 +1082,23 @@ async function main(argv: readonly string[]): Promise<void> {
 }
 
 async function measureLaunch(page: Page, launch: LaunchPlan): Promise<Sample[]> {
+  const fixture = FIXTURES[launch.fixture];
   const samples: Sample[] = [];
-  for (const step of launchSteps(launch)) {
-    samples.push(...(await runLaunchStep(page, step)));
+  if (launch.path !== 'open') {
+    const opened = RECIPES.open.plan(fixture);
+    await page.steps([{ input: opened.act, until: opened.marks }]);
+  }
+  samples.push(await takeSample(page, launch, 'cold'));
+  for (let index = 0; index < launch.warm; index += 1) {
+    await page.steps(RECIPES[launch.path].plan(fixture).reset);
+    samples.push(await takeSample(page, launch, 'warm'));
   }
   return samples;
 }
 
-async function runLaunchStep(page: Page, step: LaunchStep): Promise<Sample[]> {
-  switch (step.kind) {
-    case 'steps':
-      await page.steps(step.steps);
-      return [];
-    case 'sample':
-      return [step.finish(await page.sample(step.plan))];
-    default: {
-      const unreachable: never = step;
-      throw new Error(`Unexpected launch step ${unreachable}`);
-    }
-  }
+async function takeSample(page: Page, launch: LaunchPlan, phase: Phase): Promise<Sample> {
+  const plan = RECIPES[launch.path].plan(FIXTURES[launch.fixture]);
+  return finishSample(launch, phase, await page.sample(plan));
 }
 
 async function withFreshApp<T>(launch: LaunchPlan, use: (page: Page) => Promise<T>): Promise<T> {
@@ -193,7 +1135,7 @@ function createPage(cdp: Cdp, probe: Probe, browser: string): Page {
   };
 }
 
-async function runSample(cdp: Cdp, probe: Probe, plan: SamplePlan<PathName>): Promise<RawTimeline> {
+async function runSample(cdp: Cdp, probe: Probe, plan: SamplePlan): Promise<RawTimeline> {
   await assertViewport(cdp);
   await probe.settle(plan.startsFrom, QUIET_MS, SAMPLE_TIMEOUT_MS);
   await playSteps(cdp, probe, plan.arrange);
@@ -781,4 +1723,24 @@ function jsonKind(value: JsonValue): 'null' | 'boolean' | 'number' | 'string' | 
   if (tag === '[object String]') return 'string';
   if (tag === '[object Object]') return 'object';
   throw new Error('Unsupported JSON value');
+}
+
+const launchedDirectly = process.argv[1] !== undefined && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (launchedDirectly) {
+  try {
+    process.on('SIGINT', () => {
+      stopOwnedSession();
+      process.exit(130);
+    });
+    await main(process.argv.slice(2));
+  } catch (cause) {
+    if (cause instanceof UsageError) {
+      process.stderr.write(`${cause.message}\n${usageText()}\n`);
+      process.exitCode = 2;
+    } else {
+      const message = cause instanceof Error ? (cause.stack ?? cause.message) : 'Latency run failed';
+      process.stderr.write(`${message}\n`);
+      process.exitCode = 1;
+    }
+  }
 }

@@ -3,12 +3,12 @@ import {
   FIXTURES,
   PATHS,
   RECIPES,
+  finishSample,
   formatReport,
-  launchSteps,
   parseSession,
   planRun,
-} from './latency-plan.ts';
-import type { Environment, LaunchPlan, LaunchStep, MachineFacts, Sample } from './latency-plan.ts';
+} from './working-csv-latency';
+import type { Environment, MachineFacts, Sample } from './working-csv-latency';
 
 describe('planRun', () => {
   it('keeps registry order when flags repeat', () => {
@@ -48,31 +48,10 @@ describe('planRun', () => {
   });
 });
 
-describe('launchSteps', () => {
-  it('opens untimed, then samples sort cold and each warm reset', () => {
-    expect(describeSteps(launchSteps({ runtime: 'web', fixture: 'phase-2-sample', path: 'sort', warm: 2 }))).toEqual([
-      'steps',
-      'sort cold',
-      'steps',
-      'sort warm',
-      'steps',
-      'sort warm',
-    ]);
-  });
-
-  it('samples open cold, then resets by closing before the warm sample', () => {
-    expect(describeSteps(launchSteps({ runtime: 'web', fixture: 'phase-2-sample', path: 'open', warm: 1 }))).toEqual([
-      'open cold',
-      'steps',
-      'open warm',
-    ]);
-  });
-});
-
 describe('finish', () => {
   it('labels the filter debounce and the querying edge', () => {
-    const cold = coldSample({ runtime: 'web', fixture: 'phase-2-sample', path: 'filter', warm: 0 });
-    expect(cold.finish({ input: 100, marks: [1640, 1690, 1702, 1702] })).toEqual({
+    const cold = { runtime: 'web', fixture: 'phase-2-sample', path: 'filter', warm: 0 } as const;
+    expect(finishSample(cold, 'cold', { input: 100, marks: [1640, 1690, 1702, 1702] })).toEqual({
       runtime: 'web',
       fixture: 'phase-2-sample',
       path: 'filter',
@@ -85,13 +64,13 @@ describe('finish', () => {
   });
 
   it('prints only input-to-cell for open', () => {
-    const cold = coldSample({ runtime: 'web', fixture: 'phase-2-sample', path: 'open', warm: 0 });
-    expect(cold.finish({ input: 0, marks: [40, 80, 40, 40] }).intervals).toEqual([{ label: 'input-to-cell', ms: 80 }]);
+    const cold = { runtime: 'web', fixture: 'phase-2-sample', path: 'open', warm: 0 } as const;
+    expect(finishSample(cold, 'cold', { input: 0, marks: [40, 80, 40, 40] }).intervals).toEqual([{ label: 'input-to-cell', ms: 80 }]);
   });
 
   it('fails a sample whose mark times do not match the plan', () => {
-    const cold = coldSample({ runtime: 'web', fixture: 'phase-2-sample', path: 'filter', warm: 0 });
-    expect(() => cold.finish({ input: 100, marks: [1640, 1690, 1702] })).toThrow(
+    const cold = { runtime: 'web', fixture: 'phase-2-sample', path: 'filter', warm: 0 } as const;
+    expect(() => finishSample(cold, 'cold', { input: 100, marks: [1640, 1690, 1702] })).toThrow(
       'web phase-2-sample filter expected 4 mark times and got 3',
     );
   });
@@ -175,27 +154,6 @@ describe('RECIPES', () => {
     }
   });
 });
-
-function describeSteps(steps: readonly LaunchStep[]): string[] {
-  return steps.map((step) => {
-    switch (step.kind) {
-      case 'steps':
-        return 'steps';
-      case 'sample':
-        return `${step.path} ${step.phase}`;
-      default: {
-        const unreachable: never = step;
-        throw new Error(`Unexpected launch step ${unreachable}`);
-      }
-    }
-  });
-}
-
-function coldSample(launch: LaunchPlan): Extract<LaunchStep, { kind: 'sample' }> {
-  const step = launchSteps(launch).find((candidate) => candidate.kind === 'sample' && candidate.phase === 'cold');
-  if (step === undefined || step.kind !== 'sample') throw new Error(`missing cold sample for ${launch.path}`);
-  return step;
-}
 
 function sample(phase: 'cold' | 'warm', intervals: Sample['intervals']): Sample {
   return { runtime: 'web', fixture: 'phase-2-sample', path: 'sort', phase, intervals };
