@@ -1,6 +1,6 @@
 import { chmod, link, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
 
 describe('DesktopWorkspaceHost behavior', () => {
@@ -84,6 +84,33 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(recents.map((recent) => recent.sourceId)).toEqual([second.source.sourceId, first.source.sourceId]);
     expect(recents[0].location).toBe(fixture.file('recent-second.csv'));
     expect(recents[0].sizeBytes).toBeGreaterThan(0);
+  });
+
+  it('reports malformed Recent CSV Sources without logging their contents', async () => {
+    await writeFile(fixture.file('recent-sources.json'), 'PRIVATE malformed data');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(fixture.viewer.call({ operation: 'csv.get-recent-sources' })).resolves.toEqual([]);
+      expect(warning).toHaveBeenCalledWith('Unable to read Recent CSV Sources (invalid-format).');
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('PRIVATE');
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('reports a Recent CSV Sources write failure with a safe category', async () => {
+    await mkdir(fixture.file('recent-sources.json'));
+    const sourceId = await fixture.registerSource('PRIVATE.csv', 'name\nAda\n');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await fixture.host.recordRecentSource(sourceId);
+      expect(warning.mock.calls.some(([message]) =>
+        /^Unable to write Recent CSV Sources \((permission-denied|io-failure)\)\.$/.test(String(message)),
+      )).toBe(true);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('PRIVATE');
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('drops a Recent CSV Source whose recorded path is missing', async () => {

@@ -251,19 +251,22 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     try {
       await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
       await writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8');
-    } catch {
-      console.warn('Unable to write Recent CSV Sources.');
+    } catch (cause: unknown) {
+      warnRecentSourceFailure('write', recentSourceFailureCategory(cause));
     }
   }
 
   private async readRecentEntries(): Promise<RecentSourceEntry[]> {
     try {
       const parsed = JSON.parse(await readFile(this.recentSourcesPath, 'utf8'));
-      if (!Array.isArray(parsed)) return [];
+      if (!Array.isArray(parsed)) {
+        warnRecentSourceFailure('read', 'invalid-format');
+        return [];
+      }
       return parsed.filter(isRecentSourceEntry).slice(0, maxRecentSources);
     } catch (cause: unknown) {
       if (isFileSystemError(cause) && cause.code === 'ENOENT') return [];
-      console.warn('Unable to read Recent CSV Sources.');
+      warnRecentSourceFailure('read', recentSourceFailureCategory(cause));
       return [];
     }
   }
@@ -277,6 +280,16 @@ type RecentSourceEntry = {
 };
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+function recentSourceFailureCategory(cause: unknown): 'invalid-format' | 'permission-denied' | 'io-failure' | 'unexpected' {
+  if (cause instanceof SyntaxError) return 'invalid-format';
+  if (!isFileSystemError(cause)) return 'unexpected';
+  return cause.code === 'EACCES' || cause.code === 'EPERM' ? 'permission-denied' : 'io-failure';
+}
+
+function warnRecentSourceFailure(action: 'read' | 'write', category: ReturnType<typeof recentSourceFailureCategory>): void {
+  console.warn(`Unable to ${action} Recent CSV Sources (${category}).`);
+}
 
 function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: string): string {
   if (identity && identity.inode !== 0n) return `inode:${identity.device}:${identity.inode}`;
