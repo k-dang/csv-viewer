@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import type { CsvViewer, CsvViewerRequest } from '@csv-viewer/workspace/csv-viewer';
 import { ipcChannels } from '../ipc-channels';
@@ -106,13 +107,14 @@ describe('CsvViewer Electron request bridge', () => {
       throw new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
     });
     if (!handler) throw new Error('Dropped-source handler was not registered.');
-    const missing = await handler(ipcEvent, 'C:\\PRIVATE-MISSING.csv');
+    const missingPath = path.resolve('PRIVATE-MISSING.csv');
+    const missing = await handler(ipcEvent, missingPath);
     expect(() => unwrapCsvViewerIpcResponse(missing)).toThrow(/^The CSV Source no longer exists\.$/);
 
     registerDroppedSourceHandler(ipc, async () => {
       throw new Error('PRIVATE internal failure at C:\\PRIVATE-MISSING.csv');
     });
-    const unexpected = await handler(ipcEvent, 'C:\\PRIVATE-MISSING.csv');
+    const unexpected = await handler(ipcEvent, missingPath);
     expect(unexpected).toEqual({ ok: false, message: 'The CSV workspace could not complete the request.' });
     expect(JSON.stringify(unexpected)).not.toContain('PRIVATE');
   });
