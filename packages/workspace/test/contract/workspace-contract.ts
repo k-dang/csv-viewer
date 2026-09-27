@@ -32,6 +32,8 @@ export interface WorkspaceContractFixture {
   failNextMetadataRead(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
+  /** Fail one owner connection close after the connection closes; the engine release still runs. */
+  failNextDatabaseRelease(): void;
   /** Inject an unexpected failure from a real host request. */
   failNextRecentSources(): void;
   /** Inject an unexpected source-description failure during CSV open. */

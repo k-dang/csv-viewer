@@ -45,7 +45,6 @@ export async function createWorkingCsvTable(
 }
 
 export async function dropWorkingCsvTable(table: CsvTable): Promise<void> {
-  if (!table.database.isOpen()) return;
   await table.database.run(buildDropTableSql(table.tableName));
 }
 

@@ -1,26 +1,29 @@
-import { rm } from 'node:fs/promises';
 import { Effect, Logger } from 'effect';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
 import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv/working-csv-store';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
 
 /**
- * Store invariants that the CsvWorkspace surface cannot observe: disposal ordering when its own
- * validation fails, and isolation between the data-change listeners the Comparison area relies on.
+ * Store invariants that the CsvWorkspace surface cannot observe: refusing work after its own
+ * disposal validation fails, and isolation between the data-change listeners the Comparison area relies on.
  * These drive a bare WorkingCsvStore, so they borrow only the fixture's host and temp directory.
  */
 let fixture: CsvWorkspaceFixture;
+let database: DuckDbWorkspaceDatabase;
 let store: WorkingCsvStore;
 
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
-  store = new WorkingCsvStore(fixture.host, new DuckDbWorkspaceDatabase());
+  database = await DuckDbWorkspaceDatabase.open();
+  store = new WorkingCsvStore(fixture.host, database);
 });
 
 afterEach(async () => {
-  await rm(fixture.directory, { recursive: true, force: true });
+  await database.closeOwnerConnection();
+  await database.closeEngine();
+  await fixture.dispose();
 });
 
 async function openWorkingCsv(fileName: string, contents: string) {
@@ -49,14 +52,12 @@ describe('WorkingCsvStore invariants', () => {
     await Effect.runPromise(store.disposeStore());
   });
 
-  it('closes database handles when disposal validation fails', async () => {
+  it('rejects later work when disposal validation fails', async () => {
     await openWorkingCsv('dispose-failure.csv', ['id', '1'].join('\n'));
 
     const descriptors = Object.getOwnPropertyDescriptors(store);
-    const database: DuckDbWorkspaceDatabase = descriptors.database.value;
     const artifactRegistry: WorkspaceArtifactRegistry =
       descriptors.artifactRegistry.value;
-    const databaseClose = vi.spyOn(database, 'close');
     artifactRegistry.register({
       tableName: 'unexpected_artifact',
       owner: { kind: 'working-csv', workingCsvId: 'missing' },
@@ -64,8 +65,6 @@ describe('WorkingCsvStore invariants', () => {
     });
 
     await expect(Effect.runPromise(store.disposeStore())).rejects.toThrow('Workspace artifact invariant violated');
-    expect(databaseClose).toHaveBeenCalledOnce();
-    expect(database.isOpen()).toBe(false);
     await expect(
       Effect.runPromise(store.getRows({ workingCsvId: 'missing', offset: 0, limit: 1 })),
     ).rejects.toThrow('CSV workspace is disposing.');

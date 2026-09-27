@@ -10,23 +10,31 @@ Out of scope for this ticket: the engine source change (02) and the fatal engine
 
 **Blocked by:** None - can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The composition entry is asynchronous and returns the workspace owner after the Layer is built. It replaces the synchronous constructor that uses `runSync`. The optional Comparison executor override and the diagnostics configuration stay composition inputs.
-- [ ] Desktop main, the web startup, and both contract fixtures use the composition entry. No caller constructs the workspace implementation directly.
-- [ ] Both database adapters acquire eagerly. `close(): Promise<Error[]>`, `isOpen`, the pending `opening` promise and its comments, and the "CSV workspace is disposing" checks are deleted. Table cleanup no longer checks whether the database is open.
-- [ ] Store disposal no longer closes the database or combines an error array. The runtime scope releases the host and then the database.
-- [ ] Disposal carries the release outcome to its result explicitly. It does not rely on `ManagedRuntime.dispose`, whose error type is `never`. Confirm the behavior in the installed `effect` 4.0.0-rc.115 source before choosing an API.
-- [ ] The runtime scope closes only once. After a release failure, a later `dispose` returns the same rejection. Concurrent disposal stays idempotent, and disposal that races an admitted open still waits for it.
-- [ ] Diagnostics report `workspace.acquire-database` and `workspace.release-database` as stages with normalized outcomes, correlated with the workspace identifier. Each failed close step is its own reported failure. No driver message, path, or file name reaches diagnostic output.
-- [ ] Desktop quit still confirms Unexported Changes and dependent Comparisons, and still exits when a release fails. The two-attempt quit policy and timeout are unchanged.
-- [ ] New contract case: a database release failure makes disposal reject. Diagnostics report it as its own stage, and a sentinel driver message appears in neither the rejection nor the diagnostics. Add the smallest injection seam, following the `failNextTableDrop` pattern.
-- [ ] New contract case: the diagnostics contract shows the database acquisition and release stages correlated with the workspace identifier.
-- [ ] All existing lifecycle, Working CSV, editing, Comparison, and diagnostics contract cases pass on native DuckDB and DuckDB-Wasm without weakened assertions.
-- [ ] The driver tests for the removed lazy opening ("opens one instance no matter how many callers ask at once" and "waits for an in-flight owner connection before closing") are deleted. The cancellation and Worker crash driver tests still pass.
-- [ ] The workspace package README describes the ownership order: database, then host, then workspace services, released in reverse. The comments on the composition, the adapters, and the host interface describe the Layer lifetime.
-- [ ] The verify skill's diagnostics section lists the new stages, and its `.agents` mirror is regenerated.
-- [ ] With the verify skill on desktop: start the app, open two CSV Sources, run and cancel an Aligned Comparison, reopen one Working CSV with changed dialect options, and quit with Unexported Changes to see the confirmation. On web: start the app and open a CSV Source. Read the acquisition and release stages in the diagnostics.
-- [ ] The type, lint, and test checks and the desktop and web builds pass.
+- [x] The composition entry is asynchronous and returns the workspace owner after the Layer is built. It replaces the synchronous constructor that uses `runSync`. The optional Comparison executor override and the diagnostics configuration stay composition inputs.
+- [x] Desktop main, the web startup, and both contract fixtures use the composition entry. No caller constructs the workspace implementation directly.
+- [x] Both database adapters acquire eagerly. `close(): Promise<Error[]>`, `isOpen`, the pending `opening` promise and its comments, and the "CSV workspace is disposing" checks are deleted. Table cleanup no longer checks whether the database is open.
+- [x] Store disposal no longer closes the database or combines an error array. The runtime scope releases the host and then the database.
+- [x] Disposal carries the release outcome to its result explicitly. It does not rely on `ManagedRuntime.dispose`, whose error type is `never`. Confirm the behavior in the installed `effect` 4.0.0-rc.115 source before choosing an API.
+- [x] The runtime scope closes only once. After a release failure, a later `dispose` returns the same rejection. Concurrent disposal stays idempotent, and disposal that races an admitted open still waits for it.
+- [x] Diagnostics report `workspace.acquire-database` and `workspace.release-database` as stages with normalized outcomes, correlated with the workspace identifier. Each failed close step is its own reported failure. No driver message, path, or file name reaches diagnostic output.
+- [x] Desktop quit still confirms Unexported Changes and dependent Comparisons, and still exits when a release fails. The two-attempt quit policy and timeout are unchanged.
+- [x] New contract case: a database release failure makes disposal reject. Diagnostics report it as its own stage, and a sentinel driver message appears in neither the rejection nor the diagnostics. Add the smallest injection seam, following the `failNextTableDrop` pattern.
+- [x] New contract case: the diagnostics contract shows the database acquisition and release stages correlated with the workspace identifier.
+- [x] All existing lifecycle, Working CSV, editing, Comparison, and diagnostics contract cases pass on native DuckDB and DuckDB-Wasm without weakened assertions.
+- [x] The driver tests for the removed lazy opening ("opens one instance no matter how many callers ask at once" and "waits for an in-flight owner connection before closing") are deleted. The cancellation and Worker crash driver tests still pass.
+- [x] The workspace package README describes the ownership order: database, then host, then workspace services, released in reverse. The comments on the composition, the adapters, and the host interface describe the Layer lifetime.
+- [x] The verify skill's diagnostics section lists the new stages, and its `.agents` mirror is regenerated.
+- [x] With the verify skill on desktop: start the app, open two CSV Sources, run and cancel an Aligned Comparison, reopen one Working CSV with changed dialect options, and quit with Unexported Changes to see the confirmation. On web: start the app and open a CSV Source. Read the acquisition and release stages in the diagnostics.
+- [x] The type, lint, and test checks and the desktop and web builds pass.
 
 ## Comments
+
+- **Composition entry.** `createCsvViewer(openDatabase, host, executor?, diagnostics?)` takes the adapter's acquisition and the host rather than prebuilt Layers, so the apps do not author Effect code. The shared runtime turns them into the database Layer (`acquireRelease`) and a host Layer. This departs from the PRD's "host Layer depends on the database Layer": no host has a release step and no caller needed the acquired database to build its host (the web host holds the same Wasm database object before it opens), so the host Layer is `Layer.succeed`. Ticket 02 can add the dependency if the scoped engine source needs it.
+- **Release steps.** `OwnedWorkspaceDatabase` adds `closeOwnerConnection` and `closeEngine`. The finalizer runs both under `workspace.release-database`, each as its own stage (`workspace.close-database-connection`, `workspace.close-database-engine`), and runs the engine step even if the connection step failed.
+- **Release outcome.** The installed `ManagedRuntime` was replaced by `Layer.buildWithScope` into a scope the workspace owns, because nothing else from `ManagedRuntime` was used. Finalizers have error type `never`, so the database finalizer records failure on a flag owned by `makeWorkspaceLayer`, and disposal reads it after `Scope.close` and marks the `workspace.dispose` cleanup as failed.
+- **Disposal is memoized.** Disposal closes the runtime scope even when Comparison or table release failed, as the old store closed the database even when table release failed. After that, retrying table release against a released database cannot succeed, so the first result is kept for every later call. Table retry inside one disposal (tables left registered by a failed user close) is unchanged.
+- **Adapter size.** Both adapters shrink: native -38 lines, Wasm -7 lines even after absorbing the startup check.
+- **Verification.** Desktop: startup acquisition, two CSV Sources, Aligned Comparison run and cancelled, reopen with `Headers: None`, and the quit confirmation for Unexported Changes plus a dependent Comparison were all driven through the UI. The confirmation's `Close` button exposes no UIA pattern, so the confirmed-quit click needs a human. The unconfirmed quit path was driven with `window.close()`. It released the tables, the connection, and the engine, and the app exited. Web: startup acquisition, open, and page-hide release were read from the console.
+- **For ticket 03.** The Wasm adapter still guards every call with `opened()`, because its object exists before `open` for `cancelStartup` and `onFatalError`. Giving it a static `open` like the native adapter removes that guard.

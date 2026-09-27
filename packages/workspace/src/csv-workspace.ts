@@ -6,8 +6,9 @@ import type {
   CsvViewerResult,
   WorkspaceCloseImpact,
 } from './csv-viewer';
+import type { ComparisonExecutor } from './comparison/comparison-executor';
 import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
-import type { WorkspaceDatabase } from './database';
+import type { OwnedWorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';
 
 /** Main-side ownership operations never cross the renderer protocol. */
@@ -19,11 +20,17 @@ export interface CsvWorkspaceOwner extends CsvViewer {
   dispose(): Promise<void>;
 }
 
-/** Creates the product module from one host and one in-memory database adapter. */
+/**
+ * The composition entry every runtime uses. Acquires the database, then builds the Working CSV,
+ * Comparison, and diagnostics services on it and the host, and resolves once all of them exist.
+ * A failed acquisition releases whatever was acquired and rejects. `dispose` releases the Working
+ * CSV tables, then the database. The executor override is for tests.
+ */
 export function createCsvViewer(
+  openDatabase: () => Promise<OwnedWorkspaceDatabase>,
   host: CsvWorkspaceHost,
-  database: WorkspaceDatabase,
+  executor?: ComparisonExecutor,
   diagnostics?: WorkspaceDiagnostics,
-): CsvWorkspaceOwner {
-  return new CsvWorkspaceImplementation(host, database, undefined, diagnostics);
+): Promise<CsvWorkspaceOwner> {
+  return CsvWorkspaceImplementation.create(openDatabase, host, executor, diagnostics);
 }

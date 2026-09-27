@@ -5,14 +5,14 @@ import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 let database: DuckDbWasmWorkspaceDatabase | undefined;
 
 afterEach(async () => {
-  const failures = (await database?.close()) ?? [];
+  await database?.closeOwnerConnection();
+  await database?.closeEngine();
   database = undefined;
-  expect(failures).toEqual([]);
 });
 
 describe('DuckDbWasmWorkspaceDatabase', () => {
   it('runs parameterized queries on the pinned in-memory DuckDB core', async () => {
-    database = createNodeDuckDbWasmDatabase();
+    database = await createNodeDuckDbWasmDatabase().open();
 
     const rows = await database.readObjects(
       'SELECT version() AS version, ?::VARCHAR AS text, ?::BOOLEAN AS enabled, ?::INTEGER AS count',
@@ -30,7 +30,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   });
 
   it('reads registered memory files while rejecting remote sources and extension fetching', async () => {
-    database = createNodeDuckDbWasmDatabase();
+    database = await createNodeDuckDbWasmDatabase().open();
     const reference = await database.registerFileBuffer(
       'people.csv',
       new TextEncoder().encode('name,age\nAda,37\n'),
@@ -100,7 +100,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   });
 
   it('cancels pending work without publishing its table and keeps the connection usable', async () => {
-    database = createNodeDuckDbWasmDatabase();
+    database = await createNodeDuckDbWasmDatabase().open();
     const worker = await database.connectWorker();
     const work = worker.runCancellable(
       'CREATE TABLE cancelled_wasm_work AS SELECT sum(a.range * b.range) FROM range(1000000) a, range(1000000) b',
@@ -129,11 +129,11 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
       createWorker: () => phase === 'pending creation' ? creation.promise : Promise.resolve(worker),
     });
-    const opening = database.ownerConnection().catch(() => undefined);
+    const opening = database.open().catch(() => undefined);
     if (phase === 'pending request') await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     database.cancelStartup();
     database.cancelStartup();
-    await expect(database.close()).resolves.toEqual([]);
+    await expect(database.closeEngine()).resolves.toBeUndefined();
     if (phase === 'pending creation') {
       creation.resolve(worker);
       await opening;
@@ -151,7 +151,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     });
     const fatalError = vi.fn();
     database.onFatalError(fatalError);
-    void database.ownerConnection();
+    void database.open();
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
 
     worker.emitError(new Error('Worker crashed.'));
@@ -162,6 +162,25 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await expect(database.readObjects('SELECT 1')).rejects.toThrow(
       'The data engine has stopped. Reload CSV Viewer to start a new workspace.',
     );
+  });
+
+  it('holds a failed Worker termination after a crash for the engine release', async () => {
+    const worker = new ControllableWorker();
+    worker.terminate.mockImplementation(() => {
+      throw new Error('Worker termination failed.');
+    });
+    const crashed = new DuckDbWasmWorkspaceDatabase({
+      mainModule: 'duckdb.wasm',
+      mainWorker: 'duckdb.worker.js',
+      createWorker: () => Promise.resolve(worker),
+    });
+    void crashed.open().catch(() => undefined);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+
+    worker.emitError(new Error('Worker crashed.'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(crashed.closeEngine()).rejects.toThrow('Worker termination failed.');
   });
 });
 

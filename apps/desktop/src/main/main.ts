@@ -11,7 +11,7 @@ import {
 import path from 'node:path';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { registerCsvViewerRequestHandler, registerDroppedSourceHandler } from './csv-viewer-ipc';
-import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
+import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
 import { ipcChannels } from '../ipc-channels';
@@ -67,7 +67,6 @@ const workspaceHost = new DesktopWorkspaceHost(
   // File name predates the Recent CSV Source vocabulary; kept so existing installs keep their list.
   path.join(app.getPath('userData'), 'recent-files.json'),
 );
-const workspace = createCsvViewer(workspaceHost, new DuckDbWorkspaceDatabase());
 let workspaceCloseAuthorizedImpact: WorkspaceCloseImpact | undefined;
 let workspaceCloseConfirmation: Promise<WorkspaceCloseImpact | null> | null = null;
 
@@ -106,7 +105,7 @@ function registerContentSecurityPolicy() {
   });
 }
 
-function createWindow() {
+function createWindow(workspace: CsvWorkspaceOwner) {
   const windowOptions: BrowserWindowConstructorOptions = {
     width: 1180,
     height: 760,
@@ -135,7 +134,7 @@ function createWindow() {
         if (!mainWindow.isDestroyed()) mainWindow.close();
         return;
       }
-      const confirmedImpact = await confirmWorkspaceCloseOnce(initial.impact);
+      const confirmedImpact = await confirmWorkspaceCloseOnce(workspace, initial.impact);
       if (confirmedImpact) {
         workspaceCloseAuthorizedImpact = confirmedImpact;
         closeAllowed = true;
@@ -227,6 +226,7 @@ async function confirmWorkspaceClose(impact: WorkspaceCloseImpact): Promise<bool
 }
 
 async function confirmCurrentWorkspaceImpact(
+  workspace: CsvWorkspaceOwner,
   initialImpact: WorkspaceCloseImpact,
 ): Promise<WorkspaceCloseImpact | null> {
   let impact = initialImpact;
@@ -238,28 +238,39 @@ async function confirmCurrentWorkspaceImpact(
   return null;
 }
 
-function confirmWorkspaceCloseOnce(impact: WorkspaceCloseImpact): Promise<WorkspaceCloseImpact | null> {
+function confirmWorkspaceCloseOnce(
+  workspace: CsvWorkspaceOwner,
+  impact: WorkspaceCloseImpact,
+): Promise<WorkspaceCloseImpact | null> {
   if (!workspaceCloseConfirmation) {
-    workspaceCloseConfirmation = confirmCurrentWorkspaceImpact(impact).finally(() => {
+    workspaceCloseConfirmation = confirmCurrentWorkspaceImpact(workspace, impact).finally(() => {
       workspaceCloseConfirmation = null;
     });
   }
   return workspaceCloseConfirmation;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerContentSecurityPolicy();
   createApplicationMenu();
+  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open, workspaceHost);
   registerCsvViewerRequestHandler(ipcMain, workspace);
   registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
   workspace.onEvent(sendEvent);
-  createWindow();
+  // Registered only once the workspace exists: quitting before then has nothing to dispose.
+  app.on('before-quit', (event) => disposeWorkspaceOnQuit(workspace, event));
+  createWindow(workspace);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      createWindow(workspace);
     }
   });
+}).catch((error) => {
+  // Any startup failure leaves no usable window. Log only the error's own message: a database
+  // error keeps the driver exception in its `cause`, which diagnostics deliberately exclude.
+  console.error('CSV Viewer failed to start.', error instanceof Error ? `${error.name}: ${error.message}` : 'Unknown error.');
+  app.exit(1);
 });
 
 app.on('window-all-closed', () => {
@@ -273,7 +284,7 @@ let workspaceDisposalStarted = false;
 const workspaceDisposalAttempts = 2;
 const workspaceDisposalTimeoutMs = 10_000;
 
-app.on('before-quit', (event) => {
+function disposeWorkspaceOnQuit(workspace: CsvWorkspaceOwner, event: Electron.Event) {
   if (workspaceDisposed) return;
   event.preventDefault();
   if (workspaceDisposalStarted) return;
@@ -282,18 +293,18 @@ app.on('before-quit', (event) => {
     if (impact.status === 'ready') {
       if (workspaceDisposalStarted || workspaceDisposed) return;
       workspaceDisposalStarted = true;
-      await disposeWorkspaceBeforeQuit();
+      await disposeWorkspaceBeforeQuit(workspace);
       return;
     }
-    const confirmedImpact = await confirmWorkspaceCloseOnce(impact.impact);
+    const confirmedImpact = await confirmWorkspaceCloseOnce(workspace, impact.impact);
     if (!confirmedImpact || workspaceDisposalStarted || workspaceDisposed) return;
     workspaceCloseAuthorizedImpact = confirmedImpact;
     workspaceDisposalStarted = true;
-    await disposeWorkspaceBeforeQuit();
+    await disposeWorkspaceBeforeQuit(workspace);
   })();
-});
+}
 
-async function disposeWorkspaceBeforeQuit(): Promise<void> {
+async function disposeWorkspaceBeforeQuit(workspace: CsvWorkspaceOwner): Promise<void> {
   for (let attempt = 1; attempt <= workspaceDisposalAttempts; attempt += 1) {
     try {
       await withTimeout(

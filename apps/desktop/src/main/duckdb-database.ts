@@ -1,8 +1,7 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
-import { toError } from '@csv-viewer/workspace/errors';
 import {
   normalizeDatabaseOperation,
-  type WorkspaceDatabase,
+  type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
 import type { QueryValues } from '@csv-viewer/workspace/csv-query';
@@ -10,11 +9,6 @@ import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
 
 export type DuckDbRow = EngineRow;
 
-/**
- * Owns the native DuckDB instance and the workspace's owner connection. This is the only module
- * that opens, closes, or hands out native connections, so the workspace above it never holds a
- * driver type.
- */
 class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
   constructor(private readonly connection: DuckDBConnection) {}
 
@@ -46,34 +40,22 @@ class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
   }
 }
 
-export class DuckDbWorkspaceDatabase implements WorkspaceDatabase {
-  private instance: DuckDBInstance | null = null;
-  private connection: NativeDuckDbConnection | null = null;
-  private opening: Promise<NativeDuckDbConnection> | null = null;
+/**
+ * The native in-memory database, open from `open` until the workspace runtime releases it. This is
+ * the only module that opens, closes, or hands out native connections, so the workspace above it
+ * never holds a driver type.
+ */
+export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
+  private constructor(
+    private readonly instance: DuckDBInstance,
+    private readonly connection: NativeDuckDbConnection,
+  ) {}
 
-  /**
-   * Opening yields the event loop twice, so the in-flight promise is what gets shared. Caching the
-   * resolved connection instead would let concurrent callers each create an instance, and every
-   * instance but the last would leak past `close`.
-   */
-  async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
-    if (this.connection) return this.connection;
-    if (!this.opening) {
-      this.opening = this.openOwnerConnection().finally(() => {
-        this.opening = null;
-      });
-    }
-    return this.opening;
-  }
-
-  private async openOwnerConnection(): Promise<NativeDuckDbConnection> {
+  static async open(): Promise<DuckDbWorkspaceDatabase> {
     return normalizeDatabaseOperation(async () => {
       const instance = await DuckDBInstance.create(':memory:');
       try {
-        const connection = new NativeDuckDbConnection(await instance.connect());
-        this.instance = instance;
-        this.connection = connection;
-        return connection;
+        return new DuckDbWorkspaceDatabase(instance, new NativeDuckDbConnection(await instance.connect()));
       } catch (error) {
         instance.closeSync();
         throw error;
@@ -81,49 +63,29 @@ export class DuckDbWorkspaceDatabase implements WorkspaceDatabase {
     });
   }
 
+  async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
+    return this.connection;
+  }
+
   async connectWorker(): Promise<WorkspaceDatabaseConnection> {
-    await this.ownerConnection();
-    const instance = this.instance;
-    if (!instance) throw new Error('CSV workspace is disposing.');
     return normalizeDatabaseOperation(async () =>
-      new NativeDuckDbConnection(await instance.connect()),
+      new NativeDuckDbConnection(await this.instance.connect()),
     );
   }
 
-  isOpen(): boolean {
-    return this.connection !== null;
+  run(sql: string, values?: QueryValues): Promise<void> {
+    return this.connection.run(sql, values);
   }
 
-  async run(sql: string, values?: QueryValues): Promise<void> {
-    await (await this.ownerConnection()).run(sql, values);
+  readObjects(sql: string, values?: QueryValues): Promise<DuckDbRow[]> {
+    return this.connection.readObjects(sql, values);
   }
 
-  async readObjects(sql: string, values?: QueryValues): Promise<DuckDbRow[]> {
-    return (await this.ownerConnection()).readObjects(sql, values);
+  closeOwnerConnection(): Promise<void> {
+    return this.connection.close();
   }
 
-  /** Closes the owner connection and instance, collecting rather than throwing teardown failures. */
-  async close(): Promise<Error[]> {
-    const failures: Error[] = [];
-    const opening = this.opening;
-    if (opening) {
-      await opening.catch((error) => failures.push(toError(error)));
-    }
-    try {
-      await this.connection?.close();
-    } catch (error) {
-      failures.push(toError(error));
-    }
-    this.connection = null;
-    try {
-      const instance = this.instance;
-      if (instance) {
-        await normalizeDatabaseOperation(async () => instance.closeSync());
-      }
-    } catch (error) {
-      failures.push(toError(error));
-    }
-    this.instance = null;
-    return failures;
+  closeEngine(): Promise<void> {
+    return normalizeDatabaseOperation(async () => this.instance.closeSync());
   }
 }

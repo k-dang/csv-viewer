@@ -5,11 +5,11 @@ import {
   VoidLogger,
 } from '@duckdb/duckdb-wasm';
 import { toError } from '@csv-viewer/workspace/errors';
-import type { QueryValues } from '@csv-viewer/workspace/csv-query';
+import { quoteLiteral, type QueryValues } from '@csv-viewer/workspace/csv-query';
 import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
 import {
   normalizeDatabaseOperation,
-  type WorkspaceDatabase,
+  type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
 
@@ -89,11 +89,14 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   }
 }
 
-/** Owns one single-threaded, in-memory DuckDB-Wasm Worker and its owner connection. */
-export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
+/**
+ * One single-threaded, in-memory DuckDB-Wasm Worker and its owner connection. The workspace
+ * runtime acquires it with `open` and releases it with the two close steps. A Worker error stops
+ * the engine for the rest of the page.
+ */
+export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
-  private opening: Promise<DuckDbWasmConnection> | null = null;
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
@@ -108,32 +111,51 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   }
 
   /**
-   * Opening yields the event loop, so the in-flight promise is what gets shared. Caching the
-   * resolved connection instead would let concurrent callers each start a Worker, and every Worker
-   * but the last would leak past `close`.
+   * Starts the Worker, opens the owner connection under the network-isolation settings, and proves
+   * the in-memory CSV path. A failure releases whatever it started before rejecting.
    */
+  async open(): Promise<this> {
+    await normalizeDatabaseOperation(async () => {
+      const database = await this.createEngine();
+      this.throwIfFatal();
+      this.database = database;
+      try {
+        await database.open({
+          path: ':memory:',
+          maximumThreads: 1,
+          allowUnsignedExtensions: false,
+          query: { castBigIntToDouble: false },
+          filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
+          opfs: { fileHandling: 'manual' },
+        });
+        const connection = new DuckDbWasmConnection(await database.connect());
+        this.connection = connection;
+        await connection.run(`SET allowed_directories = ['${sourceDirectory}']`);
+        await connection.run('SET enable_external_access = false');
+        await connection.run('SET allow_community_extensions = false');
+        await connection.run('SET autoinstall_known_extensions = false');
+        await connection.run('SET autoload_known_extensions = false');
+        await connection.run('SET lock_configuration = true');
+        this.throwIfFatal();
+        await this.verifyInMemoryCsvQuery();
+      } catch (error) {
+        await this.closeOwnerConnection().catch(() => undefined);
+        await this.closeEngine().catch(() => undefined);
+        throw error;
+      }
+    });
+    return this;
+  }
+
   async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
-    this.throwIfFatal();
-    if (this.connection) return this.connection;
-    if (!this.opening) {
-      this.opening = this.openOwnerConnection().finally(() => {
-        this.opening = null;
-      });
-    }
-    return this.opening;
+    return this.opened().connection;
   }
 
   async connectWorker(): Promise<WorkspaceDatabaseConnection> {
-    await this.ownerConnection();
-    const database = this.database;
-    if (!database) throw new Error('CSV workspace is disposing.');
+    const { database } = this.opened();
     return normalizeDatabaseOperation(async () =>
       new DuckDbWasmConnection(await database.connect()),
     );
-  }
-
-  isOpen(): boolean {
-    return this.connection !== null;
   }
 
   /** Reports an unrecoverable Worker failure once for the lifetime of this database. */
@@ -144,17 +166,15 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   }
 
   async run(sql: string, values?: QueryValues): Promise<void> {
-    await (await this.ownerConnection()).run(sql, values);
+    await this.opened().connection.run(sql, values);
   }
 
   async readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return (await this.ownerConnection()).readObjects(sql, values);
+    return this.opened().connection.readObjects(sql, values);
   }
 
   async registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
-    await this.ownerConnection();
-    const database = this.database;
-    if (!database) throw new Error('CSV workspace is disposing.');
+    const { database } = this.opened();
     const baseName = name.split('/').pop() || 'source.csv';
     const reference = `${sourceDirectory}/${crypto.randomUUID()}-${baseName}`;
     await normalizeDatabaseOperation(() => database.registerFileBuffer(reference, contents));
@@ -187,32 +207,22 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
   }
 
-  /** Closes every Wasm resource, collecting rather than throwing teardown failures. */
-  async close(): Promise<Error[]> {
-    const failures: Error[] = [];
+  async closeOwnerConnection(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    await connection?.close();
+  }
+
+  /** Stops the Worker. After a fatal stop, reports the outcome of the termination that stop began. */
+  async closeEngine(): Promise<void> {
     if (this.fatalCleanup) {
       const failure = await this.fatalCleanup;
-      if (failure) failures.push(failure);
-      return failures;
+      if (failure) throw failure;
+      return;
     }
-    const opening = this.opening;
-    if (opening) {
-      await opening.catch((error) => failures.push(toError(error)));
-    }
-    try {
-      await this.connection?.close();
-    } catch (error) {
-      failures.push(toError(error));
-    }
-    this.connection = null;
-    try {
-      const database = this.database;
-      if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
-    } catch (error) {
-      failures.push(toError(error));
-    }
+    const database = this.database;
     this.database = null;
-    return failures;
+    if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
   }
 
   /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
@@ -246,36 +256,24 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     await database.terminate();
   }
 
-  private async openOwnerConnection(): Promise<DuckDbWasmConnection> {
-    return normalizeDatabaseOperation(async () => {
-      const database = await this.createEngine();
-      this.throwIfFatal();
-      this.database = database;
-      try {
-        await database.open({
-          path: ':memory:',
-          maximumThreads: 1,
-          allowUnsignedExtensions: false,
-          query: { castBigIntToDouble: false },
-          filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
-          opfs: { fileHandling: 'manual' },
-        });
-        const connection = new DuckDbWasmConnection(await database.connect());
-        await connection.run(`SET allowed_directories = ['${sourceDirectory}']`);
-        await connection.run('SET enable_external_access = false');
-        await connection.run('SET allow_community_extensions = false');
-        await connection.run('SET autoinstall_known_extensions = false');
-        await connection.run('SET autoload_known_extensions = false');
-        await connection.run('SET lock_configuration = true');
-        this.throwIfFatal();
-        this.connection = connection;
-        return connection;
-      } catch (error) {
-        await this.releaseEngine(database).catch(() => undefined);
-        this.database = null;
-        throw error;
-      }
-    });
+  private async verifyInMemoryCsvQuery(): Promise<void> {
+    // Encoded per call: registering hands the buffer to the Worker, which may detach it.
+    const probe = new TextEncoder().encode('ready\ntrue\n');
+    const rows = await this.withRegisteredFile('startup-check.csv', probe, (reference) =>
+      this.readObjects(
+        `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
+      ),
+    );
+    if (rows.length !== 1 || rows[0]?.ready !== 'true') {
+      throw new Error('The browser could not run the required in-memory CSV query.');
+    }
+  }
+
+  private opened() {
+    this.throwIfFatal();
+    const { database, connection } = this;
+    if (!database || !connection) throw new Error('The data engine is not open.');
+    return { database, connection };
   }
 
   private failFatally(cause: unknown): void {
@@ -284,11 +282,8 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     const database = this.database;
     this.connection = null;
     this.database = null;
-    this.opening = null;
     this.stopObservingWorker();
-    this.fatalCleanup = database
-      ? database.terminate().then(() => null, toError)
-      : Promise.resolve(null);
+    this.fatalCleanup = database ? database.terminate().then(() => null, toError) : Promise.resolve(null);
     for (const listener of this.fatalErrorListeners) listener(this.fatalError);
   }
 
