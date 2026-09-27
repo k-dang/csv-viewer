@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { toError } from '@csv-viewer/workspace/errors';
+import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import type { CsvSourceId, RecentCsvSource } from '@csv-viewer/workspace/csv-viewer';
 import {
@@ -77,10 +77,20 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   }
 
   async acquireDroppedSource(filePath: string): Promise<CsvSourceId> {
-    if (!/\.(csv|tsv|txt)$/i.test(filePath)) throw new Error('Only CSV, TSV, and TXT files can be dropped.');
-    const fileStats = await stat(filePath);
-    if (!fileStats.isFile()) throw new Error('Folders cannot be opened. Drop CSV, TSV, or TXT files.');
-    return this.registerSource(filePath);
+    if (!/\.(csv|tsv|txt)$/i.test(filePath)) {
+      throw new WorkspaceRequestError({ message: 'Only CSV, TSV, and TXT files can be dropped.' });
+    }
+    try {
+      const fileStats = await stat(filePath);
+      if (!fileStats.isFile()) {
+        throw new WorkspaceRequestError({ message: 'Folders cannot be opened. Drop CSV, TSV, or TXT files.' });
+      }
+      return await this.registerSource(filePath);
+    } catch (cause) {
+      if (cause instanceof WorkspaceRequestError) throw cause;
+      if (isFileSystemError(cause)) throw toSourceUnavailableError(cause);
+      throw cause;
+    }
   }
 
   releaseSource(): void {
@@ -242,18 +252,21 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       await mkdir(path.dirname(this.recentSourcesPath), { recursive: true });
       await writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8');
     } catch (cause: unknown) {
-      console.warn('Unable to write Recent CSV Sources.', cause);
+      warnRecentSourceFailure('write', recentSourceFailureCategory(cause));
     }
   }
 
   private async readRecentEntries(): Promise<RecentSourceEntry[]> {
     try {
       const parsed = JSON.parse(await readFile(this.recentSourcesPath, 'utf8'));
-      if (!Array.isArray(parsed)) return [];
+      if (!Array.isArray(parsed)) {
+        warnRecentSourceFailure('read', 'invalid-format');
+        return [];
+      }
       return parsed.filter(isRecentSourceEntry).slice(0, maxRecentSources);
     } catch (cause: unknown) {
       if (isFileSystemError(cause) && cause.code === 'ENOENT') return [];
-      console.warn('Unable to read Recent CSV Sources.', cause);
+      warnRecentSourceFailure('read', recentSourceFailureCategory(cause));
       return [];
     }
   }
@@ -268,6 +281,16 @@ type RecentSourceEntry = {
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+function recentSourceFailureCategory(cause: unknown): 'invalid-format' | 'permission-denied' | 'io-failure' | 'unexpected' {
+  if (cause instanceof SyntaxError) return 'invalid-format';
+  if (!isFileSystemError(cause)) return 'unexpected';
+  return cause.code === 'EACCES' || cause.code === 'EPERM' ? 'permission-denied' : 'io-failure';
+}
+
+function warnRecentSourceFailure(action: 'read' | 'write', category: ReturnType<typeof recentSourceFailureCategory>): void {
+  console.warn(`Unable to ${action} Recent CSV Sources (${category}).`);
+}
+
 function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: string): string {
   if (identity && identity.inode !== 0n) return `inode:${identity.device}:${identity.inode}`;
   return `path:${normalizeCanonicalPath(identity?.canonicalPath ?? path.resolve(filePath))}`;
@@ -279,14 +302,13 @@ function buildDefaultExportName(sourceName: string): string {
 }
 
 function toSourceUnavailableError(cause: unknown): Error {
-  if (!isFileSystemError(cause)) return toError(cause);
+  if (!isFileSystemError(cause)) return cause instanceof Error ? cause : new Error('CSV Source access failed.');
   if (cause.code === 'ENOENT') {
     return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
   }
   if (cause.code === 'EACCES' || cause.code === 'EPERM') {
     return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
   }
-  console.error('Unable to read the CSV Source.', cause);
   return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
 }
 

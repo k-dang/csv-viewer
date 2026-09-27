@@ -7,7 +7,7 @@ import type { WorkspaceDatabase } from './database';
 import type { CsvComparisonService } from './comparison/csv-comparison-service';
 import type { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
-import { toError } from './errors';
+import { attemptWorkspacePromise, genericWorkspaceFailure, isExpectedWorkspaceError, WorkspaceRequestError } from './errors';
 import type {
   BeginComparisonResult,
   BeginComparisonRequest,
@@ -86,7 +86,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       case 'csv.reopen':
         return this.reopenCsv(request.workingCsvId, request.options);
       case 'csv.get-recent-sources':
-        return Effect.tryPromise({ try: () => this.host.recentSources(), catch: toError });
+        return attemptWorkspacePromise(() => this.host.recentSources());
       case 'csv.get-rows':
         return this.csvStore.getRows(request);
       case 'csv.get-column-values':
@@ -169,26 +169,25 @@ export class CsvWorkspaceImplementation implements CsvViewer {
     )).pipe(Effect.annotateSpans({ workspaceId: this.workspaceId, requestId: crypto.randomUUID(), ...identifiers }));
     const result = await Effect.runPromiseExitWith(this.context)(observed);
     if (Exit.isSuccess(result)) return result.value;
-    if (result.cause.reasons.length > 1) {
-      throw new AggregateError(Cause.prettyErrors(result.cause), 'Unable to complete all workspace operations.', {
-        cause: result.cause,
-      });
+    const [reason] = result.cause.reasons;
+    if (result.cause.reasons.length === 1 && reason._tag === 'Fail' && isExpectedWorkspaceError(reason.error)) {
+      throw new Error(reason.error.message);
     }
-    throw Cause.squash(result.cause);
+    throw new Error(genericWorkspaceFailure);
   }
 
   onEvent(listener: (event: CsvViewerEvent) => void): () => void {
     return this.comparisonStore.subscribe((event) => listener({ type: 'comparison', event }));
   }
 
-  private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Effect.Effect<OpenCsvResult> {
+  private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Effect.Effect<OpenCsvResult, Error> {
     return Effect.gen({ self: this }, function* () {
       if (this.disposal) {
         if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
         return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
       }
       // Source selection may outlive the workspace; admission protects only the open that follows it.
-      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', Effect.promise(() => this.host.acquireSource())));
+      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', attemptWorkspacePromise(() => this.host.acquireSource())));
       if (!sourceId) return { status: 'cancelled' } satisfies OpenCsvResult;
       if (sourceId instanceof Object) return sourceId;
       let retained = false;
@@ -203,7 +202,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   /** The admission covers the Recent CSV Source write, so disposal waits for accepted opens. */
-  private openSource(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult> {
+  private openSource(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, Error> {
     return Effect.gen({ self: this }, function* () {
       if (!(yield* this.csvStore.admit())) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
       const outcome = yield* this.csvStore.open(sourceId, options);
@@ -215,12 +214,12 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   }
 
   private recordRecentSource(sourceId: CsvSourceId) {
-    return observeStage('csv.record-recent', Effect.tryPromise(() => this.host.recordRecentSource(sourceId)).pipe(
+    return observeStage('csv.record-recent', attemptWorkspacePromise(() => this.host.recordRecentSource(sourceId)).pipe(
       Effect.catchCause((cause) => recordOutcome('cleanup-failed', cause, 'cleanup-failed').pipe(Effect.andThen(markCleanupFailed))),
     ));
   }
 
-  private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult> {
+  private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, Error> {
     return Effect.gen({ self: this }, function* () {
       if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
       const initial = this.csvStore.getState(workingCsvId);
@@ -230,7 +229,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
       let existing: WorkingCsvView = initial;
       while (true) {
         while (existing.editState.hasUnexportedChanges) {
-          const canContinue = yield* observeStage('csv.confirm-discard', Effect.promise(() => this.host.confirmDiscardChanges(existing.source.name)));
+          const canContinue = yield* observeStage('csv.confirm-discard', attemptWorkspacePromise(() => this.host.confirmDiscardChanges(existing.source.name)));
           if (!canContinue) return { status: 'cancelled' } satisfies OpenCsvResult;
           if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
           const current = this.csvStore.getState(workingCsvId);
@@ -329,7 +328,7 @@ export class CsvWorkspaceImplementation implements CsvViewer {
   private closeImpact(workingCsvId: WorkingCsvId): Effect.Effect<CloseImpact, Error> {
     return Effect.gen({ self: this }, function* () {
       if (!this.csvStore.has(workingCsvId)) {
-        return yield* Effect.fail(new Error('Working CSV is no longer active.'));
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'Working CSV is no longer active.' }));
       }
       return {
         hasUnexportedChanges: this.csvStore.hasUnexportedChanges(workingCsvId),

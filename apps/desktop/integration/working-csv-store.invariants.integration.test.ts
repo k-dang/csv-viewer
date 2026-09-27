@@ -93,7 +93,7 @@ describe('WorkingCsvStore invariants', () => {
 
     expect(notified).toEqual([workingCsv.workingCsvId]);
     expect(store.getState(workingCsv.workingCsvId)?.dataRevision).toBe(1);
-    expect(failures).toEqual(['recoverable-failure']);
+    expect(failures).toEqual(['defect']);
     await Effect.runPromise(store.disposeStore());
   });
 

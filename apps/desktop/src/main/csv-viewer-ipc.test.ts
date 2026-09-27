@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import type { CsvViewer, CsvViewerRequest } from '@csv-viewer/workspace/csv-viewer';
 import { ipcChannels } from '../ipc-channels';
-import { registerCsvViewerRequestHandler } from './csv-viewer-ipc';
+import { registerCsvViewerRequestHandler, registerDroppedSourceHandler } from './csv-viewer-ipc';
+import { createElectronCsvViewer, type CsvViewerIpcRenderer } from '../preload/electron-csv-viewer';
+import { unwrapCsvViewerIpcResponse } from '../csv-viewer-ipc-response';
+import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 
 function setup(call: CsvViewer['call']) {
   type Ipc = Parameters<typeof registerCsvViewerRequestHandler>[0];
@@ -37,7 +41,7 @@ describe('CsvViewer Electron request bridge', () => {
     // SAFETY: This fixture handles only csv.open, whose result includes capacity rejection.
     const call = vi.fn(async () => result) as CsvViewer['call'];
     const handler = setup(call);
-    expect(structuredClone(await handler(ipcEvent, { operation: 'csv.open' }))).toEqual(result);
+    expect(structuredClone(await handler(ipcEvent, { operation: 'csv.open' }))).toEqual({ ok: true, value: result });
   });
 
   it('forwards a valid request and returns the exact result', async () => {
@@ -55,7 +59,7 @@ describe('CsvViewer Electron request bridge', () => {
     const call = vi.fn(async (_request: CsvViewerRequest) => result) as CsvViewer['call'];
     const handler = setup(call);
 
-    await expect(handler(ipcEvent, request)).resolves.toBe(result);
+    await expect(handler(ipcEvent, request)).resolves.toEqual({ ok: true, value: result });
     expect(call).toHaveBeenCalledWith(request);
   });
 
@@ -64,9 +68,7 @@ describe('CsvViewer Electron request bridge', () => {
     const call = vi.fn() as CsvViewer['call'];
     const handler = setup(call);
 
-    await expect(Promise.resolve().then(() => handler(ipcEvent, { operation: 42 }))).rejects.toThrow(
-      'Malformed CSV Viewer request.',
-    );
+    await expect(handler(ipcEvent, { operation: 42 })).resolves.toEqual({ ok: false, message: 'Malformed CSV Viewer request.' });
     expect(call).not.toHaveBeenCalled();
   });
 
@@ -78,7 +80,42 @@ describe('CsvViewer Electron request bridge', () => {
     const handler = setup(call);
     const request = { operation: 'csv.unknown' };
 
-    await expect(handler(ipcEvent, request)).rejects.toThrow('Unsupported CSV Viewer operation: csv.unknown');
+    await expect(handler(ipcEvent, request)).resolves.toEqual({ ok: false, message: 'Unsupported CSV Viewer operation: csv.unknown' });
     expect(call).toHaveBeenCalledWith(request);
+  });
+
+  it('returns a rejected request to the renderer without an Electron prefix', async () => {
+    // SAFETY: This fixture only exercises the rejection path.
+    const call = vi.fn(async () => { throw new Error('CSV column name cannot be blank.'); }) as CsvViewer['call'];
+    const handler = setup(call);
+    const ipc: CsvViewerIpcRenderer = {
+      // SAFETY: This fake invoke returns the registered response for the one request under test.
+      invoke: vi.fn((_channel, request) => handler(ipcEvent, request)) as CsvViewerIpcRenderer['invoke'],
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const viewer = createElectronCsvViewer(ipc);
+    await expect(viewer.call({ operation: 'csv.rename-column', workingCsvId: 'csv', column: 'name', name: ' ' }))
+      .rejects.toThrow(/^CSV column name cannot be blank\.$/);
+  });
+
+  it('sanitizes dropped-source failures before the preload rethrows them', async () => {
+    type Ipc = Parameters<typeof registerDroppedSourceHandler>[0];
+    let handler: Parameters<Ipc['handle']>[1] | undefined;
+    const ipc: Ipc = { handle: (_channel, registered) => { handler = registered; } };
+    registerDroppedSourceHandler(ipc, async () => {
+      throw new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
+    });
+    if (!handler) throw new Error('Dropped-source handler was not registered.');
+    const missingPath = path.resolve('PRIVATE-MISSING.csv');
+    const missing = await handler(ipcEvent, missingPath);
+    expect(() => unwrapCsvViewerIpcResponse(missing)).toThrow(/^The CSV Source no longer exists\.$/);
+
+    registerDroppedSourceHandler(ipc, async () => {
+      throw new Error('PRIVATE internal failure at C:\\PRIVATE-MISSING.csv');
+    });
+    const unexpected = await handler(ipcEvent, missingPath);
+    expect(unexpected).toEqual({ ok: false, message: 'The CSV workspace could not complete the request.' });
+    expect(JSON.stringify(unexpected)).not.toContain('PRIVATE');
   });
 });

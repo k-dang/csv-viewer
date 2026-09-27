@@ -1,4 +1,5 @@
 import type { CsvCellValue } from '../csv-viewer';
+import { WorkspaceRequestError } from '../errors';
 
 export type CsvEditDraft =
   | {
@@ -86,7 +87,7 @@ export class CsvEditHistory {
 
   async undo(revert: (command: CsvEditCommand) => Promise<void>): Promise<CsvEditCommand> {
     const command = this.undoStack.at(-1);
-    if (!command) throw new Error('No CSV edit is available to undo.');
+    if (!command) throw new WorkspaceRequestError({ message: 'No CSV edit is available to undo.' });
     await revert(command);
     this.undoStack.pop();
     this.redoStack.push(command);
@@ -96,7 +97,7 @@ export class CsvEditHistory {
 
   async redo(apply: (command: CsvEditCommand) => Promise<void>): Promise<CsvEditCommand> {
     const command = this.redoStack.at(-1);
-    if (!command) throw new Error('No CSV edit is available to redo.');
+    if (!command) throw new WorkspaceRequestError({ message: 'No CSV edit is available to redo.' });
     await apply(command);
     this.redoStack.pop();
     this.undoStack.push(command);

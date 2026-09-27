@@ -92,9 +92,15 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     use: (engineSourceReference: string) => Promise<T>,
   ): Promise<T> {
     const source = this.requireSource(sourceId);
+    let contents: ArrayBuffer;
+    try {
+      contents = await source.arrayBuffer();
+    } catch {
+      throw new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
+    }
     return this.database.withRegisteredFile(
       source.name,
-      new Uint8Array(await source.arrayBuffer()),
+      new Uint8Array(contents),
       use,
     );
   }

@@ -6,6 +6,7 @@ import type {
   CsvSortDescriptor,
 } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
+import { WorkspaceRequestError } from '../errors';
 import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
 
 export type QueryValues = Array<string | number | boolean | null>;
@@ -305,7 +306,7 @@ function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string
 }
 
 export function assertKnownColumn(column: string, knownColumns: Set<string>): void {
-  if (!knownColumns.has(column)) throw new Error(`Unknown CSV column: ${column}`);
+  if (!knownColumns.has(column)) throw new WorkspaceRequestError({ message: `Unknown CSV column: ${column}` });
 }
 
 /** The most rows any single row-window request may return, for CSV rows and Comparison rows alike. */
@@ -332,7 +333,7 @@ export function quoteLiteral(value: string): string {
 
 /** An empty list would render `IN ()`, which the engine rejects as a syntax error. */
 function assertRowIds(rowIds: string[]): void {
-  if (rowIds.length === 0) throw new Error('At least one CSV row is required.');
+  if (rowIds.length === 0) throw new WorkspaceRequestError({ message: 'At least one CSV row is required.' });
 }
 
 function buildPlaceholders(count: number): string {
