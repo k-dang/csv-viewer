@@ -267,8 +267,9 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((error) => {
-  // Any startup failure leaves no usable window.
-  console.error('CSV Viewer failed to start.', error);
+  // Any startup failure leaves no usable window. Log only the error's own message: a database
+  // error keeps the driver exception in its `cause`, which diagnostics deliberately exclude.
+  console.error('CSV Viewer failed to start.', error instanceof Error ? `${error.name}: ${error.message}` : 'Unknown error.');
   app.exit(1);
 });
 
