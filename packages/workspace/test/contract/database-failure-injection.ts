@@ -9,6 +9,15 @@ export function failNextMetadataRead(database: WorkspaceDatabase): void {
   };
 }
 
+export function failNextCsvLoad(database: WorkspaceDatabase): void {
+  const run = database.run.bind(database);
+  database.run = (sql, values) => {
+    if (!sql.startsWith('CREATE TABLE "csv_working_')) return run(sql, values);
+    database.run = run;
+    return Promise.reject(new DataEngineError(new Error('PRIVATE CSV load failure')));
+  };
+}
+
 export function failNextTableDrop(database: WorkspaceDatabase): void {
   const run = database.run.bind(database);
   database.run = (sql, values) => {

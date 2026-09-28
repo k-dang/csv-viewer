@@ -100,6 +100,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
+  private readonly failedFileDrops = new Set<string>();
   private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private readonly handleWorkerError = (event: ErrorEvent) => {
     this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
@@ -175,30 +176,35 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
 
   async registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
     const { database } = this.opened();
+    await this.retryFailedFileDrops(database);
     const baseName = name.split('/').pop() || 'source.csv';
     const reference = `${sourceDirectory}/${crypto.randomUUID()}-${baseName}`;
     await normalizeDatabaseOperation(() => database.registerFileBuffer(reference, contents));
     return reference;
   }
 
-  /** Registers `contents` for the duration of `use`, dropping it even when `use` throws. */
-  async withRegisteredFile<T>(
-    name: string,
-    contents: Uint8Array,
-    use: (reference: string) => Promise<T>,
-  ): Promise<T> {
-    const reference = await this.registerFileBuffer(name, contents);
-    try {
-      return await use(reference);
-    } finally {
-      await this.dropFile(reference);
-    }
-  }
-
   async dropFile(reference: string): Promise<void> {
     const database = this.database;
     if (database) {
-      await normalizeDatabaseOperation(() => database.dropFile(reference));
+      try {
+        await normalizeDatabaseOperation(() => database.dropFile(reference));
+        this.failedFileDrops.delete(reference);
+      } catch (error) {
+        this.failedFileDrops.add(reference);
+        throw error;
+      }
+    }
+  }
+
+  /** Retry transient drop failures before registering another buffer in the same Worker. */
+  private async retryFailedFileDrops(database: AsyncDuckDB): Promise<void> {
+    for (const reference of this.failedFileDrops) {
+      try {
+        await normalizeDatabaseOperation(() => database.dropFile(reference));
+        this.failedFileDrops.delete(reference);
+      } catch {
+        // The original request reported the release failure; keep the reference for another try.
+      }
     }
   }
 
@@ -259,11 +265,15 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private async verifyInMemoryCsvQuery(): Promise<void> {
     // Encoded per call: registering hands the buffer to the Worker, which may detach it.
     const probe = new TextEncoder().encode('ready\ntrue\n');
-    const rows = await this.withRegisteredFile('startup-check.csv', probe, (reference) =>
-      this.readObjects(
+    const reference = await this.registerFileBuffer('startup-check.csv', probe);
+    let rows: EngineRow[];
+    try {
+      rows = await this.readObjects(
         `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
-      ),
-    );
+      );
+    } finally {
+      await this.dropFile(reference);
+    }
     if (rows.length !== 1 || rows[0]?.ready !== 'true') {
       throw new Error('The browser could not run the required in-memory CSV query.');
     }

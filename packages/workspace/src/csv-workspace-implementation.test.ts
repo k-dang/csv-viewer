@@ -17,7 +17,7 @@ describe('CSV source selection during workspace disposal', () => {
       },
       releaseSource,
       describeSource: async () => { throw new Error('Source must not open after disposal.'); },
-      withEngineSource: async () => { throw new Error('Source must not open after disposal.'); },
+      acquireEngineSource: () => { throw new Error('Source must not open after disposal.'); },
       deliverExport: async () => ({ status: 'cancelled' }),
       recentSources: async () => [],
       recordRecentSource: async () => undefined,

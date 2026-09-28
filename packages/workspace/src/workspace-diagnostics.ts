@@ -58,6 +58,14 @@ export const markCleanupFailed = Effect.serviceOption(OperationCleanup).pipe(Eff
   if (Option.isSome(cleanup)) cleanup.value.failed = true;
 }));
 
+/** Runs a cleanup step as its own stage. A failure is reported as `cleanup-failed` on the stage and the enclosing operation, never to the caller. */
+export function observeCleanup<R>(stage: string, effect: Effect.Effect<void, unknown, R>): Effect.Effect<void, never, R> {
+  return observeStage(stage, effect.pipe(
+    Effect.andThen(recordOutcome('succeeded', undefined, 'succeeded')),
+    Effect.catchCause((cause) => recordOutcome('cleanup-failed', cause, 'cleanup-failed').pipe(Effect.andThen(markCleanupFailed))),
+  ));
+}
+
 /** Reports a contained failure as its own stage without failing the enclosing operation. */
 export function reportFailure(stage: string, cause: Cause.Cause<unknown>): Effect.Effect<void> {
   return observeStage(stage, Effect.failCause(cause)).pipe(Effect.catchCause(() => Effect.void));
