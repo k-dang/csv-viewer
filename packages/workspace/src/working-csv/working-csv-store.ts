@@ -1,6 +1,6 @@
 import { DataEngineError } from '../database';
 import { Cause, Deferred, Effect, Latch, type Scope, type Types } from 'effect';
-import { markCleanupFailed, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
+import { observeCleanup, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
 import { databaseEffect } from '../comparison/comparison-effects';
 import { attemptWorkspacePromise, attemptWorkspaceSync, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
@@ -679,10 +679,11 @@ export class WorkingCsvStore {
         })),
         () => this.releaseStagingTable(tableName),
       );
-      yield* observeStage('csv.access-and-load', Effect.gen({ self: this }, function* () {
-        const reference = yield* this.host.acquireEngineSource(sourceId);
-        yield* attemptWorkspacePromise(() => createWorkingCsvTable(table, reference, dialect));
-      }).pipe(Effect.scoped, Effect.mapError(normalizeEngineError)));
+      yield* observeStage('csv.access-and-load', this.host.acquireEngineSource(sourceId).pipe(
+        Effect.flatMap((reference) => attemptWorkspacePromise(() => createWorkingCsvTable(table, reference, dialect))),
+        Effect.scoped,
+        Effect.mapError(normalizeEngineError),
+      ));
       const [columns, rowCount] = yield* observeStage('csv.read-metadata', Effect.all([
         attemptWorkspacePromise(() => readColumns(table)).pipe(Effect.mapError(normalizeEngineError)),
         attemptWorkspacePromise(() => readRowCount(table)).pipe(Effect.mapError(normalizeEngineError)),
@@ -700,16 +701,10 @@ export class WorkingCsvStore {
   }
 
   private releaseStagingTable(tableName: string) {
-    return observeStage('csv.release-staging', Effect.gen({ self: this }, function* () {
+    return observeCleanup('csv.release-staging', Effect.gen({ self: this }, function* () {
       if (this.artifactRegistry.get(tableName)?.role !== 'staging') return;
-      const result = yield* Effect.exit(Effect.tryPromise(() => dropWorkingCsvTable(this.table(tableName))));
-      if (result._tag === 'Failure') {
-        yield* recordOutcome('cleanup-failed', result.cause, 'cleanup-failed');
-        yield* markCleanupFailed;
-      } else {
-        this.artifactRegistry.remove(tableName);
-        yield* recordOutcome('succeeded', undefined, 'succeeded');
-      }
+      yield* Effect.tryPromise(() => dropWorkingCsvTable(this.table(tableName)));
+      this.artifactRegistry.remove(tableName);
     }));
   }
 
@@ -817,9 +812,7 @@ export class WorkingCsvStore {
 
   /** A failed drop keeps the table registered, so close or disposal can retry it. */
   private dropRetiredLeaseTable(tableName: string): Effect.Effect<void> {
-    return observeStage('csv.release-retired', Effect.tryPromise(() => this.dropRetiredSourceTable(tableName)).pipe(
-      Effect.catchCause((cause) => recordOutcome('cleanup-failed', cause, 'cleanup-failed').pipe(Effect.andThen(markCleanupFailed))),
-    ));
+    return observeCleanup('csv.release-retired', Effect.tryPromise(() => this.dropRetiredSourceTable(tableName)));
   }
 
   /**
@@ -1055,7 +1048,7 @@ function normalizeOpenError(cause: WorkspaceRequestError | DataEngineError | Csv
 }
 
 /** Keep driver details out of product messages and diagnostics. */
-function normalizeEngineError(cause: Error): CsvOpenError {
+function normalizeEngineError(cause: WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError): CsvOpenError {
   if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
     return normalizeOpenError(cause);
   }

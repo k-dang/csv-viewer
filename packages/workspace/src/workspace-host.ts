@@ -1,5 +1,7 @@
 import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './csv-viewer';
 import type { Effect, Scope } from 'effect';
+import type { DataEngineError } from './database';
+import type { WorkspaceRequestError } from './errors';
 
 export type CsvSourceDescription = {
   sourceId: CsvSourceId;
@@ -44,7 +46,7 @@ export interface CsvWorkspaceHost {
    * scope closes, after the reader has finished. The opaque reference is passed to the reader;
    * hosts do not build SQL.
    */
-  acquireEngineSource(sourceId: CsvSourceId): Effect.Effect<string, Error, Scope.Scope>;
+  acquireEngineSource(sourceId: CsvSourceId): Effect.Effect<string, WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError, Scope.Scope>;
   deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery>;
   recentSources(): Promise<RecentCsvSource[]>;
   recordRecentSource(sourceId: CsvSourceId): Promise<void>;

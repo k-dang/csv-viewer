@@ -1,4 +1,4 @@
-import { OperationCleanup, markCleanupFailed, observeStage, recordOutcome, reportFailure, type WorkspaceDiagnostics } from './workspace-diagnostics';
+import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Cause, Context, Effect, Exit, Layer, Option, Schema, Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { Comparisons, Host, WorkingCsv, makeWorkspaceLayer } from './workspace-runtime';
@@ -249,9 +249,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   private recordRecentSource(sourceId: CsvSourceId) {
-    return observeStage('csv.record-recent', attemptWorkspacePromise(() => this.host.recordRecentSource(sourceId)).pipe(
-      Effect.catchCause((cause) => recordOutcome('cleanup-failed', cause, 'cleanup-failed').pipe(Effect.andThen(markCleanupFailed))),
-    ));
+    return observeCleanup('csv.record-recent', attemptWorkspacePromise(() => this.host.recordRecentSource(sourceId)));
   }
 
   private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, Error> {

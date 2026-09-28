@@ -34,7 +34,7 @@ export interface WorkspaceContractFixture {
   failNextCsvLoad(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
-  /** Fail one temporary engine source release after its CSV has loaded. */
+  /** Fail one temporary engine source release. */
   failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */
   failNextDatabaseRelease(): void;

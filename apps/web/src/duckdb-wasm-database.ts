@@ -181,20 +181,6 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return reference;
   }
 
-  /** Registers `contents` for the duration of `use`, dropping it even when `use` throws. */
-  async withRegisteredFile<T>(
-    name: string,
-    contents: Uint8Array,
-    use: (reference: string) => Promise<T>,
-  ): Promise<T> {
-    const reference = await this.registerFileBuffer(name, contents);
-    try {
-      return await use(reference);
-    } finally {
-      await this.dropFile(reference);
-    }
-  }
-
   async dropFile(reference: string): Promise<void> {
     const database = this.database;
     if (database) {
@@ -259,11 +245,15 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private async verifyInMemoryCsvQuery(): Promise<void> {
     // Encoded per call: registering hands the buffer to the Worker, which may detach it.
     const probe = new TextEncoder().encode('ready\ntrue\n');
-    const rows = await this.withRegisteredFile('startup-check.csv', probe, (reference) =>
-      this.readObjects(
+    const reference = await this.registerFileBuffer('startup-check.csv', probe);
+    let rows: EngineRow[];
+    try {
+      rows = await this.readObjects(
         `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
-      ),
-    );
+      );
+    } finally {
+      await this.dropFile(reference);
+    }
     if (rows.length !== 1 || rows[0]?.ready !== 'true') {
       throw new Error('The browser could not run the required in-memory CSV query.');
     }
