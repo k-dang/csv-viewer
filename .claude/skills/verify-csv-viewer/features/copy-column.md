@@ -22,13 +22,13 @@ Preconditions:
 - `phase-2-sample.csv` is active with `5 visible of 5 rows` and no search.
 
 - **Idle.** The text `Right-click a column header to edit the column.` is visible and no `Copy column` item exists.
-- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email` and for `5 values` as two substrings. The `email` column, header included, is tinted.
+- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `5 values`. Then `text` must show `email` on the line immediately before `5 values`. `wait --text "email"` also matches the column header, and `wait --text "email 5 values"` times out. The `email` column, header included, is tinted.
 - **Copy.** Run `click --right --role columnheader --name "email"`, then `click --role menuitem --name "Copy column"`. Wait for `Copied 5`.
 - **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, the `email` column name, `5 values`, `Copied 5`, and the tinted column.
 - **Shortcut.** Run `click --role button --name "Close toast" --nth 0` to clear the earlier toast, then `click --role gridcell --name "Ada Lovelace"` and `press --key "Control+Shift+a"`. Wait for `Copied 5` and `From name`.
 - **Cell copy.** Run `click --role button --name "Close toast" --nth 0`, then `click --role gridcell --name "Ada Lovelace"` to put focus back on the cell (closing the toast moves it away), then `press --key "Control+c"`. Wait for `Copied 1 value`: plain Ctrl+C copies only the focused cell.
 - **Editing keeps its own copy.** Close every earlier toast with `click --role button --name "Close toast" --nth 0` and confirm `text` has no `Copied`. Run `click --role gridcell --name "Grace Hopper" --double`, then `press --key "Control+Shift+a"`. `text` still contains no `Copied`. Run `press --key Escape`.
-- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `name`, `4 values`, and `Copied 4`.
+- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `4 values` and `Copied 4`. `text` must show `name` on the line immediately before `4 values`.
 - **Source.** `fixtures/phase-2-sample.csv` is unchanged.
 
 ## Web differences

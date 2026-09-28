@@ -32,7 +32,7 @@ Preconditions:
 
 ## Web differences
 
-None. The Stats Panel and its Count Scope behave the same on both targets. A trigger click can open the Stats Column list on either target. If the option click finds nothing, press ArrowDown and click the option.
+None. The Stats Panel and its Count Scope behave the same on both targets. On the web pass, a trigger click opened the Stats Column list. If the option click finds nothing, press ArrowDown and click the option.
 
 ## Gotchas
 
