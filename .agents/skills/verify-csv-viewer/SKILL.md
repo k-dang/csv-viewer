@@ -207,7 +207,7 @@ Proof standards:
 node .agents/skills/verify-csv-viewer/bin/control-csv-viewer.mjs cleanup
 ```
 
-Cleanup kills the pids from `current.json` (process trees, not process names): the app or browser, plus the dev server on web. It then deletes that run directory (profile, logs, and on web `downloads/`) and `current.json`. It leaves `.agents/skills/verify-csv-viewer/evidence/` in place.
+Cleanup kills the pids from `current.json` (process groups, not process names): the app or browser, plus the dev server on web. On Linux and macOS the recorded pid is a detached process-group leader, so the signal also stops children such as Vite. It then deletes that run directory (profile, logs, and on web `downloads/`) and `current.json`. It leaves `.agents/skills/verify-csv-viewer/evidence/` in place.
 
 Copy any exported CSV you still need out of `downloads/` into `evidence/` before cleanup. The run directory does not survive.
 

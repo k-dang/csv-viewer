@@ -794,15 +794,21 @@ async function runDoctor() {
 }
 
 async function killPid(pid) {
-  if (!pid || !isPidAlive(pid)) return;
+  if (!pid || pid <= 1 || !isPidAlive(pid)) return;
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
     return;
   }
+  // Detached launch makes this pid a process-group leader. Signaling the group stops
+  // pnpm's vite child, which otherwise gets reparented to init and keeps the port.
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(-pid, 'SIGTERM');
   } catch {
-    // already gone
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // already gone
+    }
   }
 }
 
