@@ -8,7 +8,7 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 - `open-drop` highlights a file drag and opens CSV, TSV, or TXT files, ignoring extension case.
 - `open-drop-batch` opens multiple files sequentially, retains successes, and summarizes rejected or failed items.
 - `open-drop-blocked` declines drops during loading and blocks them during modal dialogs.
-- `open-recent` opens a desktop Recent CSV Source.
+- `open-recent` opens a desktop Recent CSV Source. A listed file that is gone is removed from that list the next time the empty window loads it.
 - `open-tab` shows the file tab, metadata, row counts, and grid values.
 - `open-reopen` reloads the active source into its existing CSV Tab.
 - `open-close` closes a tab and returns to the empty window when none remain.
@@ -34,7 +34,7 @@ Preconditions:
 - Begin on the empty window with fixtures `phase-2-sample.csv` and `phase-2-sample-edited.csv` available.
 - Commands below are helper subcommands. Evidence paths resolve under the skill directory.
 
-- **Empty state.** Capture `snapshot --path evidence/drag-and-drop/empty.aria.txt` and `screenshot --path evidence/drag-and-drop/empty.png`. Require CSV Viewer, No CSV open, and Open CSV.
+- **Empty state.** Capture `snapshot --path evidence/open-csv/empty.aria.txt` and `screenshot --path evidence/open-csv/empty.png`. Require CSV Viewer, No CSV open, and Open CSV.
 - **Highlight.** Run `drop --file fixtures/phase-2-sample.csv --hover`. Capture a screenshot showing Drop files to open. Run the same command with `--cancel` to remove the highlight without opening a file. Test dark and light themes.
 - **Mixed batch.** Run `drop --files '["fixtures/phase-2-sample.csv","README.md","fixtures/phase-2-sample-edited.csv"]'`. Require two tabs, the edited fixture active, its row counts and grid values, and a summary naming README.md. No drop highlight remains. Capture both a snapshot and screenshot.
 - **Duplicate and edits.** Select the first fixture, edit Ada's cell, and require Unexported Changes. Run `drop --file fixtures/phase-2-sample.csv`. Desktop keeps two tabs and the edited value. Web adds a third tab containing the original data; selecting the first tab restores its edited value.
@@ -58,6 +58,7 @@ Preconditions:
 - Native desktop Open/Export dialogs are not driveable over CDP. File drops provide a separate entry point; they do not verify those dialogs.
 - The empty screen has two Open CSV buttons. Use `--nth 0`.
 - The Recent list heading reads `RECENT CSV SOURCES` in `text` and `wait` (CSS uppercase). `wait --text "Recent CSV Sources"` times out. The seeded buttons keep their file names.
+- A Recent CSV Source whose path is gone does not stay as a dead button. The empty window drops it from the list and from `recent-files.json`.
 - Wait for grid values after metadata appears. The row count can paint before the cells.
 - An edited tab's accessible name includes Unexported Changes. An exact filename match can select a different tab when names repeat.
 - A drop during loading is declined, not queued. Retry after loading completes.

@@ -25,7 +25,7 @@ Preconditions:
 - `launch --web` has finished and `doctor` reports `target: "web"`, `status: "ok"`, and `viteAlive: true`.
 
 - **Startup resolved.** `web-startup-ready` is proven by launch itself. `doctor` reporting `inspect.hasHealth: true` means the `h1` is `CSV Viewer` rather than a startup-gate heading, which only happens once DuckDB-Wasm has answered its feature check. Snapshot and screenshot `evidence/web-lifecycle/started.aria.txt` and `started.png` showing `CSV Viewer`, `No CSV open`, and `Select your CSV Sources again after reload.`
-- **Session-scoped sources.** Open a fixture with `upload --role button --name "Open CSV" --nth 0 --file fixtures/phase-2-sample.csv`, then open `Compare…` and read the candidate subtitle. It is `This browser session`, not a path. That is the observable form of `web-session-scope`.
+- **Session-scoped sources.** Open `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv` with `upload` or `drop`. `Compare…` stays disabled until two CSV tabs are open, so one file cannot show the subtitle. Click `Compare…` and read the candidate subtitle. It is `This browser session`, not a path. That is the observable form of `web-session-scope`.
 - **Skip, do not fake.** `web-startup-checking`, `web-startup-unsupported`, `web-fatal`, and `web-unload-guard` are unreachable in an unattended run. Report each with the prerequisite below. Do not claim any of them from source reading or unit tests.
 
 ## Web differences
