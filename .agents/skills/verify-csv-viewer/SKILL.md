@@ -167,7 +167,7 @@ Stable handles from this renderer:
 | Dirty marker | text `Unexported Changes` |
 | Grid | `aria-label="CSV row grid"` |
 | Stats | button `Open stats panel` / `Close stats panel`. The panel is `<aside aria-label="Stats Panel">` with no `role`, so `--role region` never matches it; wait for text `Column Value Counts` instead. While open, two Close buttons share the Close name; use `--nth 0` |
-| Stats column | combobox `Stats Column`. A click alone does not open it; follow with `press --key ArrowDown`, then `click --role option --name "status"`. The option name is exactly `status`, so `--exact` also works here, but `Close stats panel` needs substring matching |
+| Stats column | combobox `Stats Column`. The trigger click can open the list. If the option is missing, `press --key ArrowDown`, then `click --role option --name "status"`. The option name is exactly `status`, so `--exact` also works here, but `Close stats panel` needs substring matching |
 | Candidate picker | dialog `Choose a Candidate`, button `Close Candidate picker`, button `Cancel`. Pick a candidate by its subtitle, not its file name: on web that is `This browser session`, on desktop the source path. The bare file name also matches the tab and its close button |
 | Comparison | region `CSV comparison`, button `Swap sides`, button `Apply key`, button `Refresh comparison`, heading `Choose a Comparison Key` |
 | Comparison key | `--role checkbox --name "id"`. Do not add `--exact`: the checkbox `value` joins the name, so it reads `id on` |
@@ -176,7 +176,7 @@ Stable handles from this renderer:
 
 Disabled state is only readable from `click`, which prints `"disabled": true` and exits `0` without the control acting. The `snapshot` AX dump omits it. Prove every "button is disabled" claim from that JSON field, never from a snapshot or screenshot.
 
-Base UI popups (the `Stats Column` select) do not open from a synthetic click. Click the trigger, then `press --key ArrowDown`, then click the option.
+The `Stats Column` select can open from the trigger click. If the option is not in the tree yet, `press --key ArrowDown`, then click the option. A second click on the trigger closes the list.
 
 On **desktop**, native File dialogs (`Open CSV`, menu `File → Open CSV...`, `Export CSV`) are OS windows. CDP cannot fill them. Open files through `drop --file <path>` or the seeded Recent CSV Sources list on the empty window. Prove edits with in-window state (`Unexported Changes`, cell text, undo/redo enabled). Do not click `Export CSV` unless a human is present to finish the dialog.
 

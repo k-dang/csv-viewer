@@ -24,8 +24,8 @@ Editing changes the in-memory Working CSV. Cell values stay text. Insert, append
 - Right-click a column header to open the Column Menu at the pointer. Choose `Rename column`: the Column name field opens under the header with the old name selected. Type a new header, press Enter.
 - Right-click a column header, then choose `Insert column left`, `Insert column right`, or `Delete column`. A right-click on a cell keeps the browser's own menu.
 - Focus a column header — click it, or press Up from a cell on the first row — and press F2. The same Column name field opens. F2 while a cell, the search box, or any other control is focused leaves rename closed.
-- Choose `Export CSV`, or `File → Export CSV...` / `Ctrl+Shift+E`, then pick a destination in the OS dialog.
-- Close a tab with its close button, or `File → Close Tab` / `Ctrl+W`; a dirty tab asks to confirm first.
+- Choose `Export CSV`. On desktop, `File → Export CSV...` / `Ctrl+Shift+E` is a second entry and then the OS dialog asks for a destination. Web has no File menu.
+- Close a tab with its close button. On desktop, `File → Close Tab` / `Ctrl+W` is a second entry. A dirty tab asks to confirm first. Web has no File menu.
 
 ## Driving it with control-csv-viewer
 
@@ -46,11 +46,11 @@ Count your edits as you go. Each bullet below records exactly one command, and t
 - **Append.** A cell edit clears the selection, so `Append row` is enabled. Run `click --role button --name "Append row"`. Wait for `6 visible of 6 rows`.
 - **Insert.** Click a grid cell to select one source row, then `click --role button --name "Insert row above"`. Wait for `7 visible of 7 rows`. Insert deselects rows.
 - **Delete.** Run `click --role gridcell --name "Grace Hopper"` to reselect, then `click --role button --name "Delete selected rows"`. Wait for `6 visible of 6 rows` and confirm Grace is gone.
-- **Blocked append.** Run `fill --role searchbox --name "Global search" --value "Ada"` and wait for `1 visible of 6 rows`. Click `Append row` and read `"disabled": true` from the JSON. Then `click --role gridcell --name "Ada Lovelace Edited"` and click `Insert row above`: it reports `"disabled": false` and inserts, but the count line stays `1 visible of 6 rows` because the empty row does not match `Ada`. That insert is a fifth recorded command. Clear query with `click --role button --name "Clear query"` and wait for `7 visible of 7 rows`.
+- **Blocked append.** Run `fill --role searchbox --name "Global search" --value "Ada"` and wait for `1 visible of 6 rows`. Click `Append row` and read `"disabled": true` from the JSON. Then `click --role gridcell --name "Ada Lovelace Edited"` and click `Insert row above`. It reports `"disabled": false` and inserts. The count line stays `1 visible of 6 rows`. The empty row does not match `Ada`, and the total stays at the last unfiltered count while a query is active, so it does not become `1 visible of 7 rows`. That insert is a fifth recorded command. Clear query with `click --role button --name "Clear query"` and wait for `7 visible of 7 rows`.
 - **Source.** `fixtures/phase-2-sample.csv` bytes still match the pre-edit copy while `Unexported Changes` is showing.
-- **Export skip.** Do not click `Export CSV`. Report `edit-export` as unreachable without a human OS dialog.
-- **Proof.** Snapshot and screenshot `evidence/edit-csv/dirty.aria.txt` and `dirty.png` while `Unexported Changes`, `Ada Lovelace Edited`, and `CSV Viewer` are visible.
-- **Return to clean.** Click `Undo edit` once per recorded command. The recipe above records five (cell edit, append, insert, delete, insert under query), so that is five clicks, not one. Confirm with `text` that `Unexported Changes` is gone and the row count is back to `5 visible of 5 rows` before `Close phase-2-sample.csv`.
+- **Proof.** Snapshot and screenshot `evidence/edit-csv/dirty.aria.txt` and `dirty.png` while `Unexported Changes`, `Ada Lovelace Edited`, and `CSV Viewer` are visible. Take this before a web export, because export clears the marker.
+- **Export.** On desktop, do not click `Export CSV`. The OS dialog needs a human, so that path stays unverified. On web, click `Export CSV`, wait for `Download started`, and read the newest file in the run's `downloads/` directory. The bytes contain the edit, `Unexported Changes` clears, and the fixture on disk is unchanged.
+- **Return to clean.** On desktop, click `Undo edit` five times (cell edit, append, insert, delete, insert under query) and wait for `5 visible of 5 rows`. On web, the export is already the clean point. Do not undo after it, or `Unexported Changes` comes back. Confirm with `text` that `Unexported Changes` is gone before `Close phase-2-sample.csv`.
 
 ## Web differences
 

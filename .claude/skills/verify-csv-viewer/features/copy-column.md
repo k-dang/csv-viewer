@@ -22,13 +22,13 @@ Preconditions:
 - `phase-2-sample.csv` is active with `5 visible of 5 rows` and no search.
 
 - **Idle.** The text `Right-click a column header to edit the column.` is visible and no `Copy column` item exists.
-- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email 5 values`. The `email` column, header included, is tinted.
+- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email` and for `5 values` as two substrings. The `email` column, header included, is tinted.
 - **Copy.** Run `click --right --role columnheader --name "email"`, then `click --role menuitem --name "Copy column"`. Wait for `Copied 5`.
-- **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, `email 5 values`, `Copied 5`, and the tinted column.
+- **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, the `email` column name, `5 values`, `Copied 5`, and the tinted column.
 - **Shortcut.** Run `click --role button --name "Close toast" --nth 0` to clear the earlier toast, then `click --role gridcell --name "Ada Lovelace"` and `press --key "Control+Shift+a"`. Wait for `Copied 5` and `From name`.
 - **Cell copy.** Run `click --role button --name "Close toast" --nth 0`, then `click --role gridcell --name "Ada Lovelace"` to put focus back on the cell (closing the toast moves it away), then `press --key "Control+c"`. Wait for `Copied 1 value`: plain Ctrl+C copies only the focused cell.
 - **Editing keeps its own copy.** Close every earlier toast with `click --role button --name "Close toast" --nth 0` and confirm `text` has no `Copied`. Run `click --role gridcell --name "Grace Hopper" --double`, then `press --key "Control+Shift+a"`. `text` still contains no `Copied`. Run `press --key Escape`.
-- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `name 4 values` and `Copied 4`.
+- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `name`, `4 values`, and `Copied 4`.
 - **Source.** `fixtures/phase-2-sample.csv` is unchanged.
 
 ## Web differences
@@ -37,7 +37,8 @@ None. The clipboard write is the browser Clipboard API on both targets.
 
 ## Gotchas
 
-- The clipboard is not readable through the helper. Prove the copy by `Copied N` matching the visible row count; the joined text itself is covered by the workspace contract tests.
+- The clipboard is not readable through the helper. Prove the copy by `Copied N` matching the visible row count. The newline join is asserted by the CSV tab test in `packages/ui/src/csv/csv-tab.test.ts`. The workspace contract checks the value list only.
+- `wait` reads `innerText`. The status bar renders the column name and `N values` as two flex items, so `email 5 values` is not a substring and that wait times out. Wait for the name and for `N values` separately.
 - The toast timer is three seconds. It pauses after the window blurs, or while the pointer is over the toast. A launch that never blurs the window does not pause it, so `Copied N values` can disappear about three seconds later. Take the screenshot as soon as the toast appears. If `Close toast` is already gone, continue. While a toast is still up, run `click --role button --name "Close toast" --nth 0` once per toast, then re-run `text` until `Copied` is gone before the editing check.
 - A visible toast is `role="dialog"`, and the drop zone declines drops while any dialog is open. Close every toast before a `drop`, or the drop silently does nothing.
 - The status bar count has no singular form: a one-row query reads `1 values`, while the toast reads `Copied 1 value`.

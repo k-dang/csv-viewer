@@ -21,7 +21,7 @@ Prefer web for shared UI and the Export CSV round trip. File drops and compariso
 - Start every recipe from the launched empty window unless the feature file says otherwise.
 - Prefer `--role` plus `--name` over CSS or coordinates. Use `--nth` when two visible controls share a name.
 - Read every "button is disabled" claim from `click`'s `"disabled"` JSON field. The `snapshot` AX dump does not carry disabled state.
-- Base UI popups (the `Stats Column` select) do not open from a synthetic click. Click the trigger, `press --key ArrowDown`, then click the option, and close the list before clicking anything else.
+- The `Stats Column` select can open from the trigger click. If the option click finds nothing, `press --key ArrowDown` and click the option. A second click on the trigger closes the list. Close the list before clicking anything else.
 - Treat `Compare…` as the ellipsis character `…`, not three dots.
 - After each mutation, wait for concrete text (`Ready`, row counts, `Unexported Changes`, comparison badges).
 - Restore the empty window by closing tabs when a recipe says to. Do not delete evidence during cleanup.
