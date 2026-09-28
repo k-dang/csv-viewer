@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DesktopWorkspaceHost } from '../../src/main/desktop-workspace-host';
+import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
 import type {
   ComparisonAttemptOutcomeView,
   ComparisonId,
@@ -22,7 +23,7 @@ import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/wo
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -114,8 +115,19 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
+  failNextCsvLoad(): void { failNextCsvLoad(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceRelease(): void {
+    const original = this.host.acquireEngineSource.bind(this.host);
+    this.host.acquireEngineSource = (sourceId) => {
+      this.host.acquireEngineSource = original;
+      return scopedEngineSource(
+        async () => (await this.host.describeSource(sourceId)).location,
+        async () => { throw new Error('PRIVATE engine source reference at C:\\PRIVATE.csv'); },
+      );
+    };
+  }
   failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);

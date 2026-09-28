@@ -2,6 +2,7 @@ import type { Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
+import { scopedEngineSource } from '@csv-viewer/workspace/engine-source';
 import { electronCsvViewerCapabilities } from '../electron-csv-viewer-capabilities';
 import type { CsvSourceId, RecentCsvSource } from '@csv-viewer/workspace/csv-viewer';
 import {
@@ -120,8 +121,11 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     };
   }
 
-  async withEngineSource<T>(sourceId: CsvSourceId, use: (engineSourceReference: string) => Promise<T>): Promise<T> {
-    return use(this.requireSource(sourceId).filePath);
+  acquireEngineSource(sourceId: CsvSourceId) {
+    return scopedEngineSource(
+      async () => this.requireSource(sourceId).filePath,
+      async () => undefined,
+    );
   }
 
   async deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {

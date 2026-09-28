@@ -679,9 +679,10 @@ export class WorkingCsvStore {
         })),
         () => this.releaseStagingTable(tableName),
       );
-      yield* observeStage('csv.access-and-load', attemptWorkspacePromise(
-        () => this.host.withEngineSource(sourceId, (reference) => createWorkingCsvTable(table, reference, dialect)),
-      ).pipe(Effect.mapError(normalizeEngineError)));
+      yield* observeStage('csv.access-and-load', Effect.gen({ self: this }, function* () {
+        const reference = yield* this.host.acquireEngineSource(sourceId);
+        yield* attemptWorkspacePromise(() => createWorkingCsvTable(table, reference, dialect));
+      }).pipe(Effect.scoped, Effect.mapError(normalizeEngineError)));
       const [columns, rowCount] = yield* observeStage('csv.read-metadata', Effect.all([
         attemptWorkspacePromise(() => readColumns(table)).pipe(Effect.mapError(normalizeEngineError)),
         attemptWorkspacePromise(() => readRowCount(table)).pipe(Effect.mapError(normalizeEngineError)),
@@ -1054,7 +1055,7 @@ function normalizeOpenError(cause: WorkspaceRequestError | DataEngineError | Csv
 }
 
 /** Keep driver details out of product messages and diagnostics. */
-function normalizeEngineError(cause: WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError): CsvOpenError {
+function normalizeEngineError(cause: Error): CsvOpenError {
   if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
     return normalizeOpenError(cause);
   }

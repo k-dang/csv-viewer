@@ -21,6 +21,7 @@ import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/wo
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
+import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
 import {
   CsvSourceUnavailableError,
   defaultDelimiterForSourceName,
@@ -31,7 +32,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -78,14 +79,12 @@ class WasmContractHost implements CsvWorkspaceHost {
     };
   }
 
-  async withEngineSource<T>(sourceId: CsvSourceId, use: (reference: string) => Promise<T>): Promise<T> {
-    const source = this.requireSource(sourceId);
-    const extension = source.name.split('.').pop() ?? 'csv';
-    return this.database.withRegisteredFile(
-      `contract-${crypto.randomUUID()}.${extension}`,
-      encoder.encode(source.contents),
-      use,
-    );
+  acquireEngineSource(sourceId: CsvSourceId) {
+    return scopedEngineSource(async () => {
+      const source = this.requireSource(sourceId);
+      const extension = source.name.split('.').pop() ?? 'csv';
+      return this.database.registerFileBuffer(`contract-${crypto.randomUUID()}.${extension}`, encoder.encode(source.contents));
+    }, (reference) => this.database.dropFile(reference));
   }
 
   deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
@@ -246,8 +245,16 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
+  failNextCsvLoad(): void { failNextCsvLoad(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceRelease(): void {
+    const original = this.database.dropFile.bind(this.database);
+    this.database.dropFile = async () => {
+      this.database.dropFile = original;
+      throw new Error('PRIVATE engine source reference at C:\\PRIVATE.csv');
+    };
+  }
   failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);

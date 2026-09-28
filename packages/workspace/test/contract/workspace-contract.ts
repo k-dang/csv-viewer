@@ -30,8 +30,12 @@ export interface WorkspaceContractFixture {
   openSource(fileName: string, contents: string, options?: CsvDialectOptions): Promise<WorkingCsvView>;
   /** Fail one driver call after table allocation to exercise staged resource cleanup. */
   failNextMetadataRead(): void;
+  /** Fail one CSV table load after its engine source has been acquired. */
+  failNextCsvLoad(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
+  /** Fail one temporary engine source release after its CSV has loaded. */
+  failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */
   failNextDatabaseRelease(): void;
   /** Inject an unexpected failure from a real host request. */

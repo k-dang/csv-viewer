@@ -4,6 +4,7 @@ import type {
   RecentCsvSource,
 } from '@csv-viewer/workspace/csv-viewer';
 import type { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
+import { scopedEngineSource } from '@csv-viewer/workspace/engine-source';
 import {
   CsvSourceUnavailableError,
   defaultDelimiterForSourceName,
@@ -87,22 +88,17 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     });
   }
 
-  async withEngineSource<T>(
-    sourceId: CsvSourceId,
-    use: (engineSourceReference: string) => Promise<T>,
-  ): Promise<T> {
-    const source = this.requireSource(sourceId);
-    let contents: ArrayBuffer;
-    try {
-      contents = await source.arrayBuffer();
-    } catch {
-      throw new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
-    }
-    return this.database.withRegisteredFile(
-      source.name,
-      new Uint8Array(contents),
-      use,
-    );
+  acquireEngineSource(sourceId: CsvSourceId) {
+    return scopedEngineSource(async () => {
+      const source = this.requireSource(sourceId);
+      let contents: ArrayBuffer;
+      try {
+        contents = await source.arrayBuffer();
+      } catch {
+        throw new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
+      }
+      return this.database.registerFileBuffer(source.name, new Uint8Array(contents));
+    }, (reference) => this.database.dropFile(reference));
   }
 
   deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
