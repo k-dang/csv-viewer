@@ -100,6 +100,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
+  private readonly failedFileDrops = new Set<string>();
   private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private readonly handleWorkerError = (event: ErrorEvent) => {
     this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
@@ -175,6 +176,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
 
   async registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
     const { database } = this.opened();
+    await this.retryFailedFileDrops(database);
     const baseName = name.split('/').pop() || 'source.csv';
     const reference = `${sourceDirectory}/${crypto.randomUUID()}-${baseName}`;
     await normalizeDatabaseOperation(() => database.registerFileBuffer(reference, contents));
@@ -184,7 +186,25 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   async dropFile(reference: string): Promise<void> {
     const database = this.database;
     if (database) {
-      await normalizeDatabaseOperation(() => database.dropFile(reference));
+      try {
+        await normalizeDatabaseOperation(() => database.dropFile(reference));
+        this.failedFileDrops.delete(reference);
+      } catch (error) {
+        this.failedFileDrops.add(reference);
+        throw error;
+      }
+    }
+  }
+
+  /** Retry transient drop failures before registering another buffer in the same Worker. */
+  private async retryFailedFileDrops(database: AsyncDuckDB): Promise<void> {
+    for (const reference of this.failedFileDrops) {
+      try {
+        await normalizeDatabaseOperation(() => database.dropFile(reference));
+        this.failedFileDrops.delete(reference);
+      } catch {
+        // The original request reported the release failure; keep the reference for another try.
+      }
     }
   }
 
