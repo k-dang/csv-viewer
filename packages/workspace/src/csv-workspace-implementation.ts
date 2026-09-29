@@ -261,6 +261,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     };
   }
 
+  /** Notifies current subscribers; onEvent replays the same event to later subscribers. */
   private emitEngineStopped(): void {
     for (const listener of this.listeners) listener(engineStoppedEvent);
   }
@@ -466,13 +467,13 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
 
   /**
    * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
-   * the runtime scope to release the database. A stopped engine took its tables with it, so only
-   * the scope is closed. Finalizers cannot fail, so the
+   * the runtime scope to release the database. A stopped engine took its tables with it, so its
+   * browser-held sources are released without querying those tables. Finalizers cannot fail, so the
    * database release outcome is read from `databaseRelease` rather than from closing the scope.
    */
   private disposeWorkspace(): Promise<void> {
     return this.runEffect(Effect.gen({ self: this }, function* () {
-      const released = this.engineStopped ? Exit.void : Exit.asVoidAll([
+      const released = this.engineStopped ? yield* Effect.exit(Effect.sync(() => this.csvStore.releaseSourcesAfterEngineStop())) : Exit.asVoidAll([
         yield* Effect.exit(observeStage('comparison.dispose', this.comparisonStore.dispose())),
         yield* Effect.exit(observeStage('workspace.release-csvs', this.csvStore.disposeStore())),
       ]);
@@ -484,6 +485,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 }
 
+/** The public rejection after a fatal stop never includes the Worker's error text. */
 function workspaceStoppedError(): Error {
   return new Error(stoppedEngineMessage);
 }

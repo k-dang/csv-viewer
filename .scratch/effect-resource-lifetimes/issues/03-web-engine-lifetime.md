@@ -10,7 +10,7 @@ The dropped-source entry and the capacity rules stay on the web host with their 
 
 **Blocked by:** 01 - The workspace runtime acquires and releases the database.
 
-**Status:** done
+**Status:** in review (manual web UI verification pending)
 
 - [x] The web wrapper session, its `call` and `receive` forwarding, and its duplicate stopped-engine error are deleted.
 - [x] `cancelStartup`, the fatal-error listener set, the `Promise.race` and AbortSignal wiring, and the web startup `console.error` calls are deleted.
@@ -29,3 +29,4 @@ The dropped-source entry and the capacity rules stay on the web host with their 
 
 - Effect's build signal now reaches the Wasm adapter, which terminates an acquired Worker on interruption and terminates a Worker that arrives after cancellation. The adapter exposes one stopped signal and retains failed startup release status so `web.startup-cleanup` can report it. A late termination failure has its own `web.startup-late-cleanup` stage because page navigation must return before the Worker creation promise settles. These responsibilities account for the adapter's net growth; pending-open sharing and the listener set are gone.
 - Web UI verification opened two CSV Sources, applied an Aligned Comparison, and reopened one with `Headers: None`. A page transition released the database; acquisition, probe, and release stages shared a workspace ID in diagnostics. A generated 250,001-row Comparison finished before its Cancel control could be clicked. The verification skill identifies checking, unsupported, and fatal visuals as unavailable in an unattended run; composition and component tests cover their behavior.
+- Review follow-up releases browser-held CSV Sources after a fatal engine stop without sending table queries to the stopped engine. A web composition test reproduces the capacity reservation and checks its release, and a pending startup-check test checks database release after a fatal stop.

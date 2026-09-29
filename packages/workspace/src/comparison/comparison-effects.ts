@@ -5,6 +5,7 @@ export class ComparisonCleanupError extends DataEngineError {
   override name = 'ComparisonCleanupError';
 }
 
+/** Passes Effect interruption to a driver edge and hides its error behind DataEngineError. */
 export function databaseEffect<A>(operation: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, DataEngineError> {
   return Effect.tryPromise({
     try: operation,

@@ -8,6 +8,7 @@ export class ControllableWorker extends EventTarget implements Worker {
   postMessage = vi.fn();
   terminate = vi.fn();
 
+  /** Delivers the browser-style error event observed by the Wasm adapter. */
   emitError(error: Error): void {
     this.dispatchEvent(Object.assign(new Event('error'), { error, message: error.message }));
   }

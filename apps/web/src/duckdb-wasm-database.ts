@@ -125,6 +125,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     if (this.startupReleaseFailed) throw new Error('The web engine could not be released.');
   }
 
+  /** Reports a failed Worker termination even when its creation resolves after startup exits. */
   onLateStartupCleanupFailure(report: () => void): void {
     this.reportLateStartupCleanupFailure = report;
   }
@@ -311,6 +312,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return { database, connection };
   }
 
+  /** Stops the engine once and completes the workspace signal before awaiting termination. */
   private failFatally(cause: unknown): void {
     if (this.fatalError) return;
     this.fatalError = toError(cause);

@@ -152,18 +152,45 @@ describe('web CsvViewer composition', () => {
     expect(lateEvents).toEqual(events);
   });
 
-  it('rejects a build that finishes after a fatal Worker failure', async () => {
-    const database = new FatalTestDatabase();
-    const opening = Promise.withResolvers<void>();
-    vi.spyOn(database, 'open').mockImplementation(async () => {
-      await opening.promise;
-      return database;
+  it('releases browser file reservations when a stopped workspace is disposed', async () => {
+    const file = new File(['id\n1\n'], 'data.csv');
+    const database = createNodeDuckDbWasmDatabase();
+    const started = await startWebCsvViewer(database, async () => file, {
+      limits: { sourceBytes: file.size, workspaceBytes: file.size },
     });
-    const startup = startWebCsvViewer(database, async () => null);
+    if (started.status !== 'ready') throw new Error('Web startup check failed.');
+    viewer = started.viewer;
+    await expect(viewer.call({ operation: 'csv.open' })).resolves.toMatchObject({ status: 'opened' });
+    const owner = await database.ownerConnection();
+    const run = vi.spyOn(owner, 'run');
 
+    Deferred.doneUnsafe(database.stopped, Effect.void);
+    await viewer.dispose();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(await started.acquireDroppedSource(file)).toEqual(expect.any(String));
+  }, 20_000);
+
+  it('releases an acquired database when a pending startup check outlives a fatal stop', async () => {
+    const database = new FatalTestDatabase();
+    const checking = Promise.withResolvers<void>();
+    const checkResult = Promise.withResolvers<void>();
+    vi.spyOn(database, 'verifyInMemoryCsvQuery').mockImplementation(() => {
+      checking.resolve();
+      return checkResult.promise;
+    });
+    const releaseConnection = vi.spyOn(database, 'closeOwnerConnection');
+    const releaseEngine = vi.spyOn(database, 'closeEngine');
+    const capture = diagnosticCapture();
+    const startup = startWebCsvViewer(database, async () => null, { diagnostics: capture.configuration });
+
+    await checking.promise;
     database.failWorker();
     await expect(startup).resolves.toEqual({ status: 'unsupported' });
-    opening.resolve();
+    checkResult.resolve();
+    expect(releaseConnection).toHaveBeenCalledOnce();
+    expect(releaseEngine).toHaveBeenCalled();
+    expect(capture.outcome('workspace.release-database')).toBe('succeeded');
   });
 });
 
