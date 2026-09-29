@@ -517,7 +517,7 @@ function snapshotExpression() {
   })()`;
 }
 
-function findControlExpression({ role, name, exact, nth }) {
+function findControlExpression({ role, name, exact, nth, fillValue = null }) {
   const escaped = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const payload = JSON.stringify({
     role: role || '',
@@ -525,9 +525,10 @@ function findControlExpression({ role, name, exact, nth }) {
     exact: Boolean(exact),
     escaped,
     nth: nth == null ? null : Number(nth),
+    fillValue,
   });
   return `(() => {
-    const { role, name, exact, escaped, nth } = ${payload};
+    const { role, name, exact, escaped, nth, fillValue } = ${payload};
     const nameRe = exact || !name ? null : new RegExp(escaped, 'i');
     function accessibleName(el) {
       const labelledBy = el.getAttribute('aria-labelledby');
@@ -612,13 +613,28 @@ function findControlExpression({ role, name, exact, nth }) {
     // Scroll only when the target is off screen, as a user would; centering would move the grid.
     winner.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const box = winner.getBoundingClientRect();
-    winner.dataset.verifyHit = '1';
+    let filled = null;
+    if (fillValue != null) {
+      winner.focus();
+      const proto = winner instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (!setter) throw new Error('No value setter on ' + winner.tagName);
+      try {
+        setter.call(winner, fillValue);
+      } catch {
+        throw new Error('No value setter on ' + winner.tagName);
+      }
+      winner.dispatchEvent(new Event('input', { bubbles: true }));
+      winner.dispatchEvent(new Event('change', { bubbles: true }));
+      filled = winner.value;
+    }
     return {
       status: 'found',
       name: scored[pick].value,
       disabled: Boolean(winner.disabled) || winner.getAttribute('aria-disabled') === 'true',
       x: box.x + box.width / 2,
       y: box.y + box.height / 2,
+      value: filled,
     };
   })()`;
 }
@@ -892,6 +908,7 @@ async function locate(session, options) {
       name: String(options.name || ''),
       exact: Boolean(options.exact),
       nth,
+      fillValue: options.fillValue ?? null,
     }),
   );
   if (found.status === 'missing') {
@@ -932,11 +949,6 @@ async function runClick(options) {
   await withCdp(run, async (session) => {
     const found = await locate(session, options);
     const clickCount = options.double ? 2 : 1;
-    await session.evaluate(`(() => {
-      const el = document.querySelector('[data-verify-hit="1"]');
-      if (el) el.removeAttribute('data-verify-hit');
-      return true;
-    })()`);
     await dispatchMouseClick(session, found.x, found.y, clickCount, options.right ? 'right' : 'left');
     printJson({ status: 'ok', name: found.name, disabled: found.disabled });
   });
@@ -1002,25 +1014,28 @@ async function runFill(options) {
   const run = await requireCurrentRun();
   if (options.value == null) fail('fill requires --value');
   await withCdp(run, async (session) => {
-    if (!options.focused) await locate(session, options);
-    const value = await session.evaluate(`(() => {
-      const el = ${options.focused ? 'document.activeElement' : 'document.querySelector("[data-verify-hit=\\"1\\"]")'};
-      if (!el) throw new Error('Lost fill target');
-      if (!${options.focused ? 'true' : 'false'}) el.removeAttribute('data-verify-hit');
-      el.focus();
-      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (!setter) throw new Error('No value setter on ' + el.tagName);
-      try {
-        setter.call(el, ${JSON.stringify(String(options.value))});
-      } catch {
-        throw new Error('No value setter on ' + el.tagName);
-      }
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      return el.value;
-    })()`);
-    printJson({ status: 'ok', value });
+    if (options.focused) {
+      const value = await session.evaluate(`(() => {
+        const el = document.activeElement;
+        if (!el) throw new Error('Lost fill target');
+        el.focus();
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (!setter) throw new Error('No value setter on ' + el.tagName);
+        try {
+          setter.call(el, ${JSON.stringify(String(options.value))});
+        } catch {
+          throw new Error('No value setter on ' + el.tagName);
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return el.value;
+      })()`);
+      printJson({ status: 'ok', value });
+      return;
+    }
+    const found = await locate(session, { ...options, fillValue: String(options.value) });
+    printJson({ status: 'ok', value: found.value });
   });
 }
 
