@@ -2,7 +2,7 @@ Status: ready-for-agent
 
 # Effect at the driver edges: no Promise adapters inside the workspace
 
-**Blocked by:** `.scratch/effect-resource-lifetimes/PRD.md`. That spec changes the database and host interfaces: it removes `close` and `isOpen`, adds the fatal-stop signal, and makes engine source access scoped. This spec changes the same interfaces again. Do the lifetime change first, so that each diff has one kind of risk.
+**Blocked by:** None. The resource-lifetime interface changes are implemented: database ownership belongs to the runtime, the fatal-stop signal is in place, and engine source access is scoped. Remaining web UI verification is carried into this feature's final verification ticket.
 
 ## Problem Statement
 
