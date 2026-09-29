@@ -1,5 +1,5 @@
 import { DataEngineError } from '../database';
-import { Cause, Deferred, Effect, Latch, type Scope, type Types } from 'effect';
+import { Cause, Deferred, Effect, Latch, Result, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
 import { databaseEffect } from '../comparison/comparison-effects';
 import { attemptWorkspacePromise, attemptWorkspaceSync, WorkspaceRequestError } from '../errors';
@@ -29,14 +29,14 @@ import type {
 } from '../csv-viewer';
 import type { ComparisonExecutor } from '../comparison/comparison-executor';
 import type { WorkspaceDatabase } from '../database';
-import { CsvEditHistory, rowCountDelta, type CsvEditCommand, type CsvEditDraft } from './csv-edit-history';
+import { CsvEditHistory, rowCountDelta, type CsvEditDraft } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import {
-  assertKnownColumn,
   buildColumnValueCountsQuery,
   buildColumnValuesQuery,
   buildRowsQuery,
   maxRowWindowLimit,
+  requireKnownColumn,
 } from '../query/csv-query';
 import { normalizeCellValue, normalizeCount, normalizeRow } from '../query/csv-result-normalization';
 import {
@@ -392,7 +392,7 @@ export class WorkingCsvStore {
         throw new WorkspaceRequestError({ message: `Row window limit must be ${maxRowWindowLimit} or less.` });
       }
 
-      const query = buildRowsQuery({
+      const query = Result.getOrThrow(buildRowsQuery({
         tableName: state.tableName,
         columns: state.metadata.columns,
         filters: request.filters ?? [],
@@ -400,7 +400,7 @@ export class WorkingCsvStore {
         sort: request.sort ?? [],
         limit,
         offset,
-      });
+      }));
 
       const [countRow] = await this.database.readObjects(query.countSql, query.values);
       const rows = await this.database.readObjects(query.rowsSql, query.values);
@@ -416,14 +416,14 @@ export class WorkingCsvStore {
 
   getColumnValues(request: CsvColumnValuesRequest): Effect.Effect<CsvColumnValues, Error> {
     return this.read(request.workingCsvId, async (state) => {
-      const query = buildColumnValuesQuery({
+      const query = Result.getOrThrow(buildColumnValuesQuery({
         tableName: state.tableName,
         columns: state.metadata.columns,
         column: request.column,
         filters: request.filters ?? [],
         search: request.search ?? '',
         sort: request.sort ?? [],
-      });
+      }));
       const rows = await this.database.readObjects(query.sql, query.values);
 
       return {
@@ -438,13 +438,13 @@ export class WorkingCsvStore {
     return this.read(request.workingCsvId, async (state) => {
       const { metadata } = state;
 
-      const query = buildColumnValueCountsQuery({
+      const query = Result.getOrThrow(buildColumnValueCountsQuery({
         tableName: state.tableName,
         columns: metadata.columns,
         column: request.column,
         filters: request.filters ?? [],
         search: request.search ?? '',
-      });
+      }));
       const rows = await this.database.readObjects(query.sql, query.values);
       const scopeRowCount = rows.length > 0 ? normalizeCount(rows[0].scope_row_count) : 0;
 
@@ -464,7 +464,7 @@ export class WorkingCsvStore {
   editCell(request: CsvCellEditRequest): Effect.Effect<CsvCellEditResult, Error> {
     return this.edit(request.workingCsvId, async (state) => {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
-      assertKnownColumn(request.column, knownColumns);
+      Result.getOrThrow(requireKnownColumn(request.column, knownColumns));
 
       if (request.rowId.length === 0) {
         throw new WorkspaceRequestError({ message: 'CSV row identifier is required.' });
@@ -539,7 +539,7 @@ export class WorkingCsvStore {
   renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
     return this.edit(request.workingCsvId, async (state) => {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
-      assertKnownColumn(request.column, knownColumns);
+      Result.getOrThrow(requireKnownColumn(request.column, knownColumns));
 
       const name = request.name.trim();
       if (name.length === 0) {
@@ -599,7 +599,7 @@ export class WorkingCsvStore {
   }
 
   private async commitSchemaEdit(state: WorkingCsvState, draft: CsvSchemaEditDraft): Promise<CsvSchemaEditState> {
-    const next = columnsAfter(state.metadata.columns, draft, 'redo');
+    const next = Result.getOrThrow(columnsAfter(state.metadata.columns, draft, 'redo'));
     await runEditCommand(this.tableFor(state), draft, 'redo');
     state.history.record(draft);
     state.metadata.columns = next;
@@ -609,13 +609,11 @@ export class WorkingCsvStore {
 
   private stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Effect.Effect<CsvSchemaEditState, Error> {
     return this.edit(workingCsvId, async (state) => {
-      const table = this.tableFor(state);
-      const replay = async (entry: CsvEditCommand) => {
-        const next = columnsAfter(state.metadata.columns, entry, direction);
-        await runEditCommand(table, entry, direction);
-        state.metadata.columns = next;
-      };
-      const command = direction === 'undo' ? await state.history.undo(replay) : await state.history.redo(replay);
+      const { command, commit } = Result.getOrThrow(state.history.step(direction));
+      const next = Result.getOrThrow(columnsAfter(state.metadata.columns, command, direction));
+      await runEditCommand(this.tableFor(state), command, direction);
+      state.metadata.columns = next;
+      commit();
       commitDataChange(state, rowCountDelta(command, direction));
       return buildSchemaEditState(state);
     });

@@ -78,6 +78,35 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     expect(released).toEqual(['source', 'connection']);
   });
 
+  it('fails an unknown key column as a request failure, not a defect, and releases the source', async () => {
+    const released: string[] = [];
+    let queried = false;
+    const executor = new DuckDbComparisonExecutor({
+      acquireSource: () => source(() => {
+        released.push('source');
+      }),
+      connectWorker: () => Effect.succeed(stubConnection({
+        readObjectsCancellable: () => {
+          queried = true;
+          return Promise.resolve([]);
+        },
+        close: async () => {
+          released.push('connection');
+        },
+      })),
+      getOwnerConnection: async () => stubConnection(),
+    });
+    const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
+      const attempt = yield* executor.openAttempt();
+      yield* attempt.validateKey('source', ['id', 'missing']);
+    })));
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(false);
+    expect(Exit.isFailure(exit) && exit.cause.reasons.map((reason) => reason._tag === 'Fail' && reason.error.message))
+      .toEqual(['Unknown CSV column: missing']);
+    expect(queried).toBe(false);
+    expect(released).toEqual(['source', 'connection']);
+  });
+
   it('releases an eventual connection without starting queries when interrupted during acquisition', async () => {
     const requested = Promise.withResolvers<void>();
     const connection = Promise.withResolvers<WorkspaceDatabaseConnection>();

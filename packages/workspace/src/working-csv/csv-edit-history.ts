@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import type { CsvCellValue } from '../csv-viewer';
 import { WorkspaceRequestError } from '../errors';
 
@@ -85,26 +86,30 @@ export class CsvEditHistory {
     this.redoStack.length = 0;
   }
 
-  async undo(revert: (command: CsvEditCommand) => Promise<void>): Promise<CsvEditCommand> {
-    const command = this.undoStack.at(-1);
-    if (!command) throw new WorkspaceRequestError({ message: 'No CSV edit is available to undo.' });
-    await revert(command);
-    this.undoStack.pop();
-    this.redoStack.push(command);
-    this.currentRevisionId = command.previousRevisionId;
-    return command;
-  }
-
-  async redo(apply: (command: CsvEditCommand) => Promise<void>): Promise<CsvEditCommand> {
-    const command = this.redoStack.at(-1);
-    if (!command) throw new WorkspaceRequestError({ message: 'No CSV edit is available to redo.' });
-    await apply(command);
-    this.redoStack.pop();
-    this.undoStack.push(command);
-    this.currentRevisionId = command.revisionId;
-    return command;
+  /**
+   * The command the next undo or redo replays. The history is unchanged until `commit` runs, so
+   * call it only after the replay succeeded.
+   */
+  step(direction: 'undo' | 'redo'): Result.Result<CsvEditStep, WorkspaceRequestError> {
+    const [from, to] = direction === 'undo' ? [this.undoStack, this.redoStack] : [this.redoStack, this.undoStack];
+    return Result.map(
+      Result.fromNullishOr(
+        from.at(-1),
+        () => new WorkspaceRequestError({ message: `No CSV edit is available to ${direction}.` }),
+      ),
+      (command) => ({
+        command,
+        commit: () => {
+          from.pop();
+          to.push(command);
+          this.currentRevisionId = direction === 'undo' ? command.previousRevisionId : command.revisionId;
+        },
+      }),
+    );
   }
 }
+
+export type CsvEditStep = { command: CsvEditCommand; commit: () => void };
 
 export function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo'): number {
   const sign = direction === 'redo' ? 1 : -1;

@@ -96,6 +96,37 @@ describe('WorkingCsvStore invariants', () => {
     await Effect.runPromise(store.disposeStore());
   });
 
+  it('leaves history, columns, and revision unchanged when an undo replay fails', async () => {
+    const workingCsv = await openWorkingCsv('undo-replay-failure.csv', ['name', 'Ada'].join('\n'));
+    const { workingCsvId } = workingCsv;
+    await Effect.runPromise(store.renameColumn({ workingCsvId, column: 'name', name: 'title' }));
+    const revision = store.getState(workingCsvId)?.dataRevision;
+
+    const run = database.run.bind(database);
+    database.run = (sql, values) => {
+      if (!sql.startsWith('ALTER TABLE')) return run(sql, values);
+      database.run = run;
+      return Promise.reject(new Error('PRIVATE replay failure'));
+    };
+    await expect(Effect.runPromise(store.undo(workingCsvId))).rejects.toThrow();
+
+    expect(store.getState(workingCsvId)).toMatchObject({
+      dataRevision: revision,
+      columns: [{ name: 'title' }],
+    });
+    await expect(Effect.runPromise(store.getEditState({ workingCsvId }))).resolves.toMatchObject({
+      canUndo: true,
+      canRedo: false,
+    });
+
+    await expect(Effect.runPromise(store.undo(workingCsvId))).resolves.toMatchObject({
+      canUndo: false,
+      canRedo: true,
+      columns: [{ name: 'name' }],
+    });
+    await Effect.runPromise(store.disposeStore());
+  });
+
   it('stops notifying a data-change listener once it unsubscribes', async () => {
     const workingCsv = await openWorkingCsv('unsubscribe.csv', ['name', 'Ada'].join('\n'));
     const notified: string[] = [];

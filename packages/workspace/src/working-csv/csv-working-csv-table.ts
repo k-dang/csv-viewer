@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import type {
   CsvCellValue,
   CsvColumn,
@@ -25,6 +26,8 @@ import {
   buildRowDeletionStatement,
   buildRowSourceOrderQuery,
   buildSourceOrderShiftStatement,
+  requireKnownColumn,
+  type QueryBuild,
 } from '../query/csv-query';
 import { normalizeCellValue, type EngineRow } from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
@@ -93,38 +96,36 @@ export async function applyDropColumn(table: CsvTable, name: string): Promise<vo
   await table.database.run(buildDropColumnStatement(table.tableName, name));
 }
 
-export function renameCsvColumns(columns: CsvColumn[], from: string, to: string): CsvColumn[] {
-  let renamed = false;
-  const next = columns.map((column) => {
-    if (column.name !== from) return { ...column };
-    renamed = true;
-    return { ...column, name: to };
-  });
-  if (!renamed) throw new WorkspaceRequestError({ message: `Unknown CSV column: ${from}` });
-  return next;
-}
-
+/** The logical columns after replaying a command, or the request failure when a renamed column no longer exists. */
 export function columnsAfter(
   columns: CsvColumn[],
   command: CsvEditDraft,
   direction: 'undo' | 'redo',
-): CsvColumn[] {
+): QueryBuild<CsvColumn[]> {
   switch (command.type) {
     case 'cell-edit':
     case 'delete-rows':
     case 'insert-row':
-      return columns;
+      return Result.succeed(columns);
     case 'rename-column': {
       const from = direction === 'redo' ? command.from : command.to;
       const to = direction === 'redo' ? command.to : command.from;
-      return renameCsvColumns(columns, from, to);
+      return Result.map(requireKnownColumn(from, new Set(columns.map((column) => column.name))), () =>
+        columns.map((column) => ({ ...column, name: column.name === from ? to : column.name })),
+      );
     }
     case 'insert-column':
-      if (direction === 'undo') return columns.filter((column) => column.name !== command.name);
-      return spliceColumn(columns, command.index, { name: command.name, type: 'VARCHAR' });
+      return Result.succeed(
+        direction === 'undo'
+          ? columns.filter((column) => column.name !== command.name)
+          : spliceColumn(columns, command.index, { name: command.name, type: 'VARCHAR' }),
+      );
     case 'delete-column':
-      if (direction === 'redo') return columns.filter((column) => column.name !== command.name);
-      return spliceColumn(columns, command.index, { name: command.name, type: command.columnType });
+      return Result.succeed(
+        direction === 'redo'
+          ? columns.filter((column) => column.name !== command.name)
+          : spliceColumn(columns, command.index, { name: command.name, type: command.columnType }),
+      );
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
@@ -146,12 +147,12 @@ export async function applyRowDeletion(
   rowIds: string[],
   deleted: boolean,
 ): Promise<void> {
-  const statement = buildRowDeletionStatement(table.tableName, rowIds, deleted);
+  const statement = Result.getOrThrow(buildRowDeletionStatement(table.tableName, rowIds, deleted));
   await table.database.run(statement.sql, statement.values);
 }
 
 export async function assertRowsExist(table: CsvTable, rowIds: string[]): Promise<void> {
-  const query = buildExistingRowIdsQuery(table.tableName, rowIds);
+  const query = Result.getOrThrow(buildExistingRowIdsQuery(table.tableName, rowIds));
   const rows = await table.database.readObjects(query.sql, query.values);
   const foundRowIds = new Set(rows.map((row) => String(row.row_id)));
   const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
