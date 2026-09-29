@@ -22,13 +22,13 @@ Preconditions:
 - `phase-2-sample.csv` is active with `5 visible of 5 rows` and no search.
 
 - **Idle.** The text `Right-click a column header to edit the column.` is visible and no `Copy column` item exists.
-- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email 5 values`. The `email` column, header included, is tinted.
+- **Focus.** Run `click --role gridcell --name "grace@example.com"`. Wait for `email`, then wait for `5 values`. `wait --text "email 5 values"` times out. `text` puts a line break between those status-bar nodes. The `email` column, header included, is tinted.
 - **Copy.** Run `click --right --role columnheader --name "email"`, then `click --role menuitem --name "Copy column"`. Wait for `Copied 5`.
-- **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, `email 5 values`, `Copied 5`, and the tinted column.
+- **Proof.** Screenshot `evidence/copy-column/copied.png` showing `CSV Viewer`, the status line `email 5 values`, `Copied 5`, and the tinted column. That status line is one visual row. `wait` still needs the two strings from the Focus step.
 - **Shortcut.** Run `click --role button --name "Close toast" --nth 0` to clear the earlier toast, then `click --role gridcell --name "Ada Lovelace"` and `press --key "Control+Shift+a"`. Wait for `Copied 5` and `From name`.
 - **Cell copy.** Run `click --role button --name "Close toast" --nth 0`, then `click --role gridcell --name "Ada Lovelace"` to put focus back on the cell (closing the toast moves it away), then `press --key "Control+c"`. Wait for `Copied 1 value`: plain Ctrl+C copies only the focused cell.
 - **Editing keeps its own copy.** Close every earlier toast with `click --role button --name "Close toast" --nth 0` and confirm `text` has no `Copied`. Run `click --role gridcell --name "Grace Hopper" --double`, then `press --key "Control+Shift+a"`. `text` still contains no `Copied`. Run `press --key Escape`.
-- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `name 4 values` and `Copied 4`.
+- **Scoped copy.** Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows`. Run `click --right --role columnheader --name "name"` then `click --role menuitem --name "Copy column"`. Wait for `name`, `4 values`, and `Copied 4`. `wait --text "name 4 values"` times out for the same reason as `email 5 values`.
 - **Source.** `fixtures/phase-2-sample.csv` is unchanged.
 
 ## Web differences
@@ -44,3 +44,4 @@ None. The clipboard write is the browser Clipboard API on both targets.
 - Ctrl+Shift+A is Copy column for the focused column from anywhere in the window except a text field (global search, an open cell editor), so it still works after a click on a toast or button. Plain Ctrl+C copies the focused cell's raw value only while that cell has focus, no editor is open, and no text is selected; text selected across cells goes to the browser's own copy.
 - Clicking a cell also selects its row, so the row highlight and the column tint overlap on that cell. That is expected.
 - The count follows the query, so after a search the status bar reads the filtered count, not the CSV's row count.
+- `wait` and `text` split the status bar. The column name and `N values` are separate lines there, even when the screen shows them on one line. `Copied N values` stays one string.
