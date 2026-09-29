@@ -340,6 +340,13 @@ export class WorkingCsvStore {
     );
   }
 
+  /** For a stopped engine, forget browser-held sources without issuing table queries. */
+  releaseSourcesAfterEngineStop(): void {
+    for (const state of this.workingCsvs.values()) this.host.releaseSource(state.sourceId);
+    this.workingCsvs.clear();
+    this.lifecycle = 'disposed';
+  }
+
   private releaseAllTables(): Effect.Effect<void, Error> {
     return Effect.gen({ self: this }, function* () {
       yield* observeStage('workspace.await-work', this.workSettled.await);

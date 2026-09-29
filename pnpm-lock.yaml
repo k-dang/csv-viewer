@@ -153,6 +153,9 @@ importers:
       '@duckdb/duckdb-wasm':
         specifier: 'catalog:'
         version: 1.33.1-dev64.0
+      effect:
+        specifier: 4.0.0-rc.115
+        version: 4.0.0-rc.115
       lucide-react:
         specifier: 'catalog:'
         version: 1.39.0(react@19.2.8)

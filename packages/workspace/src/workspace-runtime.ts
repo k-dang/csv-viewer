@@ -14,15 +14,17 @@ export const Comparisons = Context.Service<CsvComparisonService>('csv-viewer/Com
 
 /**
  * One runtime per workspace, read top to bottom in acquisition order: the database and the host,
- * then the Working CSV and Comparison services built on both. Closing the layer scope releases
- * them in reverse. The scope also owns background Comparison attempts, not their resources.
+ * then the Working CSV and Comparison services built on both. Disposal settles Comparison work and
+ * releases Working CSV tables before closing the layer scope, which releases the database. The
+ * scope also owns background Comparison attempts, not their resources.
  * Finalizers cannot fail, so `databaseRelease` tells disposal whether the database released.
  */
 export function makeWorkspaceLayer(
-  openDatabase: () => Promise<OwnedWorkspaceDatabase>,
+  openDatabase: (signal: AbortSignal) => Promise<OwnedWorkspaceDatabase>,
   host: CsvWorkspaceHost,
   executor?: ComparisonExecutor,
   diagnostics?: WorkspaceDiagnostics,
+  startupCheck?: (signal: AbortSignal) => Promise<void>,
 ) {
   const databaseRelease = { failed: false };
   const database = Layer.effect(Database, Effect.acquireRelease(
@@ -30,7 +32,8 @@ export function makeWorkspaceLayer(
     (acquired) => releaseDatabase(acquired).pipe(Effect.catchCause(() => Effect.sync(() => {
       databaseRelease.failed = true;
     }))),
-  ));
+    { interruptible: true },
+  ).pipe(Effect.tap(() => startupCheck ? observeStage('web.startup-check', databaseEffect(startupCheck)) : Effect.void)));
   const resources = Layer.mergeAll(database, Layer.succeed(Host, host));
   const csvs = Layer.effect(WorkingCsv, Effect.gen(function* () {
     return new WorkingCsvStore(yield* Host, yield* Database);

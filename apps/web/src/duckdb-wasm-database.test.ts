@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
+import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
+import { Deferred } from 'effect';
 
 let database: DuckDbWasmWorkspaceDatabase | undefined;
 
@@ -129,10 +131,10 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
       createWorker: () => phase === 'pending creation' ? creation.promise : Promise.resolve(worker),
     });
-    const opening = database.open().catch(() => undefined);
+    const controller = new AbortController();
+    const opening = database.open(controller.signal).catch(() => undefined);
     if (phase === 'pending request') await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
-    database.cancelStartup();
-    database.cancelStartup();
+    controller.abort();
     await expect(database.closeEngine()).resolves.toBeUndefined();
     if (phase === 'pending creation') {
       creation.resolve(worker);
@@ -149,15 +151,13 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainWorker: 'duckdb.worker.js',
       createWorker: () => Promise.resolve(worker),
     });
-    const fatalError = vi.fn();
-    database.onFatalError(fatalError);
     void database.open();
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
 
     worker.emitError(new Error('Worker crashed.'));
     worker.emitError(new Error('Worker crashed again.'));
 
-    expect(fatalError).toHaveBeenCalledOnce();
+    expect(Deferred.isDoneUnsafe(database.stopped)).toBe(true);
     expect(worker.terminate).toHaveBeenCalledOnce();
     await expect(database.readObjects('SELECT 1')).rejects.toThrow(
       'The data engine has stopped. Reload CSV Viewer to start a new workspace.',
@@ -183,15 +183,3 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await expect(crashed.closeEngine()).rejects.toThrow('Worker termination failed.');
   });
 });
-
-class ControllableWorker extends EventTarget implements Worker {
-  onerror: Worker['onerror'] = null;
-  onmessage: Worker['onmessage'] = null;
-  onmessageerror: Worker['onmessageerror'] = null;
-  postMessage = vi.fn();
-  terminate = vi.fn();
-
-  emitError(error: Error): void {
-    this.dispatchEvent(Object.assign(new Event('error'), { error, message: error.message }));
-  }
-}

@@ -93,6 +93,8 @@ Open and reopen log `csv.release-engine-source` when the temporary engine refere
 
 The workspace logs `workspace.acquire-database` when it starts and `workspace.release-database` when it is disposed, both with `workspaceId` and no `requestId`. A failed release logs `workspace.close-database-connection` or `workspace.close-database-engine` with a failure outcome, and `workspace.dispose` then reports `failed`.
 
+On web, `web.startup-check` reports the in-memory CSV probe after engine acquisition. A failed or interrupted startup reports its acquisition outcome and `web.startup-cleanup`; interruption is `interrupted`, and failed cleanup is `cleanup-failed`. `web.startup-late-cleanup` reports a failed termination if a Worker arrives after cancellation. `workspace.engine-stopped` records a fatal Worker stop once. These stages use the same `workspaceId` and omit Worker errors and driver text.
+
 Filter Effect output by `operationId` to follow a comparison through cleanup. Read the matching stage's log-span timing on its completion line; enclosing span timings show elapsed time, so do not add them together. Check `outcome` and `cleanup` separately. Browser navigation can stop logging before disposal completes.
 
 ## Doctor
