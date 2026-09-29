@@ -612,6 +612,9 @@ function findControlExpression({ role, name, exact, nth }) {
     // Scroll only when the target is off screen, as a user would; centering would move the grid.
     winner.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const box = winner.getBoundingClientRect();
+    // upload marks its button and never clears it. The next fill uses querySelector,
+    // which returns that earlier button and then throws "No value setter on BUTTON".
+    document.querySelectorAll('[data-verify-hit]').forEach((node) => node.removeAttribute('data-verify-hit'));
     winner.dataset.verifyHit = '1';
     return {
       status: 'found',
