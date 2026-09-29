@@ -87,7 +87,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         path.join(directory, 'recent-sources.json'),
       );
       const opening = DuckDbWorkspaceDatabase.open();
-      const workspace = await createCsvViewer(() => opening, host, executor, diagnostics);
+      const workspace = await createCsvViewer(() => opening, host, { executor, diagnostics });
       const database = await opening;
       return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
     } catch (error) {

@@ -1,6 +1,8 @@
 import type { QueryValues } from './query/csv-query';
 import type { EngineRow } from './query/csv-result-normalization';
 
+export const stoppedEngineMessage = 'The data engine has stopped. Reload CSV Viewer to start a new workspace.';
+
 /** The database operations the shared workspace needs from either DuckDB runtime. */
 export interface WorkspaceDatabaseConnection {
   run(sql: string, values?: QueryValues): Promise<void>;

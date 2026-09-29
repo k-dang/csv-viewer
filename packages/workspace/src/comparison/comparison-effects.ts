@@ -5,7 +5,7 @@ export class ComparisonCleanupError extends DataEngineError {
   override name = 'ComparisonCleanupError';
 }
 
-export function databaseEffect<A>(operation: () => Promise<A>): Effect.Effect<A, DataEngineError> {
+export function databaseEffect<A>(operation: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, DataEngineError> {
   return Effect.tryPromise({
     try: operation,
     catch: (cause) => cause instanceof DataEngineError ? cause : new DataEngineError(cause),

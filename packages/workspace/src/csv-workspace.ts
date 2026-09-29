@@ -1,4 +1,5 @@
 import type { WorkspaceDiagnostics } from './workspace-diagnostics';
+import type { Deferred } from 'effect';
 import type {
   ConfirmWorkspaceCloseOutcome,
   CsvViewer,
@@ -11,6 +12,17 @@ import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
 import type { OwnedWorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';
 
+/** Web startup stays in the same Layer build while the page may interrupt it. */
+export interface WorkspaceStartup {
+  readonly signal?: AbortSignal;
+  /** Completes once when the engine stops unexpectedly; the build and the workspace watch it. */
+  readonly stopped: Deferred.Deferred<void>;
+  readonly check: (signal: AbortSignal) => Promise<void>;
+  /** Releases what an acquisition that never returned left behind; rejects if any part of it failed. */
+  readonly cleanup: () => Promise<void>;
+  readonly observeLateCleanupFailure: (report: () => void) => void;
+}
+
 /** Main-side ownership operations never cross the renderer protocol. */
 export interface CsvWorkspaceOwner extends CsvViewer {
   /** Decodes an untrusted request payload, then dispatches it. `call` is its typed form. */
@@ -20,17 +32,23 @@ export interface CsvWorkspaceOwner extends CsvViewer {
   dispose(): Promise<void>;
 }
 
+export interface CreateCsvViewerOptions {
+  /** Test override for Comparison execution. */
+  readonly executor?: ComparisonExecutor;
+  readonly diagnostics?: WorkspaceDiagnostics;
+  readonly startup?: WorkspaceStartup;
+}
+
 /**
  * The composition entry every runtime uses. Acquires the database, then builds the Working CSV,
  * Comparison, and diagnostics services on it and the host, and resolves once all of them exist.
  * A failed acquisition releases whatever was acquired and rejects. `dispose` releases the Working
- * CSV tables, then the database. The executor override is for tests.
+ * CSV tables, then the database; a stopped engine skips table release.
  */
 export function createCsvViewer(
-  openDatabase: () => Promise<OwnedWorkspaceDatabase>,
+  openDatabase: (signal: AbortSignal) => Promise<OwnedWorkspaceDatabase>,
   host: CsvWorkspaceHost,
-  executor?: ComparisonExecutor,
-  diagnostics?: WorkspaceDiagnostics,
+  options: CreateCsvViewerOptions = {},
 ): Promise<CsvWorkspaceOwner> {
-  return CsvWorkspaceImplementation.create(openDatabase, host, executor, diagnostics);
+  return CsvWorkspaceImplementation.create(openDatabase, host, options);
 }

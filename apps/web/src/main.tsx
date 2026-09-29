@@ -20,7 +20,7 @@ applyPalette(getInitialPalette());
 root.render(<WebStartupState status="checking" />);
 
 const startupController = new AbortController();
-const startup = startWebCsvViewer(createWebDuckDb(), pickPortableCsvSource, undefined, startupController.signal);
+const startup = startWebCsvViewer(createWebDuckDb(), pickPortableCsvSource, { signal: startupController.signal });
 let workspace: RendererWorkspace | null = null;
 let stopped = false;
 const dispose = disposeWorkspaceWhenPageHides({
@@ -55,7 +55,6 @@ void startup.then((started) => {
       </CsvViewerProvider>
     </StrictMode>,
   );
-}).catch((error) => {
-  console.error('CSV Viewer Web startup failed.', error);
+}).catch(() => {
   if (!stopped) root.render(<WebStartupState status="unsupported" />);
 });

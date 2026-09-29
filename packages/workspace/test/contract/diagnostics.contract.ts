@@ -8,6 +8,7 @@ import type { ComparisonExecutor } from '../../src/comparison/comparison-executo
 import type { ComparisonSummary } from '../../src/csv-viewer';
 import type { WorkspaceContractFixture } from './workspace-contract';
 import type { WorkspaceContractFactory } from './workspace-contract';
+import { diagnosticCapture } from '../diagnostic-capture';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
@@ -576,22 +577,6 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose().catch(() => undefined); }
     });
   });
-}
-
-function diagnosticCapture(onRecord?: (record: ReturnType<typeof Logger.formatStructured.log>) => void) {
-  const logs: string[] = [];
-  const records: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
-  return {
-    logs, records,
-    configuration: { logger: Logger.make((options) => {
-      logs.push(Logger.formatLogFmt.log(options));
-      const record = Logger.formatStructured.log(options);
-      records.push(record);
-      onRecord?.(record);
-    }) },
-    /** Completion records, optionally only those logged after the first `from` records. */
-    completed: (from = 0) => records.slice(from).filter((record) => record.annotations.outcome !== 'started'),
-  };
 }
 
 async function prepareComparison(fixture: WorkspaceContractFixture, rows = '1,PRIVATE-CELL') {

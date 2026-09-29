@@ -171,7 +171,7 @@ async function capacityViewer(
   selections: Array<File | null>,
   limits?: WebCsvCapacityLimits,
 ): Promise<CsvWorkspaceOwner> {
-  const started = await startWebCsvViewer(createNodeDuckDbWasmDatabase(), async () => selections.shift() ?? null, limits);
+  const started = await startWebCsvViewer(createNodeDuckDbWasmDatabase(), async () => selections.shift() ?? null, { limits });
   if (started.status !== 'ready') throw new Error('Web startup check failed.');
   return started.viewer;
 }

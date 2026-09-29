@@ -7,8 +7,10 @@ import {
 import { toError } from '@csv-viewer/workspace/errors';
 import { quoteLiteral, type QueryValues } from '@csv-viewer/workspace/csv-query';
 import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
+import { Deferred, Effect } from 'effect';
 import {
   normalizeDatabaseOperation,
+  stoppedEngineMessage,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -95,13 +97,16 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
  * the engine for the rest of the page.
  */
 export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
+  /** Completes once on a Worker error or a cancelled startup; web composition hands it to the workspace. */
+  readonly stopped = Deferred.makeUnsafe<void>();
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
   private worker: DuckDbWasmWorker | null = null;
   private fatalError: Error | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
+  private startupReleaseFailed = false;
+  private reportLateStartupCleanupFailure: () => void = () => undefined;
   private readonly failedFileDrops = new Set<string>();
-  private readonly fatalErrorListeners = new Set<(error: Error) => void>();
   private readonly handleWorkerError = (event: ErrorEvent) => {
     this.failFatally(event.error ?? new Error(event.message || 'DuckDB-Wasm Worker failed.'));
   };
@@ -112,11 +117,25 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   /**
-   * Starts the Worker, opens the owner connection under the network-isolation settings, and proves
-   * the in-memory CSV path. A failure releases whatever it started before rejecting.
+   * Releases what a failed or cancelled `open` left behind. The Layer finalizer never runs for an
+   * acquisition that did not return, so this also rejects if `open` failed to release on its own.
    */
-  async open(): Promise<this> {
-    await normalizeDatabaseOperation(async () => {
+  async closeStartup(): Promise<void> {
+    await this.closeEngine();
+    if (this.startupReleaseFailed) throw new Error('The web engine could not be released.');
+  }
+
+  onLateStartupCleanupFailure(report: () => void): void {
+    this.reportLateStartupCleanupFailure = report;
+  }
+
+  /**
+   * Starts the Worker and opens the owner connection under the network-isolation settings. The
+   * workspace Layer runs the in-memory CSV check and owns release.
+   */
+  async open(signal?: AbortSignal): Promise<this> {
+    await this.stopOnAbort(signal, () => normalizeDatabaseOperation(async () => {
+      this.throwIfFatal();
       const database = await this.createEngine();
       this.throwIfFatal();
       this.database = database;
@@ -138,13 +157,12 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
         await connection.run('SET autoload_known_extensions = false');
         await connection.run('SET lock_configuration = true');
         this.throwIfFatal();
-        await this.verifyInMemoryCsvQuery();
       } catch (error) {
-        await this.closeOwnerConnection().catch(() => undefined);
-        await this.closeEngine().catch(() => undefined);
+        await this.closeOwnerConnection().catch(() => { this.startupReleaseFailed = true; });
+        await this.closeEngine().catch(() => { this.startupReleaseFailed = true; });
         throw error;
       }
-    });
+    }));
     return this;
   }
 
@@ -157,13 +175,6 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return normalizeDatabaseOperation(async () =>
       new DuckDbWasmConnection(await database.connect()),
     );
-  }
-
-  /** Reports an unrecoverable Worker failure once for the lifetime of this database. */
-  onFatalError(listener: (error: Error) => void): () => void {
-    this.fatalErrorListeners.add(listener);
-    if (this.fatalError) listener(this.fatalError);
-    return () => this.fatalErrorListeners.delete(listener);
   }
 
   async run(sql: string, values?: QueryValues): Promise<void> {
@@ -208,11 +219,6 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     }
   }
 
-  /** Interrupts startup without waiting for a Worker request that may never settle. */
-  cancelStartup(): void {
-    this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
-  }
-
   async closeOwnerConnection(): Promise<void> {
     const connection = this.connection;
     this.connection = null;
@@ -235,7 +241,11 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   protected async createEngine(): Promise<AsyncDuckDB> {
     const worker = await this.options.createWorker(this.options.mainWorker);
     if (this.fatalError) {
-      worker.terminate();
+      try {
+        worker.terminate();
+      } catch {
+        this.reportLateStartupCleanupFailure();
+      }
       this.throwIfFatal();
     }
     this.worker = worker;
@@ -251,7 +261,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     } catch (error) {
       if (this.database === database) this.database = null;
       this.stopObservingWorker();
-      await database.terminate().catch(() => undefined);
+      await database.terminate().catch(() => { this.startupReleaseFailed = true; });
       throw error;
     }
   }
@@ -262,20 +272,35 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     await database.terminate();
   }
 
-  private async verifyInMemoryCsvQuery(): Promise<void> {
-    // Encoded per call: registering hands the buffer to the Worker, which may detach it.
-    const probe = new TextEncoder().encode('ready\ntrue\n');
-    const reference = await this.registerFileBuffer('startup-check.csv', probe);
-    let rows: EngineRow[];
+  /** The Layer runs this probe after acquisition and reports its outcome as `web.startup-check`. */
+  async verifyInMemoryCsvQuery(signal?: AbortSignal): Promise<void> {
+    await this.stopOnAbort(signal, async () => {
+      // Encoded per call: registering hands the buffer to the Worker, which may detach it.
+      const probe = new TextEncoder().encode('ready\ntrue\n');
+      const reference = await this.registerFileBuffer('startup-check.csv', probe);
+      let rows: EngineRow[];
+      try {
+        rows = await this.readObjects(
+          `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
+        );
+      } finally {
+        await this.dropFile(reference);
+      }
+      if (rows.length !== 1 || rows[0]?.ready !== 'true') {
+        throw new Error('The browser could not run the required in-memory CSV query.');
+      }
+    });
+  }
+
+  /** Startup cannot wait on a Worker request that may never settle, so an abort stops the engine. */
+  private async stopOnAbort<A>(signal: AbortSignal | undefined, operation: () => Promise<A>): Promise<A> {
+    const interrupt = () => this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
+    signal?.addEventListener('abort', interrupt, { once: true });
+    if (signal?.aborted) interrupt();
     try {
-      rows = await this.readObjects(
-        `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
-      );
+      return await operation();
     } finally {
-      await this.dropFile(reference);
-    }
-    if (rows.length !== 1 || rows[0]?.ready !== 'true') {
-      throw new Error('The browser could not run the required in-memory CSV query.');
+      signal?.removeEventListener('abort', interrupt);
     }
   }
 
@@ -294,15 +319,11 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     this.database = null;
     this.stopObservingWorker();
     this.fatalCleanup = database ? database.terminate().then(() => null, toError) : Promise.resolve(null);
-    for (const listener of this.fatalErrorListeners) listener(this.fatalError);
+    Deferred.doneUnsafe(this.stopped, Effect.void);
   }
 
   private throwIfFatal(): void {
-    if (this.fatalError) {
-      throw new Error('The data engine has stopped. Reload CSV Viewer to start a new workspace.', {
-        cause: this.fatalError,
-      });
-    }
+    if (this.fatalError) throw new Error(stoppedEngineMessage, { cause: this.fatalError });
   }
 
   private stopObservingWorker(): void {
