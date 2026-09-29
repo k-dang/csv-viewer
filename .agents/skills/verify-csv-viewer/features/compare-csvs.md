@@ -36,7 +36,7 @@ Open both fixtures on either runtime with `drop --files '["fixtures/phase-2-samp
 - **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait for `Applied key: id` and the badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `. For these fixtures expect `Changed 1`, `Baseline-only 0`, `Candidate-only 0`, `Unchanged 4`: the only difference is row `id` 4, whose `total_spend` is `1.5` in the baseline and `1.0` in the candidate.
 - **Proof.** Snapshot and screenshot `evidence/compare-csvs/applied.aria.txt` and `applied.png` now, before any later edit. They show `CSV Viewer`, both file names, `Applied key: id`, and the four count badges.
 - **Swap.** Run `click --role button --name "Swap sides"`. Baseline and Candidate trade places and the tab title flips to `phase-2-sample-edited.csv ⇄ phase-2-sample.csv`. Badges stay in place with no re-apply. Swap does not show `Outdated Comparison`.
-- **Refresh after an edit.** Return to `phase-2-sample.csv`, edit Ada's cell, and open the comparison tab again. Wait for `Outdated Comparison` and the previous `Changed 1`. Then `click --role button --name "Refresh comparison"` and wait for `Changed 2` and `Unchanged 3`. Undo the cell edit before closing either source tab. A dirty close opens `window.confirm`, which the helper cannot answer.
+- **Refresh after an edit.** Return to `phase-2-sample.csv`, edit Ada's cell, and open the comparison tab again. Wait for `Outdated Comparison` and the previous `Changed 1`. Then `click --role button --name "Refresh comparison"` and wait for `Changed 2` and `Unchanged 3`. Undo the cell edit. Then close the Comparison Tab before closing either source. Click the tab `phase-2-sample-edited.csv ⇄ phase-2-sample.csv`, then `click --role button --name "Close phase-2-sample-edited.csv ⇄ phase-2-sample.csv"`. Swap sides already set that title. A dirty source opens `window.confirm`. Closing a source while that Comparison Tab is still open does too. The helper cannot answer either dialog.
 
 ## Web differences
 
@@ -56,5 +56,5 @@ Both runtimes support this recipe through file drops. Web also supports `upload`
 - An empty key draft leaves `Apply key` disabled, so `compare-invalid` needs a key column with blank or duplicated values, not an empty selection.
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.
-- Closing a CSV that a comparison depends on asks for confirmation and closes the Comparison Tab. Finish the comparison proof before closing sources.
+- Closing a CSV that a comparison depends on asks for confirmation and closes the Comparison Tab, even when the CSV has no Unexported Changes. Close the Comparison Tab before either source. Finish the comparison proof before closing sources.
 - Do not treat the comparison unit tests (`packages/workspace/src/comparison/csv-comparison-service.test.ts`, `packages/workspace/src/comparison/comparison-projection.test.ts`) as a substitute for this UI path.
