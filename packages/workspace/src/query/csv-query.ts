@@ -8,6 +8,7 @@ import type {
   CsvSortDescriptor,
   CsvTextFilterOperator,
 } from '../csv-viewer';
+import { Result } from 'effect';
 import { csvInternalRowIdField } from '../csv-viewer';
 import { WorkspaceRequestError } from '../errors';
 import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
@@ -15,6 +16,9 @@ import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage
 export type QueryValues = Array<string | number | boolean | null>;
 
 export type CsvStatement = { sql: string; values: QueryValues };
+
+/** Query construction stays synchronous; an expected rejection is a failure value, not a throw. */
+export type QueryBuild<A> = Result.Result<A, WorkspaceRequestError>;
 
 export function buildCreateWorkingCsvTableSql(
   tableName: string,
@@ -92,24 +96,22 @@ export function buildRowDeletionStatement(
   tableName: string,
   rowIds: string[],
   deleted: boolean,
-): CsvStatement {
-  assertRowIds(rowIds);
-  return {
+): QueryBuild<CsvStatement> {
+  return Result.map(requireRowIds(rowIds), () => ({
     sql: `UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(csvDeletedField)} = ? WHERE ${quoteIdentifier(
       csvInternalRowIdField,
     )} IN (${buildPlaceholders(rowIds.length)})`,
     values: [deleted, ...rowIds],
-  };
+  }));
 }
 
-export function buildExistingRowIdsQuery(tableName: string, rowIds: string[]): CsvStatement {
-  assertRowIds(rowIds);
-  return {
+export function buildExistingRowIdsQuery(tableName: string, rowIds: string[]): QueryBuild<CsvStatement> {
+  return Result.map(requireRowIds(rowIds), () => ({
     sql: `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${quoteIdentifier(tableName)} WHERE ${quoteIdentifier(
       csvInternalRowIdField,
     )} IN (${buildPlaceholders(rowIds.length)}) AND ${quoteIdentifier(csvDeletedField)} = false`,
     values: rowIds,
-  };
+  }));
 }
 
 export function buildNextRowIdSql(tableName: string): string {
@@ -190,20 +192,23 @@ export function buildRowsQuery({
   sort: readonly CsvSortDescriptor[];
   limit: number;
   offset: number;
-}) {
-  const scope = buildCountScopeWhere({ columns, filters, search });
-  const orderSql = buildOrderSql(sort, new Set(columns.map((column) => column.name)));
-  const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
-  const rowProjectionSql = [
-    quoteIdentifier(csvInternalRowIdField),
-    ...columns.map((column) => quoteIdentifier(column.name)),
-  ].join(', ');
+}): QueryBuild<{ countSql: string; rowsSql: string; values: QueryValues }> {
+  return Result.gen(function* () {
+    const knownColumns = new Set(columns.map((column) => column.name));
+    const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
+    const orderSql = yield* buildOrderSql(sort, knownColumns);
+    const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
+    const rowProjectionSql = [
+      quoteIdentifier(csvInternalRowIdField),
+      ...columns.map((column) => quoteIdentifier(column.name)),
+    ].join(', ');
 
-  return {
-    countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
-    rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
-    values: scope.values,
-  };
+    return {
+      countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
+      rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
+      values: scope.values,
+    };
+  });
 }
 
 export function buildColumnValuesQuery({
@@ -220,15 +225,18 @@ export function buildColumnValuesQuery({
   filters: readonly CsvFilterDescriptor[];
   search: string;
   sort: readonly CsvSortDescriptor[];
-}): CsvStatement {
-  const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
-  assertKnownColumn(column, knownColumns);
-  const scope = buildCountScopeWhere({ columns, filters, search });
+}): QueryBuild<CsvStatement> {
+  return Result.gen(function* () {
+    const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
+    yield* requireKnownColumn(column, knownColumns);
+    const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
+    const orderSql = yield* buildOrderSql(sort, knownColumns);
 
-  return {
-    sql: `SELECT ${quoteIdentifier(column)} AS column_value FROM ${quoteIdentifier(tableName)}${scope.whereSql}${buildOrderSql(sort, knownColumns)}`,
-    values: scope.values,
-  };
+    return {
+      sql: `SELECT ${quoteIdentifier(column)} AS column_value FROM ${quoteIdentifier(tableName)}${scope.whereSql}${orderSql}`,
+      values: scope.values,
+    };
+  });
 }
 
 export function buildColumnValueCountsQuery({
@@ -243,13 +251,15 @@ export function buildColumnValueCountsQuery({
   column: string;
   filters: readonly CsvFilterDescriptor[];
   search: string;
-}) {
-  assertKnownColumn(column, new Set(columns.map((knownColumn) => knownColumn.name)));
-  const scope = buildCountScopeWhere({ columns, filters, search });
-  const countedValueSql = quoteIdentifier(column);
+}): QueryBuild<CsvStatement> {
+  return Result.gen(function* () {
+    const knownColumns = new Set(columns.map((knownColumn) => knownColumn.name));
+    yield* requireKnownColumn(column, knownColumns);
+    const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
+    const countedValueSql = quoteIdentifier(column);
 
-  return {
-    sql: `WITH scoped_rows AS (
+    return {
+      sql: `WITH scoped_rows AS (
       SELECT ${countedValueSql} AS counted_value
       FROM ${quoteIdentifier(tableName)}${scope.whereSql}
     ),
@@ -273,43 +283,56 @@ export function buildColumnValueCountsQuery({
     CROSS JOIN scoped_total
     ORDER BY counted_values.value_count DESC, counted_values.counted_value ASC NULLS FIRST
     LIMIT 50`,
-    values: scope.values,
-  };
+      values: scope.values,
+    };
+  });
 }
 
 function buildCountScopeWhere({
   columns,
+  knownColumns,
   filters,
   search,
 }: {
   columns: CsvColumn[];
+  knownColumns: Set<string>;
   filters: readonly CsvFilterDescriptor[];
   search: string;
-}) {
-  const knownColumns = new Set(columns.map((column) => column.name));
+}): QueryBuild<{ whereSql: string; values: QueryValues }> {
   const values: QueryValues = [];
-  const whereClauses = filters.map((filter) => buildFilterClause(filter, knownColumns, values));
-  whereClauses.push(`${quoteIdentifier(csvDeletedField)} = false`);
-  const searchClause = buildSearchClause(columns, search, values);
-  if (searchClause) whereClauses.push(searchClause);
-  return { whereSql: ` WHERE ${whereClauses.join(' AND ')}`, values };
+  return Result.gen(function* () {
+    const whereClauses = yield* Result.all(
+      filters.map((filter) => buildFilterClause(filter, knownColumns, values)),
+    );
+    whereClauses.push(`${quoteIdentifier(csvDeletedField)} = false`);
+    const searchClause = buildSearchClause(columns, search, values);
+    if (searchClause) whereClauses.push(searchClause);
+    return { whereSql: ` WHERE ${whereClauses.join(' AND ')}`, values };
+  });
 }
 
 /** The grid's sort, else source order, so every query over the row window agrees on row order. */
-function buildOrderSql(sort: readonly CsvSortDescriptor[], knownColumns: Set<string>): string {
-  const orderClauses = sort.map((descriptor) => buildSortClause(descriptor, knownColumns));
-  return orderClauses.length > 0
-    ? ` ORDER BY ${orderClauses.join(', ')}`
-    : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`;
+function buildOrderSql(sort: readonly CsvSortDescriptor[], knownColumns: Set<string>): QueryBuild<string> {
+  return Result.map(
+    Result.all(sort.map((descriptor) => buildSortClause(descriptor, knownColumns))),
+    (orderClauses) =>
+      orderClauses.length > 0
+        ? ` ORDER BY ${orderClauses.join(', ')}`
+        : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`,
+  );
 }
 
-function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): string {
-  assertKnownColumn(descriptor.column, knownColumns);
-  return `${quoteIdentifier(descriptor.column)} ${descriptor.direction === 'desc' ? 'DESC' : 'ASC'} NULLS LAST`;
+function buildSortClause(descriptor: CsvSortDescriptor, knownColumns: Set<string>): QueryBuild<string> {
+  return Result.map(
+    requireKnownColumn(descriptor.column, knownColumns),
+    () => `${quoteIdentifier(descriptor.column)} ${descriptor.direction === 'desc' ? 'DESC' : 'ASC'} NULLS LAST`,
+  );
 }
 
-export function assertKnownColumn(column: string, knownColumns: Set<string>): void {
-  if (!knownColumns.has(column)) throw new WorkspaceRequestError({ message: `Unknown CSV column: ${column}` });
+export function requireKnownColumn(column: string, knownColumns: Set<string>): QueryBuild<void> {
+  return knownColumns.has(column)
+    ? Result.void
+    : Result.fail(new WorkspaceRequestError({ message: `Unknown CSV column: ${column}` }));
 }
 
 /** The most rows any single row-window request may return, for CSV rows and Comparison rows alike. */
@@ -335,8 +358,10 @@ export function quoteLiteral(value: string): string {
 }
 
 /** An empty list would render `IN ()`, which the engine rejects as a syntax error. */
-function assertRowIds(rowIds: string[]): void {
-  if (rowIds.length === 0) throw new WorkspaceRequestError({ message: 'At least one CSV row is required.' });
+function requireRowIds(rowIds: string[]): QueryBuild<void> {
+  return rowIds.length === 0
+    ? Result.fail(new WorkspaceRequestError({ message: 'At least one CSV row is required.' }))
+    : Result.void;
 }
 
 function buildPlaceholders(count: number): string {
@@ -360,17 +385,18 @@ function buildFilterClause(
   filter: CsvFilterDescriptor,
   knownColumns: Set<string>,
   values: QueryValues,
-): string {
-  assertKnownColumn(filter.column, knownColumns);
-  const columnSql = quoteIdentifier(filter.column);
-  if (filter.operator === 'blank')
-    return `(${columnSql} IS NULL OR ${castForText(columnSql)} = '')`;
-  if (filter.operator === 'notBlank')
-    return `(${columnSql} IS NOT NULL AND ${castForText(columnSql)} <> '')`;
-  if (filter.kind === 'text') {
-    return buildTextFilterClause(columnSql, filter.operator, filter.value ?? '', values);
-  }
-  return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
+): QueryBuild<string> {
+  return Result.map(requireKnownColumn(filter.column, knownColumns), () => {
+    const columnSql = quoteIdentifier(filter.column);
+    if (filter.operator === 'blank')
+      return `(${columnSql} IS NULL OR ${castForText(columnSql)} = '')`;
+    if (filter.operator === 'notBlank')
+      return `(${columnSql} IS NOT NULL AND ${castForText(columnSql)} <> '')`;
+    if (filter.kind === 'text') {
+      return buildTextFilterClause(columnSql, filter.operator, filter.value ?? '', values);
+    }
+    return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
+  });
 }
 
 function buildTextFilterClause(

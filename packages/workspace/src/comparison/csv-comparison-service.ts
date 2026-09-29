@@ -1,6 +1,7 @@
 import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
 import { Cause, Deferred, Effect, Exit, Fiber, type Scope } from 'effect';
 import { DataEngineError } from '../database';
+import type { WorkspaceRequestError } from '../errors';
 import type {
   BeginComparisonRequest,
   CancelComparisonRequest,
@@ -72,7 +73,7 @@ type ComparisonActivity =
   | {
       kind: 'running';
       operation: Operation;
-      fiber: Fiber.Fiber<AttemptResult, DataEngineError>;
+      fiber: Fiber.Fiber<AttemptResult, DataEngineError | WorkspaceRequestError>;
       completion: Effect.Effect<ComparisonAttemptOutcome>;
     };
 
@@ -477,7 +478,7 @@ export class CsvComparisonService {
   private finishAttempt(
     entity: ComparisonRecord,
     operation: Operation,
-    result: Exit.Exit<AttemptResult, DataEngineError>,
+    result: Exit.Exit<AttemptResult, DataEngineError | WorkspaceRequestError>,
   ): ComparisonAttemptOutcome {
     // Cancellation or cleanup failure after publication must preserve the committed result.
     if (entity.snapshot?.artifactId === operation.operationId) {
@@ -505,7 +506,7 @@ export class CsvComparisonService {
     entity: ComparisonRecord,
     operation: Operation,
     key: string[],
-  ): Effect.fn.Return<AttemptResult, DataEngineError, Scope.Scope> {
+  ): Effect.fn.Return<AttemptResult, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     yield* this.retryPendingRetirements();
     const baseline = this.csvs.getState(entity.baselineId);
     const candidate = this.csvs.getState(entity.candidateId);

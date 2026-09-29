@@ -1,5 +1,6 @@
 import { Context, type Effect, type Scope } from 'effect';
 import type { DataEngineError } from '../database';
+import type { WorkspaceRequestError } from '../errors';
 import type {
   ComparisonId,
   ComparisonOperationId,
@@ -37,7 +38,7 @@ export interface ComparisonAttemptExecutor {
   validateKey(
     workingCsvId: WorkingCsvId,
     key: string[],
-  ): Effect.Effect<SourceKeyDiagnostics, DataEngineError>;
+  ): Effect.Effect<SourceKeyDiagnostics, DataEngineError | WorkspaceRequestError>;
   createSnapshot(request: CreateComparisonSnapshotRequest): Effect.Effect<ComparisonSummary, DataEngineError>;
 }
 

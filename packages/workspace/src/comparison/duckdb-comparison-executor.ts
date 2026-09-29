@@ -18,11 +18,12 @@ import type {
   StoredComparisonWindow,
 } from './comparison-executor';
 import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
+import type { WorkspaceRequestError } from '../errors';
 import {
-  assertKnownColumn,
   buildDropTableSql,
   isValidRowWindow,
   quoteIdentifier,
+  requireKnownColumn,
 } from '../query/csv-query';
 import { normalizeCellValue, normalizeCount, type EngineCellValue } from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
@@ -80,11 +81,11 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     writer: WorkspaceDatabaseConnection,
     workingCsvId: WorkingCsvId,
     key: string[],
-  ): Effect.fn.Return<SourceKeyDiagnostics, DataEngineError, Scope.Scope> {
+  ): Effect.fn.Return<SourceKeyDiagnostics, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     if (key.length === 0) throw new Error('Comparison key requires at least one column.');
     const source = yield* this.database.acquireSource(workingCsvId);
     const known = new Set(source.columns.map((column) => column.name));
-    key.forEach((column) => assertKnownColumn(column, known));
+    for (const column of key) yield* Effect.fromResult(requireKnownColumn(column, known));
     const table = quoteIdentifier(source.tableName);
     const active = `${quoteIdentifier(csvDeletedField)} = false`;
     const blank = key
