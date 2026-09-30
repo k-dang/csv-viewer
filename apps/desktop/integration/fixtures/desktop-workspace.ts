@@ -87,7 +87,6 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      // The workspace releases this database with its own scope, including when creation fails.
       const database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
       const workspace = await createCsvViewer(Effect.succeed(database), host, { executor, diagnostics });
       return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);

@@ -39,8 +39,7 @@ export interface WorkspaceDatabaseConnection {
  * The workspace runtime acquires it before the workspace exists and releases it after every
  * Working CSV table, so it is open for the whole life of every caller. Callers own the worker
  * connections they acquire and close each one. The Promise methods are the surface unmigrated
- * consumers still call: `run` and `readObjects` go through the owner connection's Promise methods,
- * and the others run their Effects.
+ * consumers still call.
  */
 export interface WorkspaceDatabase {
   ownerConnection(): Promise<WorkspaceDatabaseConnection>;

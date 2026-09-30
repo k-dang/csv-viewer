@@ -31,7 +31,6 @@ export type DuckDbWasmDatabaseOptions = {
  * prepared statements, rows arrive as Arrow values, and cancellable work uses send/cancelSent.
  * `send` holds the connection's single result stream, so only the cancellable methods use it -
  * routing every statement through it would stop the owner connection serving concurrent queries.
- * Every driver call goes through `untilStopped`, so a Worker failure settles it.
  */
 class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   constructor(
@@ -88,17 +87,15 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     return Effect.runPromise(this.closeEffect());
   }
 
-  /** The driver call behind `closeEffect`, for adapter code already inside a driver call. */
+  /** Raw driver calls, for adapter code already running inside `driverEffect`. */
   disconnect(): Promise<void> {
     return this.untilStopped(this.connection.close());
   }
 
-  /** The driver call behind `runEffect`, for adapter code already inside a driver call. */
   async runStatement(sql: string, values?: QueryValues): Promise<void> {
     await this.untilStopped(this.query(sql, values));
   }
 
-  /** The driver call behind `readObjectsEffect`, for adapter code already inside a driver call. */
   async readRows(sql: string, values?: QueryValues): Promise<EngineRow[]> {
     const table = await this.untilStopped(this.query(sql, values));
     // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
