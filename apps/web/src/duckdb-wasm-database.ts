@@ -32,7 +32,12 @@ export type DuckDbWasmDatabaseOptions = {
  */
 class EngineCalls {
   private readonly pending = new Set<(error: Error) => void>();
-  private stoppedError: Error | null = null;
+  private stopError: Error | null = null;
+
+  /** Set once the engine stops; every later operation fails with it. */
+  get stoppedError(): Error | null {
+    return this.stopError;
+  }
 
   /** Runs one driver call as a database Effect that also settles when the engine stops. */
   effect<A>(operation: () => Promise<A>, cancel?: () => Promise<void>): Effect.Effect<A, DataEngineError> {
@@ -41,15 +46,21 @@ class EngineCalls {
 
   /** Starts `call` unless the engine has stopped, and rejects it if the engine stops first. */
   track<A>(call: () => Promise<A>): Promise<A> {
-    if (this.stoppedError) return Promise.reject(this.stoppedError);
+    if (this.stopError) return Promise.reject(this.stopError);
     return new Promise<A>((resolve, reject) => {
       this.pending.add(reject);
-      call().then(resolve, reject).finally(() => this.pending.delete(reject));
+      let started: Promise<A>;
+      try {
+        started = call();
+      } catch (error) {
+        started = Promise.reject(error);
+      }
+      started.then(resolve, reject).finally(() => this.pending.delete(reject));
     });
   }
 
   stop(error: Error): void {
-    this.stoppedError = error;
+    this.stopError = error;
     for (const reject of this.pending) reject(error);
     this.pending.clear();
   }
@@ -114,7 +125,10 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     return Effect.runPromise(this.closeEffect());
   }
 
-  /** Raw driver calls, for adapter code already running inside a tracked call. */
+  /**
+   * The raw driver calls behind `closeEffect`, `runEffect`, and `readObjectsEffect`, for adapter
+   * code already running inside a tracked call.
+   */
   disconnect(): Promise<void> {
     return this.connection.close();
   }
@@ -171,8 +185,6 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
   private worker: DuckDbWasmWorker | null = null;
-  /** Set once the engine stops; every later operation fails with it. */
-  private stoppedError: Error | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
   private startupReleaseFailed = false;
   private reportLateStartupCleanupFailure: () => void = () => undefined;
@@ -284,8 +296,9 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     }
   }
 
+  /** After a fatal stop there is no connection left to close, so release succeeds at once. */
   closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
-    return driverEffect(() => this.releaseOwnerConnection());
+    return Effect.suspend(() => this.connection ? this.calls.effect(() => this.releaseOwnerConnection()) : Effect.void);
   }
 
   /** Stops the Worker. After a fatal stop, reports the outcome of the termination that stop began. */
@@ -316,7 +329,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
   protected async createEngine(): Promise<AsyncDuckDB> {
     const worker = await this.options.createWorker(this.options.mainWorker);
-    if (this.stoppedError) {
+    if (this.calls.stoppedError) {
       try {
         worker.terminate();
       } catch {
@@ -415,19 +428,20 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
 
   /** Stops the engine once and completes the workspace signal before awaiting termination. */
   private failFatally(cause: unknown): void {
-    if (this.stoppedError) return;
-    this.stoppedError = new Error(stoppedEngineMessage, { cause: toError(cause) });
+    if (this.calls.stoppedError) return;
+    const stoppedError = new Error(stoppedEngineMessage, { cause: toError(cause) });
     const database = this.database;
     this.connection = null;
     this.database = null;
     this.stopObservingWorker();
     this.fatalCleanup = database ? database.terminate().then(() => null, toError) : Promise.resolve(null);
-    this.calls.stop(this.stoppedError);
+    this.calls.stop(stoppedError);
     Deferred.doneUnsafe(this.stopped, Effect.void);
   }
 
   private throwIfFatal(): void {
-    if (this.stoppedError) throw this.stoppedError;
+    const { stoppedError } = this.calls;
+    if (stoppedError) throw stoppedError;
   }
 
   private stopObservingWorker(): void {

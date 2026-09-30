@@ -70,7 +70,8 @@ export class DataEngineError extends Error {
  * Runs one driver call at a runtime adapter edge. Any rejection or synchronous throw becomes
  * `DataEngineError`, which keeps driver exception classes and messages behind the adapter.
  * Without `cancel`, the call is uninterruptible until it settles. With `cancel`, interruption asks
- * the driver to stop, then still waits for the call to settle.
+ * the driver to stop, then still waits for the call to settle. Cancellation is best-effort: if it
+ * fails, the wait for settlement still protects every resource the call uses.
  */
 export function driverEffect<A>(
   operation: () => Promise<A>,
@@ -91,7 +92,7 @@ export function driverEffect<A>(
       (cause) => resume(Effect.fail(toEngineError(cause))),
     );
     return driverEffect(cancel).pipe(
-      Effect.orDie,
+      Effect.ignore,
       Effect.ensuring(Effect.promise(() => pending.then(() => undefined, () => undefined))),
     );
   });

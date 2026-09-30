@@ -29,6 +29,24 @@ function openNodeDatabase(): Promise<DuckDbWasmWorkspaceDatabase> {
   return Effect.runPromise(createNodeDuckDbWasmDatabase().open());
 }
 
+/** Opens a real engine and returns a way to fail its Worker the way the browser reports a crash. */
+async function openCrashableDatabase() {
+  let worker: EventTarget | undefined;
+  const opened = new DuckDbWasmWorkspaceDatabase({
+    ...nodeWasmOptions,
+    createWorker: async (reference) => (worker = await nodeWasmOptions.createWorker(reference)),
+  });
+  database = await Effect.runPromise(opened.open());
+  return {
+    database: opened,
+    crash: () => {
+      if (!worker) throw new Error('The engine did not create its Worker.');
+      // SAFETY: web-worker's Node EventTarget dispatches plain objects, as it does for its own errors.
+      worker.dispatchEvent({ type: 'error', error: new Error('Worker crashed.') } as never);
+    },
+  };
+}
+
 describe('DuckDbWasmWorkspaceDatabase', () => {
   it('runs parameterized queries on the pinned in-memory DuckDB core', async () => {
     database = await openNodeDatabase();
@@ -119,26 +137,37 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   });
 
   it('fails a query in flight when the Worker fails instead of waiting forever', async () => {
-    let worker: EventTarget | undefined;
-    database = new DuckDbWasmWorkspaceDatabase({
-      ...nodeWasmOptions,
-      createWorker: async (reference) => (worker = await nodeWasmOptions.createWorker(reference)),
-    });
-    await Effect.runPromise(database.open());
+    const engine = await openCrashableDatabase();
     const started = driverMethod(AsyncDuckDBConnection.prototype, 'query').observe();
-    const work = Effect.runFork(Effect.flip(database.readObjectsEffect(
+    const work = Effect.runFork(Effect.flip(engine.database.readObjectsEffect(
       'SELECT sum(a.range * b.range) AS total FROM range(1000000) a, range(1000000) b',
     )));
     await started;
 
-    // SAFETY: web-worker's Node EventTarget dispatches plain objects, as it does for its own errors.
-    worker?.dispatchEvent({ type: 'error', error: new Error('Worker crashed.') } as never);
+    engine.crash();
 
     await expect(Effect.runPromise(Fiber.join(work))).resolves.toMatchObject({
       name: 'DataEngineError',
       cause: { message: stoppedEngineMessage },
     });
   }, 15_000);
+
+  it('finishes an owner connection release that the Worker failure leaves unanswered', async () => {
+    const engine = await openCrashableDatabase();
+    const closing = Promise.withResolvers<void>();
+    vi.spyOn(AsyncDuckDBConnection.prototype, 'close').mockImplementation(() => {
+      closing.resolve();
+      return new Promise<void>(() => undefined);
+    });
+    const release = Effect.runFork(Effect.flip(engine.database.closeOwnerConnection()));
+    await closing.promise;
+
+    engine.crash();
+
+    await expect(Effect.runPromise(Fiber.join(release))).resolves.toMatchObject({
+      cause: { message: stoppedEngineMessage },
+    });
+  });
 
   it.each(['pending request', 'pending creation'])('cancels startup during %s and terminates the Worker once', async (phase) => {
     const worker = new ControllableWorker();
