@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately. The resource-lifetime changes are implemented; remaining web UI verification is carried into ticket 06.
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Expand the database and connection interfaces with Effect-returning operations alongside the existing query surface so unmigrated consumers still compile and behave correctly. Keep compatibility limited to what tickets 03 and 04 require; ticket 06 removes it completely.
 - [x] Provide typed `DataEngineError` failures for running queries, reading objects, cancellable query variants, obtaining the owner connection, acquiring workers, and closing connections. Preserve caller ownership of workers and runtime ownership of the database.
@@ -24,3 +24,5 @@
 - Native cancellation bug found and fixed: DuckDB clears a connection's interrupt flag when a query starts. An `interrupt()` sent before execution begins is therefore lost; 149 of 150 immediate interrupts were lost in a probe. The old `comparisonQuery` + `cancelRunning` path has this race. Native cancellable queries now start a pending result first and interrupt again if cancellation arrived meanwhile (140 of 140 reliable in a probe). The real-driver test "cancels long work interrupted before the driver starts executing it" covers it. DuckDB-Wasm cancellation did not show the race (40 of 40).
 - Startup is the one abandoning interruption: `DriverInterruption.abandon` stops the Wasm engine and does not wait, because a stopped Worker may never settle a pending request.
 - Verification (verify skill, both runtimes): opened CSV Sources, ran an Aligned Comparison (Changed 1 / Unchanged 4). Also started and cancelled a 100,000-row comparison: `comparison.snapshot` was `interrupted`, followed by `release-snapshot` and `release-worker` `succeeded` and `comparison.compute` `cancelled`. Re-applying afterwards completed with Unchanged 100000. On web, startup logged `workspace.acquire-database` and `web.startup-check` `succeeded`. The logs contained no driver or source text.
+- Review follow-up: DuckDB-Wasm drops the requests a failed Worker held without settling them. Uninterruptible database Effects would therefore wait forever on a query that was in flight when the Worker failed. Every Wasm driver call now races an engine-stop rejection, so a fatal stop settles it as `DataEngineError` (cause: the stopped-engine message), and its interruption completes. A real-driver test covers it.
+- Review follow-up, judgement call not taken: the four native and Wasm interruption tests have the same shape, but each one waits on different driver methods. They stay as per-adapter tests rather than becoming a shared adapter contract.

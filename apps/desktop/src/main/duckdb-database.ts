@@ -115,8 +115,8 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.connection.readObjectsEffect(sql, values);
   }
 
-  async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
-    return this.connection;
+  ownerConnection(): Promise<WorkspaceDatabaseConnection> {
+    return Effect.runPromise(this.ownerConnectionEffect());
   }
 
   connectWorker(): Promise<WorkspaceDatabaseConnection> {

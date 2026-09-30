@@ -154,7 +154,7 @@ function createQuietWorker(reference: string): NodeWebWorker {
   return new WebWorker(`data:text/javascript,${encodeURIComponent(bootstrap)}`, { type: 'module', }) as NodeWebWorker;
 }
 
-const nodeWasmOptions = {
+export const nodeWasmOptions = {
   mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-eh.wasm'),
   mainWorker: pathToFileURL(require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs')).toString(),
   createWorker: (reference: string) =>

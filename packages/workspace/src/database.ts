@@ -28,7 +28,7 @@ export interface WorkspaceDatabaseConnection {
   close(): Promise<void>;
   runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError>;
   readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError>;
-  /** The cancellable path of `runCancellable`; interrupting it cancels the driver work. */
+  /** Runs long work on the cancellable path; interrupting it cancels the driver work. */
   runCancellableEffect(sql: string): Effect.Effect<void, DataEngineError>;
   readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError>;
   closeEffect(): Effect.Effect<void, DataEngineError>;
@@ -38,7 +38,9 @@ export interface WorkspaceDatabaseConnection {
  * One acquired in-memory database with an owner connection and isolated operation connections.
  * The workspace runtime acquires it before the workspace exists and releases it after every
  * Working CSV table, so it is open for the whole life of every caller. Callers own the worker
- * connections they acquire and close each one.
+ * connections they acquire and close each one. The Promise methods are the surface unmigrated
+ * consumers still call: `run` and `readObjects` go through the owner connection's Promise methods,
+ * and the others run their Effects.
  */
 export interface WorkspaceDatabase {
   ownerConnection(): Promise<WorkspaceDatabaseConnection>;

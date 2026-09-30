@@ -2,7 +2,7 @@ import { AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
 import { stoppedEngineMessage } from '@csv-viewer/workspace/database';
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
+import { createNodeDuckDbWasmDatabase, nodeWasmOptions } from '../integration/fixtures/wasm-workspace';
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { holdDriverSettlement, observeDriverCall, observeInterruption } from '../../../packages/workspace/test/driver-settlement';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
@@ -179,6 +179,26 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await interruption.done;
     expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
   });
+
+  it('settles a query in flight when the Worker fails, so its interruption completes', async () => {
+    let worker: EventTarget | undefined;
+    database = new DuckDbWasmWorkspaceDatabase({
+      ...nodeWasmOptions,
+      createWorker: async (reference) => (worker = await nodeWasmOptions.createWorker(reference)),
+    });
+    await Effect.runPromise(database.open());
+    const started = observeDriverCall(AsyncDuckDBConnection.prototype, 'query');
+    const work = Effect.runFork(database.readObjectsEffect(longQuery));
+    await started;
+
+    // SAFETY: web-worker's Node EventTarget dispatches plain objects, as it does for its own errors.
+    worker?.dispatchEvent({ type: 'error', error: new Error('Worker crashed.') } as never);
+    await observeInterruption(work).done;
+
+    const exit = await Effect.runPromise(Fiber.await(work));
+    expect(Exit.isFailure(exit) && exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error))
+      .toMatchObject([{ name: 'DataEngineError', cause: { message: stoppedEngineMessage } }]);
+  }, 15_000);
 
   it.each(['pending request', 'pending creation'])('cancels startup during %s and terminates the Worker once', async (phase) => {
     const worker = new ControllableWorker();
