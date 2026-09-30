@@ -66,41 +66,31 @@ export class DataEngineError extends Error {
   }
 }
 
-/** How a driver call responds to interruption. Omitted, the call is uninterruptible until it settles. */
-export type DriverInterruption =
-  /** Asks the driver to stop, then still waits for the pending call to settle. */
-  | { readonly cancel: () => Promise<void> }
-  /**
-   * Stops the whole engine and does not wait: a stopped engine may never settle the call. Only
-   * startup uses it, because nothing else can still depend on an engine that never started.
-   */
-  | { readonly abandon: () => void };
-
 /**
  * Runs one driver call at a runtime adapter edge. Any rejection or synchronous throw becomes
  * `DataEngineError`, which keeps driver exception classes and messages behind the adapter.
+ * Without `cancel`, the call is uninterruptible until it settles. With `cancel`, interruption asks
+ * the driver to stop, then still waits for the call to settle.
  */
 export function driverEffect<A>(
   operation: () => Promise<A>,
-  interruption?: DriverInterruption,
+  cancel?: () => Promise<void>,
 ): Effect.Effect<A, DataEngineError> {
-  if (!interruption) {
-    return Effect.uninterruptible(Effect.tryPromise({ try: operation, catch: (cause) => new DataEngineError(cause) }));
-  }
+  const toEngineError = (cause: unknown) => new DataEngineError(cause);
+  if (!cancel) return Effect.uninterruptible(Effect.tryPromise({ try: operation, catch: toEngineError }));
   return Effect.callback<A, DataEngineError>((resume) => {
     let pending: Promise<A>;
     try {
       pending = operation();
     } catch (cause) {
-      resume(Effect.fail(new DataEngineError(cause)));
+      resume(Effect.fail(toEngineError(cause)));
       return;
     }
     pending.then(
       (value) => resume(Effect.succeed(value)),
-      (cause) => resume(Effect.fail(new DataEngineError(cause))),
+      (cause) => resume(Effect.fail(toEngineError(cause))),
     );
-    if ('abandon' in interruption) return Effect.sync(interruption.abandon);
-    return driverEffect(interruption.cancel).pipe(
+    return driverEffect(cancel).pipe(
       Effect.orDie,
       Effect.ensuring(Effect.promise(() => pending.then(() => undefined, () => undefined))),
     );

@@ -2,26 +2,8 @@ import { Cause, Effect, Exit, Fiber } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
 import type { EngineRow } from '../query/csv-result-normalization';
+import { stubConnection } from '../../test/stub-connection';
 import { DuckDbComparisonExecutor, type ComparisonSource } from './duckdb-comparison-executor';
-
-function stubConnection(
-  overrides: Partial<WorkspaceDatabaseConnection> = {},
-): WorkspaceDatabaseConnection {
-  return {
-    run: () => Promise.resolve(),
-    readObjects: () => Promise.resolve([]),
-    runCancellable: () => Promise.resolve(),
-    readObjectsCancellable: () => Promise.resolve([]),
-    cancelRunning: () => Promise.resolve(),
-    close: () => Promise.resolve(),
-    runEffect: () => Effect.void,
-    readObjectsEffect: () => Effect.succeed([]),
-    runCancellableEffect: () => Effect.void,
-    readObjectsCancellableEffect: () => Effect.succeed([]),
-    closeEffect: () => Effect.void,
-    ...overrides,
-  };
-}
 
 const snapshotRequest = {
   artifactId: 'attempt',

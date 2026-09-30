@@ -38,11 +38,9 @@ class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
         const pending = await this.connection.start(sql, values);
         if (cancelled) this.connection.interrupt();
         return (await pending.readAll()).getRowObjectsJS();
-      }, {
-        cancel: async () => {
-          cancelled = true;
-          this.connection.interrupt();
-        },
+      }, async () => {
+        cancelled = true;
+        this.connection.interrupt();
       });
     });
   }
