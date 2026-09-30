@@ -617,6 +617,11 @@ function retryCleanupExecutor(): ComparisonExecutor {
     close: async () => {
       if (closeFails) { closeFails = false; throw secret; }
     },
+    runEffect: () => Effect.void,
+    readObjectsEffect: () => Effect.succeed([]),
+    runCancellableEffect: () => Effect.void,
+    readObjectsCancellableEffect: () => Effect.fail(new DataEngineError(secret)),
+    closeEffect: () => Effect.void,
   };
   return new DuckDbComparisonExecutor({
     connectWorker: () => Effect.succeed(connection),

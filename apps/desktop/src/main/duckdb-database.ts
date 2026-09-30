@@ -1,6 +1,8 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
+import { Effect } from 'effect';
 import {
-  normalizeDatabaseOperation,
+  driverEffect,
+  type DataEngineError,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -12,31 +14,65 @@ export type DuckDbRow = EngineRow;
 class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
   constructor(private readonly connection: DuckDBConnection) {}
 
-  async run(sql: string, values?: QueryValues): Promise<void> {
-    await normalizeDatabaseOperation(() => this.connection.run(sql, values));
+  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.connection.run(sql, values)).pipe(Effect.asVoid);
   }
 
-  async readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return normalizeDatabaseOperation(async () => {
-      const result = await this.connection.runAndReadAll(sql, values);
-      return result.getRowObjectsJS();
+  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return driverEffect(async () => (await this.connection.runAndReadAll(sql, values)).getRowObjectsJS());
+  }
+
+  runCancellableEffect(sql: string): Effect.Effect<void, DataEngineError> {
+    return this.readObjectsCancellableEffect(sql).pipe(Effect.asVoid);
+  }
+
+  /**
+   * DuckDB clears a connection's interrupt when a query starts, so an interrupt sent before then
+   * is lost. The query therefore starts as a pending result first, and a cancellation that arrived
+   * meanwhile interrupts it again before it executes.
+   */
+  readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return Effect.suspend(() => {
+      let cancelled = false;
+      return driverEffect(async () => {
+        const pending = await this.connection.start(sql, values);
+        if (cancelled) this.connection.interrupt();
+        return (await pending.readAll()).getRowObjectsJS();
+      }, {
+        cancel: async () => {
+          cancelled = true;
+          this.connection.interrupt();
+        },
+      });
     });
   }
 
-  async runCancellable(sql: string): Promise<void> {
-    await normalizeDatabaseOperation(() => this.connection.run(sql));
+  closeEffect(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(async () => this.connection.closeSync());
   }
 
-  async readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return this.readObjects(sql, values);
+  run(sql: string, values?: QueryValues): Promise<void> {
+    return Effect.runPromise(this.runEffect(sql, values));
+  }
+
+  readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    return Effect.runPromise(this.readObjectsEffect(sql, values));
+  }
+
+  runCancellable(sql: string): Promise<void> {
+    return Effect.runPromise(this.runCancellableEffect(sql));
+  }
+
+  readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    return Effect.runPromise(this.readObjectsCancellableEffect(sql, values));
   }
 
   cancelRunning(): Promise<void> {
-    return normalizeDatabaseOperation(async () => this.connection.interrupt());
+    return Effect.runPromise(driverEffect(async () => this.connection.interrupt()));
   }
 
-  async close(): Promise<void> {
-    await normalizeDatabaseOperation(async () => this.connection.closeSync());
+  close(): Promise<void> {
+    return Effect.runPromise(this.closeEffect());
   }
 }
 
@@ -51,8 +87,8 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
     private readonly connection: NativeDuckDbConnection,
   ) {}
 
-  static async open(): Promise<DuckDbWorkspaceDatabase> {
-    return normalizeDatabaseOperation(async () => {
+  static open(): Effect.Effect<DuckDbWorkspaceDatabase, DataEngineError> {
+    return driverEffect(async () => {
       const instance = await DuckDBInstance.create(':memory:');
       try {
         return new DuckDbWorkspaceDatabase(instance, new NativeDuckDbConnection(await instance.connect()));
@@ -63,14 +99,28 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
     });
   }
 
+  ownerConnectionEffect(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
+    return Effect.succeed(this.connection);
+  }
+
+  connectWorkerEffect(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
+    return driverEffect(async () => new NativeDuckDbConnection(await this.instance.connect()));
+  }
+
+  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+    return this.connection.runEffect(sql, values);
+  }
+
+  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return this.connection.readObjectsEffect(sql, values);
+  }
+
   async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
     return this.connection;
   }
 
-  async connectWorker(): Promise<WorkspaceDatabaseConnection> {
-    return normalizeDatabaseOperation(async () =>
-      new NativeDuckDbConnection(await this.instance.connect()),
-    );
+  connectWorker(): Promise<WorkspaceDatabaseConnection> {
+    return Effect.runPromise(this.connectWorkerEffect());
   }
 
   run(sql: string, values?: QueryValues): Promise<void> {
@@ -81,11 +131,11 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.connection.readObjects(sql, values);
   }
 
-  closeOwnerConnection(): Promise<void> {
-    return this.connection.close();
+  closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
+    return this.connection.closeEffect();
   }
 
-  closeEngine(): Promise<void> {
-    return normalizeDatabaseOperation(async () => this.instance.closeSync());
+  closeEngine(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(async () => this.instance.closeSync());
   }
 }

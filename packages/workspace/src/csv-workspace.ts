@@ -1,5 +1,5 @@
 import type { WorkspaceDiagnostics } from './workspace-diagnostics';
-import type { Deferred } from 'effect';
+import type { Deferred, Effect } from 'effect';
 import type {
   ConfirmWorkspaceCloseOutcome,
   CsvViewer,
@@ -9,7 +9,7 @@ import type {
 } from './csv-viewer';
 import type { ComparisonExecutor } from './comparison/comparison-executor';
 import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
-import type { OwnedWorkspaceDatabase } from './database';
+import type { DataEngineError, OwnedWorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';
 
 /** Web startup stays in the same Layer build while the page may interrupt it. */
@@ -17,9 +17,9 @@ export interface WorkspaceStartup {
   readonly signal?: AbortSignal;
   /** Completes once when the engine stops unexpectedly; the build and the workspace watch it. */
   readonly stopped: Deferred.Deferred<void>;
-  readonly check: (signal: AbortSignal) => Promise<void>;
-  /** Releases what an acquisition that never returned left behind; rejects if any part of it failed. */
-  readonly cleanup: () => Promise<void>;
+  readonly check: Effect.Effect<void, DataEngineError>;
+  /** Releases what an acquisition that never returned left behind; fails if any part of it failed. */
+  readonly cleanup: Effect.Effect<void, DataEngineError>;
   readonly observeLateCleanupFailure: (report: () => void) => void;
 }
 
@@ -46,7 +46,7 @@ export interface CreateCsvViewerOptions {
  * CSV tables, then the database; a stopped engine skips table release.
  */
 export function createCsvViewer(
-  openDatabase: (signal: AbortSignal) => Promise<OwnedWorkspaceDatabase>,
+  openDatabase: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>,
   host: CsvWorkspaceHost,
   options: CreateCsvViewerOptions = {},
 ): Promise<CsvWorkspaceOwner> {

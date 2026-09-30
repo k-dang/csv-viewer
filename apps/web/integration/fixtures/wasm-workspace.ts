@@ -240,7 +240,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = await createCsvViewer(() => database.open(), host, { executor, diagnostics });
+    const workspace = await createCsvViewer(database.open(), host, { executor, diagnostics });
     return new WasmWorkspaceFixture(workspace, database, host);
   }
 

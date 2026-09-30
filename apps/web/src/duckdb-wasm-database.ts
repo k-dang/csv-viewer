@@ -9,8 +9,9 @@ import { quoteLiteral, type QueryValues } from '@csv-viewer/workspace/csv-query'
 import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
 import { Deferred, Effect } from 'effect';
 import {
-  normalizeDatabaseOperation,
+  driverEffect,
   stoppedEngineMessage,
+  type DataEngineError,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -33,50 +34,70 @@ export type DuckDbWasmDatabaseOptions = {
 class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   constructor(private readonly connection: AsyncDuckDBConnection) {}
 
-  async run(sql: string, values?: QueryValues): Promise<void> {
-    await normalizeDatabaseOperation(() => this.query(sql, values));
+  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.runStatement(sql, values));
   }
 
-  async readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return normalizeDatabaseOperation(async () => {
-      const table = await this.query(sql, values);
-      // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
-      return table.toArray().map((row) => row.toJSON() as EngineRow);
-    });
+  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return driverEffect(() => this.readRows(sql, values));
   }
 
-  async runCancellable(sql: string): Promise<void> {
+  runCancellableEffect(sql: string): Effect.Effect<void, DataEngineError> {
     // Draining the pending result completes statements that do not return rows, including CTAS.
-    await this.readObjectsCancellable(sql);
+    return this.readObjectsCancellableEffect(sql).pipe(Effect.asVoid);
   }
 
-  async readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return normalizeDatabaseOperation(async () => {
-      let statement: AsyncPreparedStatement | undefined;
-      try {
-        const stream = values?.length
-          ? await (statement = await this.connection.prepare(sql)).send(...values)
-          : await this.connection.send(sql);
-        const rows: EngineRow[] = [];
-        for await (const batch of stream) {
-          for (const row of batch) {
-            // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
-            rows.push(row.toJSON() as EngineRow);
-          }
-        }
-        return rows;
-      } finally {
-        await statement?.close();
-      }
+  readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return driverEffect(() => this.stream(sql, values), {
+      cancel: async () => {
+        await this.connection.cancelSent();
+      },
     });
   }
 
-  async cancelRunning(): Promise<void> {
-    await normalizeDatabaseOperation(() => this.connection.cancelSent());
+  closeEffect(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.disconnect());
   }
 
-  async close(): Promise<void> {
-    await normalizeDatabaseOperation(() => this.connection.close());
+  run(sql: string, values?: QueryValues): Promise<void> {
+    return Effect.runPromise(this.runEffect(sql, values));
+  }
+
+  readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    return Effect.runPromise(this.readObjectsEffect(sql, values));
+  }
+
+  runCancellable(sql: string): Promise<void> {
+    return Effect.runPromise(this.runCancellableEffect(sql));
+  }
+
+  readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    return Effect.runPromise(this.readObjectsCancellableEffect(sql, values));
+  }
+
+  cancelRunning(): Promise<void> {
+    return Effect.runPromise(driverEffect(() => this.connection.cancelSent()).pipe(Effect.asVoid));
+  }
+
+  close(): Promise<void> {
+    return Effect.runPromise(this.closeEffect());
+  }
+
+  /** The driver call behind `closeEffect`, for adapter code already inside a driver call. */
+  disconnect(): Promise<void> {
+    return this.connection.close();
+  }
+
+  /** The driver call behind `runEffect`, for adapter code already inside a driver call. */
+  async runStatement(sql: string, values?: QueryValues): Promise<void> {
+    await this.query(sql, values);
+  }
+
+  /** The driver call behind `readObjectsEffect`, for adapter code already inside a driver call. */
+  async readRows(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    const table = await this.query(sql, values);
+    // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
+    return table.toArray().map((row) => row.toJSON() as EngineRow);
   }
 
   private async query(sql: string, values?: QueryValues) {
@@ -85,6 +106,25 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     try {
       statement = await this.connection.prepare(sql);
       return await statement.query(...values);
+    } finally {
+      await statement?.close();
+    }
+  }
+
+  private async stream(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+    let statement: AsyncPreparedStatement | undefined;
+    try {
+      const stream = values?.length
+        ? await (statement = await this.connection.prepare(sql)).send(...values)
+        : await this.connection.send(sql);
+      const rows: EngineRow[] = [];
+      for await (const batch of stream) {
+        for (const row of batch) {
+          // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
+          rows.push(row.toJSON() as EngineRow);
+        }
+      }
+      return rows;
     } finally {
       await statement?.close();
     }
@@ -117,12 +157,14 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   /**
-   * Releases what a failed or cancelled `open` left behind. The Layer finalizer never runs for an
-   * acquisition that did not return, so this also rejects if `open` failed to release on its own.
+   * Releases what a failed or interrupted `open` left behind. The Layer finalizer never runs for an
+   * acquisition that did not return, so this also fails if `open` failed to release on its own.
    */
-  async closeStartup(): Promise<void> {
-    await this.closeEngine();
-    if (this.startupReleaseFailed) throw new Error('The web engine could not be released.');
+  closeStartup(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(async () => {
+      await this.stopEngine();
+      if (this.startupReleaseFailed) throw new Error('The web engine could not be released.');
+    });
   }
 
   /** Reports a failed Worker termination even when its creation resolves after startup exits. */
@@ -132,50 +174,34 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
 
   /**
    * Starts the Worker and opens the owner connection under the network-isolation settings. The
-   * workspace Layer runs the in-memory CSV check and owns release.
+   * workspace Layer runs the in-memory CSV check and owns release. Interruption stops the engine.
    */
-  async open(signal?: AbortSignal): Promise<this> {
-    await this.stopOnAbort(signal, () => normalizeDatabaseOperation(async () => {
-      this.throwIfFatal();
-      const database = await this.createEngine();
-      this.throwIfFatal();
-      this.database = database;
-      try {
-        await database.open({
-          path: ':memory:',
-          maximumThreads: 1,
-          allowUnsignedExtensions: false,
-          query: { castBigIntToDouble: false },
-          filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
-          opfs: { fileHandling: 'manual' },
-        });
-        const connection = new DuckDbWasmConnection(await database.connect());
-        this.connection = connection;
-        await connection.run(`SET allowed_directories = ['${sourceDirectory}']`);
-        await connection.run('SET enable_external_access = false');
-        await connection.run('SET allow_community_extensions = false');
-        await connection.run('SET autoinstall_known_extensions = false');
-        await connection.run('SET autoload_known_extensions = false');
-        await connection.run('SET lock_configuration = true');
-        this.throwIfFatal();
-      } catch (error) {
-        await this.closeOwnerConnection().catch(() => { this.startupReleaseFailed = true; });
-        await this.closeEngine().catch(() => { this.startupReleaseFailed = true; });
-        throw error;
-      }
-    }));
-    return this;
+  open(): Effect.Effect<this, DataEngineError> {
+    return this.startupStep(() => this.start()).pipe(Effect.as(this));
+  }
+
+  ownerConnectionEffect(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
+    return driverEffect(async () => this.opened().connection);
+  }
+
+  connectWorkerEffect(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
+    return driverEffect(async () => new DuckDbWasmConnection(await this.opened().database.connect()));
+  }
+
+  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.opened().connection.runStatement(sql, values));
+  }
+
+  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return driverEffect(() => this.opened().connection.readRows(sql, values));
   }
 
   async ownerConnection(): Promise<WorkspaceDatabaseConnection> {
     return this.opened().connection;
   }
 
-  async connectWorker(): Promise<WorkspaceDatabaseConnection> {
-    const { database } = this.opened();
-    return normalizeDatabaseOperation(async () =>
-      new DuckDbWasmConnection(await database.connect()),
-    );
+  connectWorker(): Promise<WorkspaceDatabaseConnection> {
+    return Effect.runPromise(this.connectWorkerEffect());
   }
 
   async run(sql: string, values?: QueryValues): Promise<void> {
@@ -186,25 +212,32 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.opened().connection.readObjects(sql, values);
   }
 
-  async registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
+  registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
+    return Effect.runPromise(driverEffect(() => this.registerBuffer(name, contents)));
+  }
+
+  dropFile(reference: string): Promise<void> {
+    return Effect.runPromise(driverEffect(() => this.dropBuffer(reference)));
+  }
+
+  private async registerBuffer(name: string, contents: Uint8Array): Promise<string> {
     const { database } = this.opened();
     await this.retryFailedFileDrops(database);
     const baseName = name.split('/').pop() || 'source.csv';
     const reference = `${sourceDirectory}/${crypto.randomUUID()}-${baseName}`;
-    await normalizeDatabaseOperation(() => database.registerFileBuffer(reference, contents));
+    await database.registerFileBuffer(reference, contents);
     return reference;
   }
 
-  async dropFile(reference: string): Promise<void> {
+  private async dropBuffer(reference: string): Promise<void> {
     const database = this.database;
-    if (database) {
-      try {
-        await normalizeDatabaseOperation(() => database.dropFile(reference));
-        this.failedFileDrops.delete(reference);
-      } catch (error) {
-        this.failedFileDrops.add(reference);
-        throw error;
-      }
+    if (!database) return;
+    try {
+      await database.dropFile(reference);
+      this.failedFileDrops.delete(reference);
+    } catch (error) {
+      this.failedFileDrops.add(reference);
+      throw error;
     }
   }
 
@@ -212,7 +245,7 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   private async retryFailedFileDrops(database: AsyncDuckDB): Promise<void> {
     for (const reference of this.failedFileDrops) {
       try {
-        await normalizeDatabaseOperation(() => database.dropFile(reference));
+        await database.dropFile(reference);
         this.failedFileDrops.delete(reference);
       } catch {
         // The original request reported the release failure; keep the reference for another try.
@@ -220,22 +253,33 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     }
   }
 
-  async closeOwnerConnection(): Promise<void> {
-    const connection = this.connection;
-    this.connection = null;
-    await connection?.close();
+  closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.releaseOwnerConnection());
   }
 
   /** Stops the Worker. After a fatal stop, reports the outcome of the termination that stop began. */
-  async closeEngine(): Promise<void> {
-    if (this.fatalCleanup) {
-      const failure = await this.fatalCleanup;
-      if (failure) throw failure;
-      return;
-    }
-    const database = this.database;
-    this.database = null;
-    if (database) await normalizeDatabaseOperation(() => this.releaseEngine(database));
+  closeEngine(): Effect.Effect<void, DataEngineError> {
+    return driverEffect(() => this.stopEngine());
+  }
+
+  /** The Layer runs this probe after acquisition and reports its outcome as `web.startup-check`. */
+  verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
+    return this.startupStep(async () => {
+      // Encoded per call: registering hands the buffer to the Worker, which may detach it.
+      const probe = new TextEncoder().encode('ready\ntrue\n');
+      const reference = await this.registerBuffer('startup-check.csv', probe);
+      let rows: EngineRow[];
+      try {
+        rows = await this.opened().connection.readRows(
+          `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
+        );
+      } finally {
+        await this.dropBuffer(reference);
+      }
+      if (rows.length !== 1 || rows[0]?.ready !== 'true') {
+        throw new Error('The browser could not run the required in-memory CSV query.');
+      }
+    });
   }
 
   /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
@@ -273,36 +317,62 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     await database.terminate();
   }
 
-  /** The Layer runs this probe after acquisition and reports its outcome as `web.startup-check`. */
-  async verifyInMemoryCsvQuery(signal?: AbortSignal): Promise<void> {
-    await this.stopOnAbort(signal, async () => {
-      // Encoded per call: registering hands the buffer to the Worker, which may detach it.
-      const probe = new TextEncoder().encode('ready\ntrue\n');
-      const reference = await this.registerFileBuffer('startup-check.csv', probe);
-      let rows: EngineRow[];
-      try {
-        rows = await this.readObjects(
-          `SELECT ready FROM read_csv_auto(${quoteLiteral(reference)}, all_varchar = true, header = true)`,
-        );
-      } finally {
-        await this.dropFile(reference);
+  private async start(): Promise<void> {
+    this.throwIfFatal();
+    const database = await this.createEngine();
+    this.throwIfFatal();
+    this.database = database;
+    try {
+      await database.open({
+        path: ':memory:',
+        maximumThreads: 1,
+        allowUnsignedExtensions: false,
+        query: { castBigIntToDouble: false },
+        filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
+        opfs: { fileHandling: 'manual' },
+      });
+      const connection = new DuckDbWasmConnection(await database.connect());
+      this.connection = connection;
+      for (const setting of [
+        `SET allowed_directories = ['${sourceDirectory}']`,
+        'SET enable_external_access = false',
+        'SET allow_community_extensions = false',
+        'SET autoinstall_known_extensions = false',
+        'SET autoload_known_extensions = false',
+        'SET lock_configuration = true',
+      ]) {
+        await connection.runStatement(setting);
       }
-      if (rows.length !== 1 || rows[0]?.ready !== 'true') {
-        throw new Error('The browser could not run the required in-memory CSV query.');
-      }
+      this.throwIfFatal();
+    } catch (error) {
+      await this.releaseOwnerConnection().catch(() => { this.startupReleaseFailed = true; });
+      await this.stopEngine().catch(() => { this.startupReleaseFailed = true; });
+      throw error;
+    }
+  }
+
+  /** Startup cannot wait on a Worker request that may never settle, so interruption stops the engine. */
+  private startupStep<A>(operation: () => Promise<A>): Effect.Effect<A, DataEngineError> {
+    return driverEffect(operation, {
+      abandon: () => this.failFatally(new Error('CSV Viewer Web startup was cancelled.')),
     });
   }
 
-  /** Startup cannot wait on a Worker request that may never settle, so an abort stops the engine. */
-  private async stopOnAbort<A>(signal: AbortSignal | undefined, operation: () => Promise<A>): Promise<A> {
-    const interrupt = () => this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
-    signal?.addEventListener('abort', interrupt, { once: true });
-    if (signal?.aborted) interrupt();
-    try {
-      return await operation();
-    } finally {
-      signal?.removeEventListener('abort', interrupt);
+  private async releaseOwnerConnection(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    await connection?.disconnect();
+  }
+
+  private async stopEngine(): Promise<void> {
+    if (this.fatalCleanup) {
+      const failure = await this.fatalCleanup;
+      if (failure) throw failure;
+      return;
     }
+    const database = this.database;
+    this.database = null;
+    if (database) await this.releaseEngine(database);
   }
 
   private opened() {

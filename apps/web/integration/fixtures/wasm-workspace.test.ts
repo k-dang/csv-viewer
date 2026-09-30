@@ -1,6 +1,7 @@
 import WebWorker from 'web-worker';
 import { AsyncDuckDB } from '@duckdb/duckdb-wasm';
 import { quoteLiteral } from '../../../../packages/workspace/src/query/csv-query';
+import { Effect } from 'effect';
 import { expect, it, vi } from 'vitest';
 import {
   SharedEngineWasmDatabase,
@@ -37,18 +38,18 @@ it('waits for the DuckDB-Wasm worker thread to exit before completing engine shu
 });
 
 it('hands the next database an empty engine, dropping tables and registered files alike', async () => {
-  const first = await new SharedEngineWasmDatabase().open();
+  const first = await Effect.runPromise(new SharedEngineWasmDatabase().open());
   const leaked = await first.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n'));
   await first.run('CREATE TABLE leftover(x INTEGER)');
-  await first.closeOwnerConnection();
-  await first.closeEngine();
+  await Effect.runPromise(first.closeOwnerConnection());
+  await Effect.runPromise(first.closeEngine());
 
-  const second = await new SharedEngineWasmDatabase().open();
+  const second = await Effect.runPromise(new SharedEngineWasmDatabase().open());
   await expect(second.readObjects('SELECT * FROM leftover')).rejects.toThrow();
   await expect(second.readObjects( `SELECT * FROM read_csv('${leaked}', all_varchar = true)`),
   ).rejects.toThrow();
-  await second.closeOwnerConnection();
-  await second.closeEngine();
+  await Effect.runPromise(second.closeOwnerConnection());
+  await Effect.runPromise(second.closeEngine());
 });
 
 it('retries a failed source drop after the next CSV opens', async () => {

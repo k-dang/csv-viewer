@@ -4,6 +4,7 @@ import { ControllableWorker } from '../integration/fixtures/controllable-worker'
 import { diagnosticCapture } from '../../../packages/workspace/test/diagnostic-capture';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import { DataEngineError } from '@csv-viewer/workspace/database';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
 import { Deferred, Effect } from 'effect';
 import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composition';
@@ -175,10 +176,10 @@ describe('web CsvViewer composition', () => {
     const database = new FatalTestDatabase();
     const checking = Promise.withResolvers<void>();
     const checkResult = Promise.withResolvers<void>();
-    vi.spyOn(database, 'verifyInMemoryCsvQuery').mockImplementation(() => {
+    vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.promise(() => {
       checking.resolve();
       return checkResult.promise;
-    });
+    }));
     const releaseConnection = vi.spyOn(database, 'closeOwnerConnection');
     const releaseEngine = vi.spyOn(database, 'closeEngine');
     const capture = diagnosticCapture();
@@ -209,20 +210,20 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
     });
   }
 
-  override open(): Promise<this> {
-    return Promise.resolve(this);
+  override open(): Effect.Effect<this> {
+    return Effect.succeed(this);
   }
 
-  override verifyInMemoryCsvQuery(): Promise<void> {
-    return Promise.resolve();
+  override verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
+    return Effect.void;
   }
 
-  override closeOwnerConnection(): Promise<void> {
-    return Promise.resolve();
+  override closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
+    return Effect.void;
   }
 
-  override closeEngine(): Promise<void> {
-    return Promise.resolve();
+  override closeEngine(): Effect.Effect<void, DataEngineError> {
+    return Effect.void;
   }
 
   failWorker(): void {
@@ -233,8 +234,8 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
 it('reports a failed startup check and failed cleanup without driver text', async () => {
   const capture = diagnosticCapture();
   const database = new FatalTestDatabase();
-  vi.spyOn(database, 'verifyInMemoryCsvQuery').mockRejectedValue(new Error('PRIVATE startup failure'));
-  vi.spyOn(database, 'closeEngine').mockRejectedValue(new Error('PRIVATE termination failure'));
+  vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.fail(new DataEngineError(new Error('PRIVATE startup failure'))));
+  vi.spyOn(database, 'closeEngine').mockReturnValue(Effect.fail(new DataEngineError(new Error('PRIVATE termination failure'))));
 
   await expect(startWebCsvViewer(database, async () => null, { diagnostics: capture.configuration }))
     .resolves.toEqual({ status: 'unsupported' });

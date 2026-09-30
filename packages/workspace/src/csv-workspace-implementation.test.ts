@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvSourceId } from './csv-viewer';
 import type { OwnedWorkspaceDatabase } from './database';
@@ -23,15 +24,20 @@ describe('CSV source selection during workspace disposal', () => {
       recordRecentSource: async () => undefined,
       confirmDiscardChanges: async () => true,
     };
+    const unexpected = () => { throw new Error('No database work expected.'); };
     const database: OwnedWorkspaceDatabase = {
-      ownerConnection: async () => { throw new Error('No database work expected.'); },
-      connectWorker: async () => { throw new Error('No database work expected.'); },
-      run: async () => { throw new Error('No database work expected.'); },
-      readObjects: async () => { throw new Error('No database work expected.'); },
-      closeOwnerConnection: async () => undefined,
-      closeEngine: async () => undefined,
+      ownerConnection: unexpected,
+      connectWorker: unexpected,
+      run: unexpected,
+      readObjects: unexpected,
+      ownerConnectionEffect: unexpected,
+      connectWorkerEffect: unexpected,
+      runEffect: unexpected,
+      readObjectsEffect: unexpected,
+      closeOwnerConnection: () => Effect.void,
+      closeEngine: () => Effect.void,
     };
-    const workspace = await createCsvViewer(async () => database, host);
+    const workspace = await createCsvViewer(Effect.succeed(database), host);
     const opening = workspace.call({ operation: 'csv.open' });
     await pickerEntered.promise;
     let disposed = false;

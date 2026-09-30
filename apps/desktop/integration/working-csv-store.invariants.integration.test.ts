@@ -16,13 +16,13 @@ let store: WorkingCsvStore;
 
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
-  database = await DuckDbWorkspaceDatabase.open();
+  database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
   store = new WorkingCsvStore(fixture.host, database);
 });
 
 afterEach(async () => {
-  await database.closeOwnerConnection();
-  await database.closeEngine();
+  await Effect.runPromise(database.closeOwnerConnection());
+  await Effect.runPromise(database.closeEngine());
   await fixture.dispose();
 });
 

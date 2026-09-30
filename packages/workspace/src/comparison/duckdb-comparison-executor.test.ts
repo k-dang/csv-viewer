@@ -14,6 +14,11 @@ function stubConnection(
     readObjectsCancellable: () => Promise.resolve([]),
     cancelRunning: () => Promise.resolve(),
     close: () => Promise.resolve(),
+    runEffect: () => Effect.void,
+    readObjectsEffect: () => Effect.succeed([]),
+    runCancellableEffect: () => Effect.void,
+    readObjectsCancellableEffect: () => Effect.succeed([]),
+    closeEffect: () => Effect.void,
     ...overrides,
   };
 }
