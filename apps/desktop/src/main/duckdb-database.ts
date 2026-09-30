@@ -1,5 +1,5 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
-import { Effect } from 'effect';
+import { Effect, Fiber } from 'effect';
 import {
   driverEffect,
   type DataEngineError,
@@ -12,6 +12,9 @@ import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
 export type DuckDbRow = EngineRow;
 
 class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
+  /** Promise-surface cancellable queries, so `cancelRunning` can interrupt them by the same rule. */
+  private readonly cancellableRuns = new Set<Fiber.Fiber<EngineRow[], DataEngineError>>();
+
   constructor(private readonly connection: DuckDBConnection) {}
 
   runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
@@ -57,16 +60,18 @@ class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
     return Effect.runPromise(this.readObjectsEffect(sql, values));
   }
 
-  runCancellable(sql: string): Promise<void> {
-    return Effect.runPromise(this.runCancellableEffect(sql));
+  async runCancellable(sql: string): Promise<void> {
+    await this.readObjectsCancellable(sql);
   }
 
   readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return Effect.runPromise(this.readObjectsCancellableEffect(sql, values));
+    const run = Effect.runFork(this.readObjectsCancellableEffect(sql, values));
+    this.cancellableRuns.add(run);
+    return Effect.runPromise(Fiber.join(run)).finally(() => this.cancellableRuns.delete(run));
   }
 
   cancelRunning(): Promise<void> {
-    return Effect.runPromise(driverEffect(async () => this.connection.interrupt()));
+    return Effect.runPromise(Effect.forEach(this.cancellableRuns, Fiber.interrupt, { discard: true }));
   }
 
   close(): Promise<void> {
