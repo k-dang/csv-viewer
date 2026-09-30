@@ -49,7 +49,7 @@ Both runtimes support this recipe through file drops. Web also supports `upload`
 - `Compare…` is rendered only while a CSV tab is active. It is absent on the empty window, disabled with a single CSV tab, and absent again once the Comparison Tab is active. Click back to a CSV tab before reopening the picker.
 - Do not pass `--exact` to the key checkbox. Its accessible name includes the input `value`, so it reads `id on` and an exact match finds nothing.
 - After `Swap sides` the tab title changes too. A wait on the pre-swap title hangs.
-- The fixtures differ in exactly one cell. Do not expect Ada's row to differ; it is byte-identical in both files. Comparison reads Working CSVs, so an unexported edit on either side changes the counts (an edited Ada cell gives `Changed 2`, `Unchanged 3`).
+- The fixtures differ in exactly one cell. Do not expect Ada's row to differ. It is byte-identical in both files. An unexported edit after Apply key does not recompute the badges. The tab shows `Outdated Comparison` and keeps `Changed 1` and `Unchanged 4` until `Refresh comparison` or `Apply key`. Refresh after editing Ada's cell yields `Changed 2` and `Unchanged 3`.
 - While a comparison runs, the progress banner has its own `Cancel` button, and a cancelled run shows `Comparison cancelled. No result was applied.` with a `Dismiss` button. These fixtures finish too fast to reach it; do not click a `Cancel` you did not open the picker for.
 - An empty key draft leaves `Apply key` disabled, so `compare-invalid` needs a key column with blank or duplicated values, not an empty selection.
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.

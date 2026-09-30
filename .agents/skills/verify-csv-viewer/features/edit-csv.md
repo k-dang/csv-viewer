@@ -58,7 +58,7 @@ Editing is shared, but export is only provable on web.
 
 - `Export CSV` writes through an `<a download>` click with no dialog. The status line reads `Download started` (desktop says `Export complete`), and the file lands in the run's `downloads/` directory, which `doctor` prints as `downloadDir`.
 - That makes `edit-export` verifiable end to end: edit a cell, export, then read the downloaded bytes and confirm they contain `Ada Lovelace Edited` and that `Unexported Changes` has cleared. Do not settle for the desktop-only negative proof.
-- Exported CSVs are written with LF line endings even when the source fixture uses CRLF. Compare content, not bytes, or the diff is noise.
+- Export writes LF line endings. `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv` are LF already, so a CR in the download is a real mismatch.
 - Repeated exports of one source do not overwrite each other: Chrome writes `phase-2-sample.csv`, then `phase-2-sample (1).csv`. Read the newest file by modification time. Copy anything you need into `evidence/` before `cleanup`.
 - Export moves the dirty baseline. After a web export, every undo makes `Unexported Changes` reappear because the revision no longer matches the exported one. To close the tab without `window.confirm`, undo to the row count you want and export once more, or export only at the end.
 - Closing a dirty tab uses the same `window.confirm` and wedges the run the same way.

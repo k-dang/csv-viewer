@@ -40,6 +40,6 @@ None. Global search, the empty-match overlay, and Clear query all live in the sh
 - Read the disabled claim from `click`'s `"disabled"` JSON field. The `snapshot` AX dump does not carry disabled state.
 - `No rows match the current query.` is the global-search overlay only. A column header filter that matches nothing shows AG Grid's own `No Matching Rows` instead.
 - Do not wait a fixed 1500ms for global search. That debounce belongs to column filters. Global search has no debounce; `fill` replaces the whole value in one input event. Wait for the visible-row line.
-- `Clear query` is disabled when nothing is queried, but only on a freshly opened tab. After any insert or delete the visible count no longer equals the open-time row count, so the button stays enabled with no query active. Do not use its enabled state to infer an active query.
+- `Clear query` is disabled when no search, sort, or filter is active and the visible count equals the row count stored at open or Reopen. Insert or delete enables the button even when the search is empty. Undo or Reopen that restores the stored count disables it again. Do not use its enabled state to infer an active query.
 - Search is a case-insensitive substring across every column. `active` also matches `inactive`, so that query is `4 visible of 5 rows`, not 3.
 - A screenshot of the searchbox value alone is not proof. The visible-row line and missing non-matching names are the proof.

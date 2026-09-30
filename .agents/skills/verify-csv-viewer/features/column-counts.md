@@ -24,7 +24,7 @@ Preconditions:
 - `phase-2-sample.csv` is active with `5 visible of 5 rows` and no search.
 
 - **Open.** Run `click --role button --name "Open stats panel"`. Wait for `Column Value Counts`.
-- **Counts.** Switch to `status`: `click --role combobox --name "Stats Column"`, then `press --key ArrowDown` to open the list, then `click --role option --name "status"`. Wait for `5 scoped rows`. Visible counts are `active` 3, `inactive` 1, `pending` 1 (phase-2-sample.csv statuses: active, inactive, active, pending, active).
+- **Counts.** Switch to `status`: `click --role combobox --name "Stats Column"`, then `press --key ArrowDown` to open the list, then `click --role option --name "status"`. The panel opens on `id`, already showing `5 scoped rows` and `Top 5`. After choosing `status`, wait for `Top 3` and `60.0%`. Visible counts are `active` 3, `inactive` 1, `pending` 1 (phase-2-sample.csv statuses: active, inactive, active, pending, active).
 - **Proof.** Snapshot and screenshot `evidence/column-counts/status.aria.txt` and `status.png` with the panel open on `status` before search, showing `CSV Viewer`, `Column Value Counts`, `5 scoped rows`, and `active`.
 - **Scoped recount.** Keep the panel open. Run `fill --role searchbox --name "Global search" --value "active"`. Wait for `4 visible of 5 rows` (`inactive` contains `active`) and then for `4 scoped rows`. Status counts now reflect those four rows (`active` 3, `inactive` 1).
 - **Close.** Clear the query first, then run `click --role button --name "Close stats panel" --nth 0`. The panel is gone and the toolbar button returns to `Open stats panel`.
@@ -38,7 +38,7 @@ None. The Stats Panel, its Count Scope, and the Base UI select all behave identi
 
 - A click on the `Stats Column` trigger does not open the list. It is a Base UI select and needs `press --key ArrowDown` after the click. Without that, `click --role option` fails with `No control matched role=option`.
 - Never click the trigger twice to "make sure" it opened. The second click closes it again, and the next click lands on whatever is underneath.
-- Close the open option list before clicking anything else in the window. A click aimed at another control while the list is open lands on the list and silently changes the Stats Column.
+- Close the open option list before clicking anything else in the window. A click outside the list leaves Stats Column on its current value.
 - Counts follow search and filters, not sort order. Sorting still refetches and briefly re-shows `Calculating counts`; the numbers come back identical.
 - `wait` only polls for the presence of a substring, so the disappearance of `Calculating counts` cannot be waited on. Wait for `N scoped rows` instead.
 - Opening the panel after focusing a cell uses that column, and the panel remembers its last column across close/open. If counts look like `id` uniqueness (five values of 1), you are not on `status`.
