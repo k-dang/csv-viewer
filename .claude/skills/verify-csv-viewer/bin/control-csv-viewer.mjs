@@ -40,7 +40,7 @@ function parseFlags(argv) {
     if (!token.startsWith('--')) continue;
     const key = token.slice(2);
     const next = argv[index + 1];
-    if (!next || next.startsWith('--')) {
+    if (next === undefined || next.startsWith('--')) {
       parsed[key] = true;
     } else {
       parsed[key] = next;
