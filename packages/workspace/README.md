@@ -2,6 +2,10 @@
 
 Every `CsvViewer` request runs as an Effect through one shared entry adapter. `CsvViewer` remains the promise and event boundary for desktop IPC and the web renderer. Requests use the workspace runtime's services but not its scope, so disposal settles admitted work by the rules below instead of interrupting it. Background Comparison work belongs to the workspace scope.
 
+Working CSV table operations, reads, edits, history replay, and cleanup compose database Effects directly. Pure query construction, history calculation, and export serialization stay ordinary functions; expected validation returns `Result` or a typed Effect failure, while broken invariants are defects. Export holds its table lease and a scoped worker connection through reading and serialization, then releases both before host delivery. Only successful delivery marks the captured revision exported.
+
+Promises belong at runtime adapter edges and at the shared entry adapter. Source description and export delivery still use the existing host adapters until those host methods return Effects.
+
 ## Resource lifetimes
 
 Each runtime builds the workspace through `createCsvViewer`, which builds one Layer in acquisition order: the database and the runtime's host, then the Working CSV, Comparison, and diagnostics services built on both. The database acquires its engine and owner connection eagerly, so the workspace exists only after acquisition succeeds, and a failed acquisition releases whatever it acquired. Disposal stops admission, settles Comparisons, and releases every Working CSV table, then closes the runtime scope once, which releases the database. The database finalizer closes the owner connection, then the engine. Finalizers cannot fail, so disposal carries the release outcome explicitly: a failed release rejects disposal, and every later call returns the same rejection.
@@ -17,8 +21,6 @@ Working CSV work coordinates through three primitives in the store:
 ## Database operations
 
 Aligned Comparison composes the database's typed Effects directly, including owner reads, worker acquisition, cancellable queries, and releases. Runtime adapters classify driver failures once. Interrupting a cancellable query cancels and awaits driver work; other database operations cannot be interrupted before the driver settles. Worker release failures retain their separate `cleanup-failed` diagnostics and remain available for disposal to retry.
-
-Working CSV operations still use the transitional Promise surface until their migration. Promise adaptation belongs inside runtime adapters; once that migration is complete, the shared entry adapter will be the workspace's only Promise boundary.
 
 ## Open and reopen
 

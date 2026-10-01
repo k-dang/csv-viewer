@@ -1,6 +1,7 @@
 import { Effect, Logger } from 'effect';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
+import { DataEngineError } from '../../../packages/workspace/src/database';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
 import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv/working-csv-store';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
@@ -102,11 +103,11 @@ describe('WorkingCsvStore invariants', () => {
     await Effect.runPromise(store.renameColumn({ workingCsvId, column: 'name', name: 'title' }));
     const revision = store.getState(workingCsvId)?.dataRevision;
 
-    const run = database.run.bind(database);
-    database.run = (sql, values) => {
+    const run = database.runEffect.bind(database);
+    database.runEffect = (sql, values) => {
       if (!sql.startsWith('ALTER TABLE')) return run(sql, values);
-      database.run = run;
-      return Promise.reject(new Error('PRIVATE replay failure'));
+      database.runEffect = run;
+      return Effect.fail(new DataEngineError(new Error('PRIVATE replay failure')));
     };
     await expect(Effect.runPromise(store.undo(workingCsvId))).rejects.toThrow();
 

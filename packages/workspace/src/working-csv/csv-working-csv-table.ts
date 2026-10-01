@@ -1,4 +1,4 @@
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 import type {
   CsvCellValue,
   CsvColumn,
@@ -31,72 +31,75 @@ import {
 } from '../query/csv-query';
 import { normalizeCellValue, type EngineRow } from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
-import type { WorkspaceDatabase } from '../database';
+import type { DataEngineError, WorkspaceDatabase, WorkspaceDatabaseConnection } from '../database';
 
 const internalFields = new Set([csvInternalRowIdField, csvSourceOrderField, csvDeletedField]);
 
 export type CsvTable = { database: WorkspaceDatabase; tableName: string };
 
-export async function createWorkingCsvTable(
+export function createWorkingCsvTable(
   table: CsvTable,
   engineSourceReference: string,
   dialect: CsvDialectOptions,
-): Promise<void> {
-  await table.database.run(
+): Effect.Effect<void, DataEngineError> {
+  return table.database.runEffect(
     buildCreateWorkingCsvTableSql(table.tableName, engineSourceReference, dialect),
   );
 }
 
-export async function dropWorkingCsvTable(table: CsvTable): Promise<void> {
-  await table.database.run(buildDropTableSql(table.tableName));
+export function dropWorkingCsvTable(table: CsvTable): Effect.Effect<void, DataEngineError> {
+  return table.database.runEffect(buildDropTableSql(table.tableName));
 }
 
-export async function readColumns(table: CsvTable): Promise<CsvColumn[]> {
-  const rows = await table.database.readObjects(buildDescribeColumnsSql(table.tableName));
-  return rows
-    .filter((row) => !internalFields.has(String(row.column_name)))
-    .map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
+export function readColumns(table: CsvTable): Effect.Effect<CsvColumn[], DataEngineError> {
+  return table.database.readObjectsEffect(buildDescribeColumnsSql(table.tableName)).pipe(
+    Effect.map((rows) => rows
+      .filter((row) => !internalFields.has(String(row.column_name)))
+      .map((row) => ({ name: String(row.column_name), type: String(row.column_type) }))),
+  );
 }
 
-export async function readRowCount(table: CsvTable): Promise<number> {
-  const [row] = await table.database.readObjects(buildRowCountSql(table.tableName));
-  return Number(row.row_count);
+export function readRowCount(table: CsvTable): Effect.Effect<number, DataEngineError> {
+  return table.database.readObjectsEffect(buildRowCountSql(table.tableName)).pipe(
+    Effect.map(([row]) => Number(row.row_count)),
+  );
 }
 
-export async function readCellValue(
+export function readCellValue(
   table: CsvTable,
   rowId: string,
   column: string,
-): Promise<CsvCellValue> {
-  const query = buildCellValueQuery(table.tableName, rowId, column);
-  const [row] = await table.database.readObjects(query.sql, query.values);
-  if (!row) throw new WorkspaceRequestError({ message: 'CSV row no longer exists.' });
-  return normalizeCellValue(row.cell_value);
+): Effect.Effect<CsvCellValue, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    const query = buildCellValueQuery(table.tableName, rowId, column);
+    const [row] = yield* table.database.readObjectsEffect(query.sql, query.values);
+    if (!row) return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV row no longer exists.' }));
+    return normalizeCellValue(row.cell_value);
+  });
 }
 
-export async function applyCellValue(
+export function applyCellValue(
   table: CsvTable,
   rowId: string,
   column: string,
   value: CsvCellValue,
-): Promise<void> {
+): Effect.Effect<void, DataEngineError> {
   const statement = buildCellUpdateStatement(table.tableName, rowId, column, value);
-  await table.database.run(statement.sql, statement.values);
+  return table.database.runEffect(statement.sql, statement.values);
 }
 
-export async function applyColumnRename(table: CsvTable, from: string, to: string): Promise<void> {
-  await table.database.run(buildRenameColumnStatement(table.tableName, from, to));
+export function applyColumnRename(table: CsvTable, from: string, to: string): Effect.Effect<void, DataEngineError> {
+  return table.database.runEffect(buildRenameColumnStatement(table.tableName, from, to));
 }
 
-export async function applyAddColumn(table: CsvTable, name: string): Promise<void> {
-  await table.database.run(buildAddColumnStatement(table.tableName, name));
+export function applyAddColumn(table: CsvTable, name: string): Effect.Effect<void, DataEngineError> {
+  return table.database.runEffect(buildAddColumnStatement(table.tableName, name));
 }
 
-export async function applyDropColumn(table: CsvTable, name: string): Promise<void> {
-  await table.database.run(buildDropColumnStatement(table.tableName, name));
+export function applyDropColumn(table: CsvTable, name: string): Effect.Effect<void, DataEngineError> {
+  return table.database.runEffect(buildDropColumnStatement(table.tableName, name));
 }
 
-/** The logical columns after replaying a command, or the request failure when a renamed column no longer exists. */
 export function columnsAfter(
   columns: CsvColumn[],
   command: CsvEditDraft,
@@ -142,129 +145,132 @@ function spliceColumn(columns: readonly CsvColumn[], index: number, column: CsvC
   return next;
 }
 
-export async function applyRowDeletion(
+export function applyRowDeletion(
   table: CsvTable,
   rowIds: string[],
   deleted: boolean,
-): Promise<void> {
-  const statement = Result.getOrThrow(buildRowDeletionStatement(table.tableName, rowIds, deleted));
-  await table.database.run(statement.sql, statement.values);
+): Effect.Effect<void, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    const statement = yield* Effect.fromResult(buildRowDeletionStatement(table.tableName, rowIds, deleted));
+    yield* table.database.runEffect(statement.sql, statement.values);
+  });
 }
 
-export async function assertRowsExist(table: CsvTable, rowIds: string[]): Promise<void> {
-  const query = Result.getOrThrow(buildExistingRowIdsQuery(table.tableName, rowIds));
-  const rows = await table.database.readObjects(query.sql, query.values);
-  const foundRowIds = new Set(rows.map((row) => String(row.row_id)));
-  const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
-  if (missingRowId) throw new WorkspaceRequestError({ message: `CSV row no longer exists: ${missingRowId}` });
+export function assertRowsExist(table: CsvTable, rowIds: string[]): Effect.Effect<void, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    const query = yield* Effect.fromResult(buildExistingRowIdsQuery(table.tableName, rowIds));
+    const rows = yield* table.database.readObjectsEffect(query.sql, query.values);
+    const foundRowIds = new Set(rows.map((row) => String(row.row_id)));
+    const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
+    if (missingRowId) return yield* Effect.fail(new WorkspaceRequestError({ message: `CSV row no longer exists: ${missingRowId}` }));
+  });
 }
 
-export async function insertEmptyRow(
+export function insertEmptyRow(
   table: CsvTable,
   columns: CsvColumn[],
   placement: CsvInsertRowPlacement,
   targetRowId: string | undefined,
-): Promise<string> {
-  const rowId = await nextRowId(table);
-  const sourceOrder = await resolveInsertionOrder(table, placement, targetRowId);
+): Effect.Effect<string, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    const rowId = yield* nextRowId(table);
+    const sourceOrder = yield* resolveInsertionOrder(table, placement, targetRowId);
 
-  if (placement !== 'append') {
-    const shift = buildSourceOrderShiftStatement(table.tableName, sourceOrder);
-    await table.database.run(shift.sql, shift.values);
-  }
+    if (placement !== 'append') {
+      const shift = buildSourceOrderShiftStatement(table.tableName, sourceOrder);
+      yield* table.database.runEffect(shift.sql, shift.values);
+    }
 
-  const insert = buildEmptyRowInsertStatement({
-    tableName: table.tableName,
-    columns,
-    rowId,
-    sourceOrder,
+    const insert = buildEmptyRowInsertStatement({
+      tableName: table.tableName,
+      columns,
+      rowId,
+      sourceOrder,
+    });
+    yield* table.database.runEffect(insert.sql, insert.values);
+    return rowId;
   });
-  await table.database.run(insert.sql, insert.values);
-  return rowId;
 }
 
-/**
- * Returns engine rows as read. Cells are normalized during serialization rather than here, so
- * exporting never holds a second full copy of the Working CSV in memory. Use a separate operation
- * connection and the pending-query path so foreground row queries can run during a large export.
- */
-export async function readExportRows(
-  table: CsvTable,
+/** Returns engine rows without a second normalized copy; the caller scopes its worker connection. */
+export function readExportRows(
+  connection: WorkspaceDatabaseConnection,
+  tableName: string,
   columns: CsvColumn[],
-): Promise<EngineRow[]> {
-  const connection = await table.database.connectWorker();
-  try {
-    return await connection.readObjectsCancellable(buildExportRowsSql(table.tableName, columns));
-  } finally {
-    await connection.close();
-  }
+): Effect.Effect<EngineRow[], DataEngineError> {
+  return connection.readObjectsCancellableEffect(buildExportRowsSql(tableName, columns));
 }
 
-export async function runEditCommand(
+export function runEditCommand(
   table: CsvTable,
   command: CsvEditDraft,
   direction: 'undo' | 'redo',
-): Promise<void> {
-  const redoing = direction === 'redo';
-  switch (command.type) {
-    case 'cell-edit':
-      await applyCellValue(
-        table,
-        command.rowId,
-        command.column,
-        redoing ? command.newValue : command.oldValue,
-      );
-      return;
-    case 'delete-rows':
-      await applyRowDeletion(table, command.rowIds, redoing);
-      return;
-    case 'insert-row':
-      await applyRowDeletion(table, [command.rowId], !redoing);
-      return;
-    case 'rename-column':
-      await applyColumnRename(
-        table,
-        redoing ? command.from : command.to,
-        redoing ? command.to : command.from,
-      );
-      return;
-    case 'insert-column':
-      if (redoing) await applyAddColumn(table, command.name);
-      else await applyDropColumn(table, command.name);
-      return;
-    case 'delete-column':
-      await applyColumnRename(
-        table,
-        redoing ? command.name : command.hiddenName,
-        redoing ? command.hiddenName : command.name,
-      );
-      return;
-    default: {
-      const exhaustive: never = command;
-      throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
+): Effect.Effect<void, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    const redoing = direction === 'redo';
+    switch (command.type) {
+      case 'cell-edit':
+        yield* applyCellValue(
+          table,
+          command.rowId,
+          command.column,
+          redoing ? command.newValue : command.oldValue,
+        );
+        return;
+      case 'delete-rows':
+        yield* applyRowDeletion(table, command.rowIds, redoing);
+        return;
+      case 'insert-row':
+        yield* applyRowDeletion(table, [command.rowId], !redoing);
+        return;
+      case 'rename-column':
+        yield* applyColumnRename(
+          table,
+          redoing ? command.from : command.to,
+          redoing ? command.to : command.from,
+        );
+        return;
+      case 'insert-column':
+        if (redoing) yield* applyAddColumn(table, command.name);
+        else yield* applyDropColumn(table, command.name);
+        return;
+      case 'delete-column':
+        yield* applyColumnRename(
+          table,
+          redoing ? command.name : command.hiddenName,
+          redoing ? command.hiddenName : command.name,
+        );
+        return;
+      default: {
+        const exhaustive: never = command;
+        throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
+      }
     }
-  }
+  });
 }
 
-async function nextRowId(table: CsvTable): Promise<string> {
-  const [row] = await table.database.readObjects(buildNextRowIdSql(table.tableName));
-  return String(row.next_row_id);
+function nextRowId(table: CsvTable): Effect.Effect<string, DataEngineError> {
+  return table.database.readObjectsEffect(buildNextRowIdSql(table.tableName)).pipe(
+    Effect.map(([row]) => String(row.next_row_id)),
+  );
 }
 
-async function resolveInsertionOrder(
+function resolveInsertionOrder(
   table: CsvTable,
   placement: CsvInsertRowPlacement,
   targetRowId: string | undefined,
-): Promise<number> {
-  if (placement === 'append') {
-    const [row] = await table.database.readObjects(buildAppendSourceOrderSql(table.tableName));
-    return Number(row.source_order);
-  }
+): Effect.Effect<number, DataEngineError | WorkspaceRequestError> {
+  return Effect.gen(function* () {
+    if (placement === 'append') {
+      const [row] = yield* table.database.readObjectsEffect(buildAppendSourceOrderSql(table.tableName));
+      return Number(row.source_order);
+    }
 
-  if (!targetRowId) throw new WorkspaceRequestError({ message: 'CSV row identifier is required for insertion.' });
+    if (!targetRowId) return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV row identifier is required for insertion.' }));
 
-  const query = buildRowSourceOrderQuery(table.tableName, targetRowId);
-  const [row] = await table.database.readObjects(query.sql, query.values);
-  if (!row) throw new WorkspaceRequestError({ message: `CSV row no longer exists: ${targetRowId}` });
-  return Number(row.source_order) + (placement === 'below' ? 1 : 0);
+    const query = buildRowSourceOrderQuery(table.tableName, targetRowId);
+    const [row] = yield* table.database.readObjectsEffect(query.sql, query.values);
+    if (!row) return yield* Effect.fail(new WorkspaceRequestError({ message: `CSV row no longer exists: ${targetRowId}` }));
+    return Number(row.source_order) + (placement === 'below' ? 1 : 0);
+  });
 }

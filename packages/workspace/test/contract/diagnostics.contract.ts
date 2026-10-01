@@ -12,6 +12,43 @@ import { stubConnection } from '../stub-connection';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
+    it.each(['read', 'serialization'] as const)('releases the export worker after a %s failure without marking edits exported', async (failure) => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const { workingCsvId } = await fixture.openSource('export-preparation.csv', 'name\nAda\n');
+        await fixture.viewer.call({ operation: 'csv.edit-cell', workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
+        const exported = fixture.captureNextExport('exported.csv');
+        const released = fixture.failNextExportPreparation(failure);
+        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow(
+          failure === 'read' ? 'The data engine could not complete the operation.' : 'The CSV workspace could not complete the request.',
+        );
+        expect(released()).toBe(true);
+        expect(await fixture.editState(workingCsvId)).toMatchObject({ hasUnexportedChanges: true, canUndo: true });
+        expect(capture.completed().find((record) => record.message === 'csv.export')?.annotations).toMatchObject({
+          outcome: 'failed', cleanup: 'succeeded', failureCategory: failure === 'read' ? 'recoverable-failure' : 'defect',
+        });
+        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).resolves.toMatchObject({ status: 'exported' });
+        expect(await exported()).toBe('name\nGrace\n');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose(); }
+    });
+
+    it('preserves Unexported Changes and reports a failed export worker release', async () => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const { workingCsvId } = await fixture.openSource('export-cleanup.csv', 'name\nAda\n');
+        await fixture.viewer.call({ operation: 'csv.edit-cell', workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
+        fixture.captureNextExport('exported.csv');
+        fixture.failNextExportWorkerRelease();
+        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow('The data engine could not complete the operation.');
+        expect(await fixture.editState(workingCsvId)).toMatchObject({ hasUnexportedChanges: true, canUndo: true });
+        expect(capture.completed().find((record) => record.message === 'csv.export')?.annotations).toMatchObject({ outcome: 'failed', cleanup: 'cleanup-failed', failureCategory: 'recoverable-failure' });
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose(); }
+    });
+
     it('separates expected synchronous and Promise failures from a host defect', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);

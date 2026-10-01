@@ -17,7 +17,6 @@ export type QueryValues = Array<string | number | boolean | null>;
 
 export type CsvStatement = { sql: string; values: QueryValues };
 
-/** Query construction stays synchronous; an expected rejection is a failure value, not a throw. */
 export type QueryBuild<A> = Result.Result<A, WorkspaceRequestError>;
 
 export function buildCreateWorkingCsvTableSql(

@@ -1,7 +1,6 @@
 import { Effect } from 'effect';
 import type { WorkspaceDatabaseConnection } from '../src/database';
 
-/** A connection whose every query succeeds with no rows, except the operations a test overrides. */
 export function stubConnection(overrides: Partial<WorkspaceDatabaseConnection> = {}): WorkspaceDatabaseConnection {
   return {
     run: () => Promise.resolve(),
