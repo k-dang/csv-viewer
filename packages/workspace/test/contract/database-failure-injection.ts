@@ -3,19 +3,19 @@ import { DataEngineError, type OwnedWorkspaceDatabase, type WorkspaceDatabase } 
 
 export function failNextExportPreparation(database: WorkspaceDatabase, failure: 'read' | 'serialization'): () => boolean {
   let released = false;
-  const connect = database.connectWorkerEffect.bind(database);
-  database.connectWorkerEffect = () => {
-    database.connectWorkerEffect = connect;
+  const connect = database.connectWorker.bind(database);
+  database.connectWorker = () => {
+    database.connectWorker = connect;
     return connect().pipe(Effect.map((connection) => {
-      const read = connection.readObjectsCancellableEffect.bind(connection);
-      connection.readObjectsCancellableEffect = (sql, values) => failure === 'read'
+      const read = connection.readObjectsCancellable.bind(connection);
+      connection.readObjectsCancellable = (sql, values) => failure === 'read'
         ? Effect.fail(new DataEngineError(new Error('PRIVATE export read failure')))
         : read(sql, values).pipe(Effect.map((rows) => {
           rows[0][Object.keys(rows[0])[0]] = new Date(NaN);
           return rows;
         }));
-      const close = connection.closeEffect.bind(connection);
-      connection.closeEffect = () => close().pipe(Effect.tap(() => Effect.sync(() => { released = true; })));
+      const close = connection.close.bind(connection);
+      connection.close = () => close().pipe(Effect.tap(() => Effect.sync(() => { released = true; })));
       return connection;
     }));
   };
@@ -23,40 +23,40 @@ export function failNextExportPreparation(database: WorkspaceDatabase, failure: 
 }
 
 export function failNextExportWorkerRelease(database: WorkspaceDatabase): void {
-  const connect = database.connectWorkerEffect.bind(database);
-  database.connectWorkerEffect = () => {
-    database.connectWorkerEffect = connect;
+  const connect = database.connectWorker.bind(database);
+  database.connectWorker = () => {
+    database.connectWorker = connect;
     return connect().pipe(Effect.map((connection) => {
-      const close = connection.closeEffect.bind(connection);
-      connection.closeEffect = () => close().pipe(Effect.andThen(Effect.fail(new DataEngineError(new Error('PRIVATE export release failure')))));
+      const close = connection.close.bind(connection);
+      connection.close = () => close().pipe(Effect.andThen(Effect.fail(new DataEngineError(new Error('PRIVATE export release failure')))));
       return connection;
     }));
   };
 }
 
 export function failNextMetadataRead(database: WorkspaceDatabase): void {
-  const read = database.readObjectsEffect.bind(database);
-  database.readObjectsEffect = (sql, values) => {
+  const read = database.readObjects.bind(database);
+  database.readObjects = (sql, values) => {
     if (!sql.startsWith('DESCRIBE SELECT * FROM "csv_working_')) return read(sql, values);
-    database.readObjectsEffect = read;
+    database.readObjects = read;
     return Effect.fail(new DataEngineError(new Error('PRIVATE metadata failure')));
   };
 }
 
 export function failNextCsvLoad(database: WorkspaceDatabase): void {
-  const run = database.runEffect.bind(database);
-  database.runEffect = (sql, values) => {
+  const run = database.run.bind(database);
+  database.run = (sql, values) => {
     if (!sql.startsWith('CREATE TABLE "csv_working_')) return run(sql, values);
-    database.runEffect = run;
+    database.run = run;
     return Effect.fail(new DataEngineError(new Error('PRIVATE CSV load failure')));
   };
 }
 
 export function failNextTableDrop(database: WorkspaceDatabase): void {
-  const run = database.runEffect.bind(database);
-  database.runEffect = (sql, values) => {
+  const run = database.run.bind(database);
+  database.run = (sql, values) => {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_working_')) return run(sql, values);
-    database.runEffect = run;
+    database.run = run;
     return Effect.die(new Error('PRIVATE table cleanup failure'));
   };
 }
@@ -72,10 +72,10 @@ export function failNextDatabaseRelease(database: OwnedWorkspaceDatabase): void 
 export function holdNextRowRead(database: WorkspaceDatabase) {
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
-  const read = database.readObjectsEffect.bind(database);
-  database.readObjectsEffect = (sql, values) => Effect.gen(function* () {
+  const read = database.readObjects.bind(database);
+  database.readObjects = (sql, values) => Effect.gen(function* () {
     if (!sql.includes('AS filtered_row_count')) return yield* read(sql, values);
-    database.readObjectsEffect = read;
+    database.readObjects = read;
     entered.resolve();
     yield* Effect.promise(() => resume.promise);
     return yield* read(sql, values);
@@ -84,11 +84,11 @@ export function holdNextRowRead(database: WorkspaceDatabase) {
 }
 
 export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise<void> {
-  const connection = await Effect.runPromise(database.ownerConnectionEffect());
-  const run = connection.runEffect.bind(connection);
-  connection.runEffect = (sql, values) => {
+  const connection = await Effect.runPromise(database.ownerConnection());
+  const run = connection.run.bind(connection);
+  connection.run = (sql, values) => {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) return run(sql, values);
-    connection.runEffect = run;
+    connection.run = run;
     return Effect.fail(new DataEngineError(new Error('PRIVATE snapshot cleanup failure')));
   };
 }

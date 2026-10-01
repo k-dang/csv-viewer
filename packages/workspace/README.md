@@ -6,7 +6,7 @@ Runtime hosts return Effects and classify platform failures at their edges: expe
 
 Working CSV table operations, reads, edits, history replay, and cleanup compose database Effects directly. Pure query construction, history calculation, and export serialization stay ordinary functions; expected validation returns `Result` or a typed Effect failure, while broken invariants are defects. Export holds its table lease and a scoped worker connection through reading and serialization, then releases both before host delivery. Only successful delivery marks the captured revision exported.
 
-Promises belong at runtime adapter edges and at the shared entry adapter, which converts request Effects to transport Promises.
+The shared entry adapter converts Effects to transport Promises, owns startup and disposal runners, and translates `Exit`/`Cause` to public results. Workspace services compose Effects directly. Promise adaptation stays at runtime edges, including calls to the shared `driverEffect` helper.
 
 ## Resource lifetimes
 
@@ -22,7 +22,7 @@ Working CSV work coordinates through three primitives in the store:
 
 ## Database operations
 
-Aligned Comparison composes the database's typed Effects directly, including owner reads, worker acquisition, cancellable queries, and releases. Runtime adapters classify driver failures once. Interrupting a cancellable query cancels and awaits driver work; other database operations cannot be interrupted before the driver settles. Worker release failures retain their separate `cleanup-failed` diagnostics and remain available for disposal to retry.
+Database and connection methods expose Effects with typed `DataEngineError` failures. Interrupting a cancellable query requests cancellation and waits for the driver to settle; other operations remain uninterruptible until settlement. Worker release failures produce `cleanup-failed` diagnostics and remain available for disposal to retry.
 
 ## Open and reopen
 

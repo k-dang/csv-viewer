@@ -162,8 +162,8 @@ describe('web CsvViewer composition', () => {
     if (started.status !== 'ready') throw new Error('Web startup check failed.');
     viewer = started.viewer;
     await expect(viewer.call({ operation: 'csv.open' })).resolves.toMatchObject({ status: 'opened' });
-    const owner = await database.ownerConnection();
-    const run = vi.spyOn(owner, 'runEffect');
+    const owner = await Effect.runPromise(database.ownerConnection());
+    const run = vi.spyOn(owner, 'run');
 
     Deferred.doneUnsafe(database.stopped, Effect.void);
     await viewer.dispose();

@@ -4,7 +4,6 @@ import type { OwnedWorkspaceDatabase } from '../../src/database';
 
 type DriverPrototype<Method extends string> = Record<Method, (...args: never[]) => Promise<object>>;
 
-/** A real driver method the contract can observe or hold. */
 export interface DriverMethod {
   /** Resolves once the method is first called; every call passes through unchanged. */
   observe(): Promise<void>;
@@ -47,11 +46,6 @@ export interface DatabaseInterruptionFixture {
 
 const longQuery = 'SELECT sum(a.range * b.range) AS total FROM range(1000000) a, range(1000000) b';
 
-/**
- * The database interruption rule and driver-error sanitizing, run against a real driver:
- * interrupting a cancellable query cancels it and waits for the driver to settle, and interrupting
- * any other query waits for the driver to settle.
- */
 export function describeDatabaseInterruption(name: string, fixture: DatabaseInterruptionFixture): void {
   describe(name, () => {
     let database: OwnedWorkspaceDatabase;
@@ -66,7 +60,6 @@ export function describeDatabaseInterruption(name: string, fixture: DatabaseInte
       await Effect.runPromise(database.closeEngine());
     });
 
-    /** Proves `work`'s interruption completes only after the held driver call settles and is released. */
     async function expectInterruptionWaitsFor(driver: ReturnType<DriverMethod['hold']>, work: Fiber.Fiber<unknown, unknown>) {
       await driver.entered;
       let interrupted = false;
@@ -83,7 +76,7 @@ export function describeDatabaseInterruption(name: string, fixture: DatabaseInte
     }
 
     it('fails driver errors as a sanitized DataEngineError', async () => {
-      const failure = await Effect.runPromise(Effect.flip(database.readObjectsEffect('SELECT * FROM missing_table')));
+      const failure = await Effect.runPromise(Effect.flip(database.readObjects('SELECT * FROM missing_table')));
 
       expect(failure).toMatchObject({
         name: 'DataEngineError',
@@ -93,35 +86,35 @@ export function describeDatabaseInterruption(name: string, fixture: DatabaseInte
     });
 
     it('cancels long work interrupted as the driver starts it', async () => {
-      const worker = await Effect.runPromise(database.connectWorkerEffect());
+      const worker = await Effect.runPromise(database.connectWorker());
       const started = fixture.cancellableStart.observe();
-      const work = Effect.runFork(worker.runCancellableEffect(`CREATE TABLE cancelled_work AS ${longQuery}`));
+      const work = Effect.runFork(worker.runCancellable(`CREATE TABLE cancelled_work AS ${longQuery}`));
       await started;
 
       await Effect.runPromise(Fiber.interrupt(work));
 
       expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
-      await expect(Effect.runPromise(database.readObjectsEffect(
+      await expect(Effect.runPromise(database.readObjects(
         "SELECT count(*)::BIGINT AS count FROM information_schema.tables WHERE table_name = 'cancelled_work'",
       ))).resolves.toEqual([{ count: 0n }]);
-      await expect(Effect.runPromise(worker.readObjectsEffect('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
-      await Effect.runPromise(worker.closeEffect());
+      await expect(Effect.runPromise(worker.readObjects('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
+      await Effect.runPromise(worker.close());
     }, 15_000);
 
     it('waits for cancelled driver work to settle before interruption completes', async () => {
       const execution = fixture.cancellableExecution.hold();
-      const worker = await Effect.runPromise(database.connectWorkerEffect());
-      const work = Effect.runFork(worker.readObjectsCancellableEffect(longQuery));
+      const worker = await Effect.runPromise(database.connectWorker());
+      const work = Effect.runFork(worker.readObjectsCancellable(longQuery));
 
       await expectInterruptionWaitsFor(execution, work);
 
-      await expect(Effect.runPromise(worker.readObjectsEffect('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
-      await Effect.runPromise(worker.closeEffect());
+      await expect(Effect.runPromise(worker.readObjects('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
+      await Effect.runPromise(worker.close());
     }, 15_000);
 
     it('completes interruption of non-cancellable work only after the driver settles', async () => {
       const read = fixture.read.hold();
-      const work = Effect.runFork(database.readObjectsEffect('SELECT 42 AS answer'));
+      const work = Effect.runFork(database.readObjects('SELECT 42 AS answer'));
 
       await expectInterruptionWaitsFor(read, work);
     });

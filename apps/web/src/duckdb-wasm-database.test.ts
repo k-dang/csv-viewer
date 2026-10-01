@@ -50,7 +50,7 @@ async function openCrashableDatabase() {
 describe('DuckDbWasmWorkspaceDatabase', () => {
   it('cancels a parameterized query during preparation without executing it', async () => {
     database = await openNodeDatabase();
-    const worker = await Effect.runPromise(database.connectWorkerEffect());
+    const worker = await Effect.runPromise(database.connectWorker());
     const prepared = Promise.withResolvers<void>();
     const releasePreparation = Promise.withResolvers<void>();
     const cancelled = Promise.withResolvers<void>();
@@ -71,7 +71,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       }
     });
     try {
-      const work = Effect.runFork(worker.readObjectsCancellableEffect(
+      const work = Effect.runFork(worker.readObjectsCancellable(
         'CREATE TABLE missed_cancel AS SELECT ?::INTEGER AS answer', [42],
       ));
       await prepared.promise;
@@ -83,24 +83,24 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       await expect(cancel.mock.results[0].value).resolves.toBe(false);
       expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
       expect(close).toHaveBeenCalledOnce();
-      await expect(Effect.runPromise(database.readObjectsEffect(
+      await expect(Effect.runPromise(database.readObjects(
         "SELECT count(*) AS count FROM information_schema.tables WHERE table_name = 'missed_cancel'",
       ))).resolves.toEqual([{ count: 0n }]);
-      await expect(Effect.runPromise(worker.readObjectsEffect('SELECT 42 AS answer')))
+      await expect(Effect.runPromise(worker.readObjects('SELECT 42 AS answer')))
         .resolves.toEqual([{ answer: 42 }]);
     } finally {
       releasePreparation.resolve();
-      await Effect.runPromise(worker.closeEffect());
+      await Effect.runPromise(worker.close());
     }
   });
 
   it('runs parameterized queries on the pinned in-memory DuckDB core', async () => {
     database = await openNodeDatabase();
 
-    const rows = await database.readObjects(
+    const rows = await Effect.runPromise(database.readObjects(
       'SELECT version() AS version, ?::VARCHAR AS text, ?::BOOLEAN AS enabled, ?::INTEGER AS count',
       ['local', true, 3],
-    );
+    ));
 
     expect(rows).toEqual([
       {
@@ -119,15 +119,15 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       new TextEncoder().encode('name,age\nAda,37\n'),
     );
 
-    const rows = await database.readObjects(
+    const rows = await Effect.runPromise(database.readObjects(
       `SELECT * FROM read_csv_auto('${reference}', all_varchar = true)`,
-    );
+    ));
 
     expect(rows).toEqual([{ name: 'Ada', age: '37' }]);
     await expect(
-      database.readObjects(
+      Effect.runPromise(database.readObjects(
         "SELECT current_setting('enable_external_access') AS external_access, current_setting('autoinstall_known_extensions') AS autoinstall, current_setting('autoload_known_extensions') AS autoload",
-      ),
+      )),
     ).resolves.toEqual([{ external_access: false, autoinstall: false, autoload: false }]);
     for (const sql of [
       "SELECT * FROM read_csv_auto('https://example.invalid/source.csv')",
@@ -136,10 +136,10 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       'SET autoinstall_known_extensions = true',
       'SET autoload_known_extensions = true',
     ]) {
-      const outcome = await database.run(sql).then(() => 'allowed', () => 'rejected');
+      const outcome = await Effect.runPromise(database.run(sql)).then(() => 'allowed', () => 'rejected');
       expect(outcome, sql).toBe('rejected');
     }
-    await expect(database.readObjects('SELECT 42 AS answer')).resolves.toEqual([{ answer: 42 }]);
+    await expect(Effect.runPromise(database.readObjects('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
   });
 
   it('rejects runtime CDN module URLs', () => {
@@ -185,7 +185,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
   it('fails a query in flight when the Worker fails instead of waiting forever', async () => {
     const engine = await openCrashableDatabase();
     const started = driverMethod(AsyncDuckDBConnection.prototype, 'query').observe();
-    const work = Effect.runFork(Effect.flip(engine.database.readObjectsEffect(
+    const work = Effect.runFork(Effect.flip(engine.database.readObjects(
       'SELECT sum(a.range * b.range) AS total FROM range(1000000) a, range(1000000) b',
     )));
     await started;
@@ -228,7 +228,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     await expect(Effect.runPromise(database.closeEngine())).resolves.toBeUndefined();
     if (phase === 'pending creation') creation.resolve(worker);
     await vi.waitFor(() => expect(worker.terminate).toHaveBeenCalledOnce());
-    await expect(Effect.runPromise(database.ownerConnectionEffect())).rejects.toMatchObject({
+    await expect(Effect.runPromise(database.ownerConnection())).rejects.toMatchObject({
       name: 'DataEngineError',
       cause: { message: stoppedEngineMessage },
     });
@@ -249,7 +249,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
 
     expect(Deferred.isDoneUnsafe(database.stopped)).toBe(true);
     expect(worker.terminate).toHaveBeenCalledOnce();
-    await expect(Effect.runPromise(database.readObjectsEffect('SELECT 1'))).rejects.toMatchObject({
+    await expect(Effect.runPromise(database.readObjects('SELECT 1'))).rejects.toMatchObject({
       name: 'DataEngineError',
       cause: { message: stoppedEngineMessage },
     });

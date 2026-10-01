@@ -646,8 +646,8 @@ function retryCleanupExecutor(): ComparisonExecutor {
   const secret = new Error('PRIVATE driver failure');
   let closeFails = true;
   const connection = stubConnection({
-    readObjectsCancellableEffect: () => Effect.fail(new DataEngineError(secret)),
-    closeEffect: () => Effect.suspend(() => {
+    readObjectsCancellable: () => Effect.fail(new DataEngineError(secret)),
+    close: () => Effect.suspend(() => {
       if (closeFails) { closeFails = false; return Effect.fail(new DataEngineError(secret)); }
       return Effect.void;
     }),

@@ -74,20 +74,20 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     private readonly calls: EngineCalls,
   ) {}
 
-  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+  run(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
     return this.calls.effect(() => this.runStatement(sql, values));
   }
 
-  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+  readObjects(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
     return this.calls.effect(() => this.readRows(sql, values));
   }
 
-  runCancellableEffect(sql: string): Effect.Effect<void, DataEngineError> {
+  runCancellable(sql: string): Effect.Effect<void, DataEngineError> {
     // Draining the pending result completes statements that do not return rows, including CTAS.
-    return this.readObjectsCancellableEffect(sql).pipe(Effect.asVoid);
+    return this.readObjectsCancellable(sql).pipe(Effect.asVoid);
   }
 
-  readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+  readObjectsCancellable(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
     return Effect.suspend(() => {
       let cancelled = false;
       return this.calls.effect(() => this.readStreamedRows(sql, values, () => cancelled), async () => {
@@ -97,38 +97,11 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     });
   }
 
-  closeEffect(): Effect.Effect<void, DataEngineError> {
+  close(): Effect.Effect<void, DataEngineError> {
     return this.calls.effect(() => this.disconnect());
   }
 
-  run(sql: string, values?: QueryValues): Promise<void> {
-    return Effect.runPromise(this.runEffect(sql, values));
-  }
-
-  readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return Effect.runPromise(this.readObjectsEffect(sql, values));
-  }
-
-  runCancellable(sql: string): Promise<void> {
-    return Effect.runPromise(this.runCancellableEffect(sql));
-  }
-
-  readObjectsCancellable(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return Effect.runPromise(this.readObjectsCancellableEffect(sql, values));
-  }
-
-  cancelRunning(): Promise<void> {
-    return Effect.runPromise(this.calls.effect(() => this.connection.cancelSent()).pipe(Effect.asVoid));
-  }
-
-  close(): Promise<void> {
-    return Effect.runPromise(this.closeEffect());
-  }
-
-  /**
-   * The raw driver calls behind `closeEffect`, `runEffect`, and `readObjectsEffect`, for adapter
-   * code already running inside a tracked call.
-   */
+  /** Raw driver calls for operations already tracked by EngineCalls. */
   disconnect(): Promise<void> {
     return this.connection.close();
   }
@@ -228,36 +201,20 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.stopEngineOnInterrupt(() => this.start()).pipe(Effect.as(this));
   }
 
-  ownerConnectionEffect(): Effect.Effect<DuckDbWasmConnection, DataEngineError> {
+  ownerConnection(): Effect.Effect<DuckDbWasmConnection, DataEngineError> {
     return this.calls.effect(async () => this.opened().connection);
   }
 
-  connectWorkerEffect(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
+  connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
     return this.calls.effect(async () => new DuckDbWasmConnection(await this.opened().database.connect(), this.calls));
   }
 
-  runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
-    return this.ownerConnectionEffect().pipe(Effect.flatMap((connection) => connection.runEffect(sql, values)));
+  run(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError> {
+    return this.ownerConnection().pipe(Effect.flatMap((connection) => connection.run(sql, values)));
   }
 
-  readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
-    return this.ownerConnectionEffect().pipe(Effect.flatMap((connection) => connection.readObjectsEffect(sql, values)));
-  }
-
-  ownerConnection(): Promise<WorkspaceDatabaseConnection> {
-    return Effect.runPromise(this.ownerConnectionEffect());
-  }
-
-  connectWorker(): Promise<WorkspaceDatabaseConnection> {
-    return Effect.runPromise(this.connectWorkerEffect());
-  }
-
-  async run(sql: string, values?: QueryValues): Promise<void> {
-    await this.opened().connection.run(sql, values);
-  }
-
-  async readObjects(sql: string, values?: QueryValues): Promise<EngineRow[]> {
-    return this.opened().connection.readObjects(sql, values);
+  readObjects(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
+    return this.ownerConnection().pipe(Effect.flatMap((connection) => connection.readObjects(sql, values)));
   }
 
   registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {

@@ -103,10 +103,10 @@ describe('WorkingCsvStore invariants', () => {
     await Effect.runPromise(store.renameColumn({ workingCsvId, column: 'name', name: 'title' }));
     const revision = store.getState(workingCsvId)?.dataRevision;
 
-    const run = database.runEffect.bind(database);
-    database.runEffect = (sql, values) => {
+    const run = database.run.bind(database);
+    database.run = (sql, values) => {
       if (!sql.startsWith('ALTER TABLE')) return run(sql, values);
-      database.runEffect = run;
+      database.run = run;
       return Effect.fail(new DataEngineError(new Error('PRIVATE replay failure')));
     };
     await expect(Effect.runPromise(store.undo(workingCsvId))).rejects.toThrow();
