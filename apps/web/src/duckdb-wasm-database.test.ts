@@ -63,10 +63,12 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       await releasePreparation.promise;
       return statement;
     });
-    vi.spyOn(AsyncDuckDBConnection.prototype, 'cancelSent').mockImplementation(async function (this: AsyncDuckDBConnection) {
-      const result = await cancelSent.call(this);
-      cancelled.resolve();
-      return result;
+    const cancel = vi.spyOn(AsyncDuckDBConnection.prototype, 'cancelSent').mockImplementation(async function (this: AsyncDuckDBConnection) {
+      try {
+        return await cancelSent.call(this);
+      } finally {
+        cancelled.resolve();
+      }
     });
     try {
       const work = Effect.runFork(worker.readObjectsCancellableEffect(
@@ -78,6 +80,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       releasePreparation.resolve();
 
       await interruption;
+      await expect(cancel.mock.results[0].value).resolves.toBe(false);
       expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
       expect(close).toHaveBeenCalledOnce();
       await expect(Effect.runPromise(database.readObjectsEffect(

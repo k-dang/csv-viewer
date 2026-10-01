@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Make expected validation failures explicit; 02 — Add Effect database operations on both runtimes.
 
-**Status:** implemented � manual desktop export verification remains
+**Status:** implemented - manual desktop export verification remains
 
 - [x] Convert table creation and deletion, metadata reads, row and cell reads, cell writes, row insertion/deletion, column changes, export-row reads, and edit-command replay to Effects that compose the new database interface.
 - [x] The store's read and edit helpers and mutation queue accept Effect bodies. Convert lifecycle cleanup, staging cleanup, and retired-table cleanup as well as successful request paths. Preserve leases, queue order, admission, publication/rollback rules, and artifact retry behavior.
