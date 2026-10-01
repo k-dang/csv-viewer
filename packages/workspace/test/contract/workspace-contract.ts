@@ -34,6 +34,10 @@ export interface WorkspaceContractFixture {
   failNextCsvLoad(): void;
   /** Fail one physical table deletion; a later cleanup attempt uses the real driver. */
   failNextTableDrop(): void;
+  /** Fail an export worker release after the real connection closes. */
+  failNextExportWorkerRelease(): void;
+  /** Fail export preparation and return whether its worker connection has closed. */
+  failNextExportPreparation(failure: 'read' | 'serialization'): () => boolean;
   /** Fail one temporary engine source release. */
   failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */

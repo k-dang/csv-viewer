@@ -1,8 +1,7 @@
 import { DataEngineError } from '../database';
 import { Cause, Deferred, Effect, Latch, Result, type Scope, type Types } from 'effect';
-import { observeCleanup, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
-import { databaseEffect } from '../comparison/comparison-effects';
-import { attemptWorkspacePromise, attemptWorkspaceSync, WorkspaceRequestError } from '../errors';
+import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
+import { attemptWorkspacePromise, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
   CsvCellEditRequest,
@@ -223,7 +222,7 @@ export class WorkingCsvStore {
           getOwnerConnection: () => this.database.ownerConnection(),
           connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
             if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError(new Error('CSV workspace is disposing.')));
-            return yield* databaseEffect(() => this.database.connectWorker());
+            return yield* this.database.connectWorkerEffect();
           })),
         },
         this.artifactRegistry,
@@ -309,15 +308,10 @@ export class WorkingCsvStore {
 
         yield* this.awaitLeases(workingCsvId);
         if (this.workingCsvs.get(workingCsvId)?.tableName !== state.tableName) continue;
-        yield* attempt(async () => {
-          await this.dropRetiredSourceTablesOwnedBy(workingCsvId);
-          try {
-            await this.retireSourceTable(state.tableName);
-          } catch (error) {
-            this.rollbackSourceRetirement(state.tableName);
-            throw error;
-          }
-        });
+        yield* this.dropRetiredSourceTablesOwnedBy(workingCsvId);
+        yield* this.retireSourceTable(state.tableName).pipe(
+          Effect.onError(() => Effect.sync(() => this.rollbackSourceRetirement(state.tableName))),
+        );
         if (this.workingCsvs.get(workingCsvId)?.tableName !== state.tableName) continue;
         this.workingCsvs.delete(workingCsvId);
         this.closingWorkingCsvs.delete(workingCsvId);
@@ -354,21 +348,19 @@ export class WorkingCsvStore {
       for (const workingCsvId of [...this.workingCsvs.keys()]) {
         yield* this.closeWorkingCsv(workingCsvId);
       }
-      yield* attempt(async () => {
-        if (this.tableLeases.size > 0) {
-          throw new Error('Working CSV source lease invariant violated during disposal.');
+      if (this.tableLeases.size > 0) {
+        throw new Error('Working CSV source lease invariant violated during disposal.');
+      }
+      for (const { tableName } of this.retiredSourceTables()) {
+        yield* this.dropRetiredSourceTable(tableName);
+      }
+      for (const artifact of this.artifactRegistry.list()) {
+        if (artifact.owner.kind === 'working-csv' && artifact.role === 'staging') {
+          yield* dropWorkingCsvTable(this.table(artifact.tableName));
+          this.artifactRegistry.remove(artifact.tableName);
         }
-        for (const { tableName } of this.retiredSourceTables()) {
-          await this.dropRetiredSourceTable(tableName);
-        }
-        for (const artifact of this.artifactRegistry.list()) {
-          if (artifact.owner.kind === 'working-csv' && artifact.role === 'staging') {
-            await dropWorkingCsvTable(this.table(artifact.tableName));
-            this.artifactRegistry.remove(artifact.tableName);
-          }
-        }
-        this.artifactRegistry.assertEmpty();
-      });
+      }
+      this.artifactRegistry.assertEmpty();
     });
   }
 
@@ -378,21 +370,21 @@ export class WorkingCsvStore {
   }
 
   getEditState(request: CsvEditStateRequest): Effect.Effect<CsvEditState, Error> {
-    return attemptWorkspaceSync(() => {
-      this.assertAcceptingWork();
-      this.assertNotClosing(request.workingCsvId);
-      return buildEditState(this.requireWorkingCsv(request.workingCsvId));
+    return Effect.gen({ self: this }, function* () {
+      yield* this.assertAcceptingWork();
+      yield* this.assertNotClosing(request.workingCsvId);
+      return buildEditState(yield* this.requireWorkingCsv(request.workingCsvId));
     });
   }
 
   getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, Error> {
-    return this.read(request.workingCsvId, async (state) => {
+    return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const { offset, limit } = request;
       if (limit > maxRowWindowLimit) {
-        throw new WorkspaceRequestError({ message: `Row window limit must be ${maxRowWindowLimit} or less.` });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: `Row window limit must be ${maxRowWindowLimit} or less.` }));
       }
 
-      const query = Result.getOrThrow(buildRowsQuery({
+      const query = yield* Effect.fromResult(buildRowsQuery({
         tableName: state.tableName,
         columns: state.metadata.columns,
         filters: request.filters ?? [],
@@ -402,8 +394,8 @@ export class WorkingCsvStore {
         offset,
       }));
 
-      const [countRow] = await this.database.readObjects(query.countSql, query.values);
-      const rows = await this.database.readObjects(query.rowsSql, query.values);
+      const [countRow] = yield* this.database.readObjectsEffect(query.countSql, query.values);
+      const rows = yield* this.database.readObjectsEffect(query.rowsSql, query.values);
 
       return {
         workingCsvId: state.metadata.workingCsvId,
@@ -411,12 +403,12 @@ export class WorkingCsvStore {
         filteredRowCount: normalizeCount(countRow.filtered_row_count),
         rows: rows.map(normalizeRow),
       };
-    });
+    }));
   }
 
   getColumnValues(request: CsvColumnValuesRequest): Effect.Effect<CsvColumnValues, Error> {
-    return this.read(request.workingCsvId, async (state) => {
-      const query = Result.getOrThrow(buildColumnValuesQuery({
+    return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
+      const query = yield* Effect.fromResult(buildColumnValuesQuery({
         tableName: state.tableName,
         columns: state.metadata.columns,
         column: request.column,
@@ -424,28 +416,28 @@ export class WorkingCsvStore {
         search: request.search ?? '',
         sort: request.sort ?? [],
       }));
-      const rows = await this.database.readObjects(query.sql, query.values);
+      const rows = yield* this.database.readObjectsEffect(query.sql, query.values);
 
       return {
         workingCsvId: state.metadata.workingCsvId,
         column: request.column,
         values: rows.map((row) => normalizeCellValue(row.column_value)),
       };
-    });
+    }));
   }
 
   getColumnValueCounts(request: CsvColumnValueCountsRequest): Effect.Effect<CsvColumnValueCounts, Error> {
-    return this.read(request.workingCsvId, async (state) => {
+    return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const { metadata } = state;
 
-      const query = Result.getOrThrow(buildColumnValueCountsQuery({
+      const query = yield* Effect.fromResult(buildColumnValueCountsQuery({
         tableName: state.tableName,
         columns: metadata.columns,
         column: request.column,
         filters: request.filters ?? [],
         search: request.search ?? '',
       }));
-      const rows = await this.database.readObjects(query.sql, query.values);
+      const rows = yield* this.database.readObjectsEffect(query.sql, query.values);
       const scopeRowCount = rows.length > 0 ? normalizeCount(rows[0].scope_row_count) : 0;
 
       return {
@@ -458,21 +450,21 @@ export class WorkingCsvStore {
           percentOfScope: Number(row.percent_of_scope),
         })),
       };
-    });
+    }));
   }
 
   editCell(request: CsvCellEditRequest): Effect.Effect<CsvCellEditResult, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
-      Result.getOrThrow(requireKnownColumn(request.column, knownColumns));
+      yield* Effect.fromResult(requireKnownColumn(request.column, knownColumns));
 
       if (request.rowId.length === 0) {
-        throw new WorkspaceRequestError({ message: 'CSV row identifier is required.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV row identifier is required.' }));
       }
 
       const table = this.tableFor(state);
-      const oldValue = await readCellValue(table, request.rowId, request.column);
-      await applyCellValue(table, request.rowId, request.column, request.value);
+      const oldValue = yield* readCellValue(table, request.rowId, request.column);
+      yield* applyCellValue(table, request.rowId, request.column, request.value);
       state.history.record({
         type: 'cell-edit',
         rowId: request.rowId,
@@ -487,43 +479,43 @@ export class WorkingCsvStore {
         column: request.column,
         ...buildEditState(state),
       };
-    });
+    }));
   }
 
   deleteRows(request: CsvDeleteRowsRequest): Effect.Effect<CsvEditState, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const rowIds = normalizeRowIds(request.rowIds);
 
       if (rowIds.length === 0) {
-        throw new WorkspaceRequestError({ message: 'At least one CSV row must be selected for deletion.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'At least one CSV row must be selected for deletion.' }));
       }
 
       const table = this.tableFor(state);
-      await assertRowsExist(table, rowIds);
-      await applyRowDeletion(table, rowIds, true);
+      yield* assertRowsExist(table, rowIds);
+      yield* applyRowDeletion(table, rowIds, true);
       state.history.record({ type: 'delete-rows', rowIds });
       commitDataChange(state, -rowIds.length);
 
       return buildEditState(state);
-    });
+    }));
   }
 
   insertRow(request: CsvInsertRowRequest): Effect.Effect<CsvEditState, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const rowIds = normalizeRowIds(request.rowIds);
 
       if (request.placement === 'append') {
         if (request.hasActiveQuery) {
-          throw new WorkspaceRequestError({ message: 'CSV rows cannot be inserted while sort, filter, or search is active.' });
+          return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV rows cannot be inserted while sort, filter, or search is active.' }));
         }
         if (rowIds.length !== 0) {
-          throw new WorkspaceRequestError({ message: 'Append row requires no selected CSV rows.' });
+          return yield* Effect.fail(new WorkspaceRequestError({ message: 'Append row requires no selected CSV rows.' }));
         }
       } else if (rowIds.length !== 1) {
-        throw new WorkspaceRequestError({ message: 'Insert above or below requires exactly one selected CSV row.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'Insert above or below requires exactly one selected CSV row.' }));
       }
 
-      const insertedRowId = await insertEmptyRow(
+      const insertedRowId = yield* insertEmptyRow(
         this.tableFor(state),
         state.metadata.columns,
         request.placement,
@@ -533,61 +525,61 @@ export class WorkingCsvStore {
       commitDataChange(state, 1);
 
       return buildEditState(state);
-    });
+    }));
   }
 
   renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
-      Result.getOrThrow(requireKnownColumn(request.column, knownColumns));
+      yield* Effect.fromResult(requireKnownColumn(request.column, knownColumns));
 
       const name = request.name.trim();
       if (name.length === 0) {
-        throw new WorkspaceRequestError({ message: 'CSV column name cannot be blank.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV column name cannot be blank.' }));
       }
       if (isReservedCsvColumnName(name)) {
-        throw new WorkspaceRequestError({ message: 'CSV column name is reserved.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV column name is reserved.' }));
       }
       if (hasConflictingColumnName(state.metadata.columns, name, request.column)) {
-        throw new WorkspaceRequestError({ message: 'CSV column name already exists.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV column name already exists.' }));
       }
       if (name === request.column) {
         return buildSchemaEditState(state);
       }
 
-      return this.commitSchemaEdit(state, { type: 'rename-column', from: request.column, to: name });
-    });
+      return yield* this.commitSchemaEdit(state, { type: 'rename-column', from: request.column, to: name });
+    }));
   }
 
   insertColumn(request: CsvInsertColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const columns = state.metadata.columns;
-      const anchorIndex = requireColumnIndex(columns, request.column);
+      const anchorIndex = yield* Effect.fromResult(requireColumnIndex(columns, request.column));
       const index = anchorIndex + (request.placement === 'after' ? 1 : 0);
       const name = defaultColumnName(columns);
-      return this.commitSchemaEdit(state, { type: 'insert-column', name, index });
-    });
+      return yield* this.commitSchemaEdit(state, { type: 'insert-column', name, index });
+    }));
   }
 
   deleteColumn(request: CsvDeleteColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
-    return this.edit(request.workingCsvId, async (state) => {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const columns = state.metadata.columns;
-      const index = requireColumnIndex(columns, request.column);
+      const index = yield* Effect.fromResult(requireColumnIndex(columns, request.column));
       if (columns.length <= 1) {
-        throw new WorkspaceRequestError({ message: 'The last CSV column cannot be deleted.' });
+        return yield* Effect.fail(new WorkspaceRequestError({ message: 'The last CSV column cannot be deleted.' }));
       }
       const hiddenName = hiddenCsvColumnName(
         state.history.revisionSequence,
         columns.map((column) => column.name),
       );
-      return this.commitSchemaEdit(state, {
+      return yield* this.commitSchemaEdit(state, {
         type: 'delete-column',
         name: request.column,
         index,
         columnType: columns[index].type,
         hiddenName,
       });
-    });
+    }));
   }
 
   undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, Error> {
@@ -598,25 +590,27 @@ export class WorkingCsvStore {
     return this.stepHistory(workingCsvId, 'redo');
   }
 
-  private async commitSchemaEdit(state: WorkingCsvState, draft: CsvSchemaEditDraft): Promise<CsvSchemaEditState> {
-    const next = Result.getOrThrow(columnsAfter(state.metadata.columns, draft, 'redo'));
-    await runEditCommand(this.tableFor(state), draft, 'redo');
-    state.history.record(draft);
-    state.metadata.columns = next;
-    commitDataChange(state, 0);
-    return buildSchemaEditState(state);
+  private commitSchemaEdit(state: WorkingCsvState, draft: CsvSchemaEditDraft) {
+    return Effect.gen({ self: this }, function* () {
+      const next = yield* Effect.fromResult(columnsAfter(state.metadata.columns, draft, 'redo'));
+      yield* runEditCommand(this.tableFor(state), draft, 'redo');
+      state.history.record(draft);
+      state.metadata.columns = next;
+      commitDataChange(state, 0);
+      return buildSchemaEditState(state);
+    });
   }
 
   private stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Effect.Effect<CsvSchemaEditState, Error> {
-    return this.edit(workingCsvId, async (state) => {
-      const { command, commit } = Result.getOrThrow(state.history.step(direction));
-      const next = Result.getOrThrow(columnsAfter(state.metadata.columns, command, direction));
-      await runEditCommand(this.tableFor(state), command, direction);
+    return this.mutate(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
+      const { command, commit } = yield* Effect.fromResult(state.history.step(direction));
+      const next = yield* Effect.fromResult(columnsAfter(state.metadata.columns, command, direction));
+      yield* runEditCommand(this.tableFor(state), command, direction);
       state.metadata.columns = next;
       commit();
       commitDataChange(state, rowCountDelta(command, direction));
       return buildSchemaEditState(state);
-    });
+    }));
   }
 
   /**
@@ -629,8 +623,18 @@ export class WorkingCsvStore {
    */
   exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, Error> {
     return Effect.gen({ self: this }, function* () {
-      const prepared = yield* this.read(workingCsvId, async (state) => {
+      let releaseFailure: DataEngineError | undefined;
+      const prepared = yield* this.read(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
         const { metadata } = state;
+        const connection = yield* Effect.acquireRelease(
+          this.database.connectWorkerEffect(),
+          // Carry release failure past the scope without turning a driver failure into a defect.
+          (worker) => worker.closeEffect().pipe(Effect.catch((error) => {
+            releaseFailure = error;
+            return markCleanupFailed;
+          })),
+        );
+        const rows = yield* readExportRows(connection, state.tableName, metadata.columns);
         return {
           state,
           sourceId: state.sourceId,
@@ -638,14 +642,15 @@ export class WorkingCsvStore {
           revisionId: state.history.currentRevision,
           contents: serializeCsvExport({
             columns: metadata.columns,
-            rows: await readExportRows(this.tableFor(state), metadata.columns),
+            rows,
             delimiter: metadata.dialect.delimiter ?? state.defaultDelimiter,
             header: metadata.dialect.header !== false,
           }),
         };
-      });
+      }));
+      if (releaseFailure) return yield* Effect.fail(releaseFailure);
 
-      const delivery = yield* observeStage('csv.deliver-export', attempt(() => this.host.deliverExport({
+      const delivery = yield* observeStage('csv.deliver-export', attemptWorkspacePromise(() => this.host.deliverExport({
         sourceId: prepared.sourceId,
         suggestedName: prepared.suggestedName,
         contents: prepared.contents,
@@ -666,16 +671,14 @@ export class WorkingCsvStore {
     initialRevisionId: number,
   ) {
     return Effect.gen({ self: this }, function* () {
-      const dialect = yield* attemptWorkspaceSync(() => validateDialectOptions(options));
+      const dialect = yield* Effect.fromResult(validateDialectOptions(options));
       const description = yield* observeStage('csv.describe-source', attemptWorkspacePromise(
         () => this.host.describeSource(sourceId),
       ).pipe(Effect.mapError(normalizeOpenError)));
       if (!isSupportedCsvSourceName(description.name)) {
         return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
       }
-      yield* observeStage('csv.prepare-table', attemptWorkspacePromise(
-        () => this.database.ownerConnection(),
-      ).pipe(Effect.mapError(normalizeEngineError)));
+      yield* observeStage('csv.prepare-table', this.database.ownerConnectionEffect().pipe(Effect.mapError(normalizeEngineError)));
       const tableName = buildWorkingCsvTableName(crypto.randomUUID());
       const table = this.table(tableName);
       yield* Effect.acquireRelease(
@@ -685,13 +688,13 @@ export class WorkingCsvStore {
         () => this.releaseStagingTable(tableName),
       );
       yield* observeStage('csv.access-and-load', this.host.acquireEngineSource(sourceId).pipe(
-        Effect.flatMap((reference) => attemptWorkspacePromise(() => createWorkingCsvTable(table, reference, dialect))),
+        Effect.flatMap((reference) => createWorkingCsvTable(table, reference, dialect)),
         Effect.scoped,
         Effect.mapError(normalizeEngineError),
       ));
       const [columns, rowCount] = yield* observeStage('csv.read-metadata', Effect.all([
-        attemptWorkspacePromise(() => readColumns(table)).pipe(Effect.mapError(normalizeEngineError)),
-        attemptWorkspacePromise(() => readRowCount(table)).pipe(Effect.mapError(normalizeEngineError)),
+        readColumns(table).pipe(Effect.mapError(normalizeEngineError)),
+        readRowCount(table).pipe(Effect.mapError(normalizeEngineError)),
       ]));
       return {
         metadata: {
@@ -708,7 +711,7 @@ export class WorkingCsvStore {
   private releaseStagingTable(tableName: string) {
     return observeCleanup('csv.release-staging', Effect.gen({ self: this }, function* () {
       if (this.artifactRegistry.get(tableName)?.role !== 'staging') return;
-      yield* Effect.tryPromise(() => dropWorkingCsvTable(this.table(tableName)));
+      yield* dropWorkingCsvTable(this.table(tableName));
       this.artifactRegistry.remove(tableName);
     }));
   }
@@ -721,13 +724,9 @@ export class WorkingCsvStore {
     return this.table(state.tableName);
   }
 
-  /** Runs promise-based table work under a lease. Reads stay off the mutation queue. */
-  private read<A>(workingCsvId: WorkingCsvId, operation: (state: WorkingCsvState) => Promise<A>): Effect.Effect<A, Error> {
-    return Effect.scoped(this.lease(workingCsvId).pipe(Effect.flatMap((state) => attempt(() => operation(state)))));
-  }
-
-  private edit<A>(workingCsvId: WorkingCsvId, operation: (state: WorkingCsvState) => Promise<A>): Effect.Effect<A, Error> {
-    return this.mutate(workingCsvId, (state) => attempt(() => operation(state)));
+  /** Runs Effect table work under a lease. Reads stay off the mutation queue. */
+  private read<A, E>(workingCsvId: WorkingCsvId, operation: (state: WorkingCsvState) => Effect.Effect<A, E, Scope.Scope>): Effect.Effect<A, E | WorkspaceRequestError> {
+    return Effect.scoped(this.lease(workingCsvId).pipe(Effect.flatMap(operation)));
   }
 
   /**
@@ -744,11 +743,11 @@ export class WorkingCsvStore {
   private mutate<A, E>(
     workingCsvId: WorkingCsvId,
     operation: (state: WorkingCsvState) => Effect.Effect<A, E>,
-  ): Effect.Effect<A, E | Error> {
+  ): Effect.Effect<A, E | WorkspaceRequestError> {
     return Effect.gen({ self: this }, function* () {
       const leased = yield* this.lease(workingCsvId);
       yield* this.awaitTurn(workingCsvId);
-      const current = yield* attemptWorkspaceSync(() => this.requireWorkingCsv(workingCsvId));
+      const current = yield* this.requireWorkingCsv(workingCsvId);
       if (current.tableName !== leased.tableName) yield* this.leaseTable(current);
       const revision = current.metadata.dataRevision;
       const result = yield* operation(current);
@@ -782,12 +781,12 @@ export class WorkingCsvStore {
    * sources. It leases the Working CSV's current table until the scope closes, and rejects work
    * while the workspace disposes or the Working CSV closes.
    */
-  private lease(workingCsvId: WorkingCsvId): Effect.Effect<WorkingCsvState, Error, Scope.Scope> {
-    return attemptWorkspaceSync(() => {
-      this.assertAcceptingWork();
-      this.assertNotClosing(workingCsvId);
-      return this.requireWorkingCsv(workingCsvId);
-    }).pipe(Effect.flatMap((state) => this.leaseTable(state)));
+  private lease(workingCsvId: WorkingCsvId): Effect.Effect<WorkingCsvState, WorkspaceRequestError, Scope.Scope> {
+    return Effect.gen({ self: this }, function* () {
+      yield* this.assertAcceptingWork();
+      yield* this.assertNotClosing(workingCsvId);
+      return yield* this.leaseTable(yield* this.requireWorkingCsv(workingCsvId));
+    });
   }
 
   private leaseTable(state: WorkingCsvState): Effect.Effect<WorkingCsvState, never, Scope.Scope> {
@@ -817,7 +816,7 @@ export class WorkingCsvStore {
 
   /** A failed drop keeps the table registered, so close or disposal can retry it. */
   private dropRetiredLeaseTable(tableName: string): Effect.Effect<void> {
-    return observeCleanup('csv.release-retired', Effect.tryPromise(() => this.dropRetiredSourceTable(tableName)));
+    return observeCleanup('csv.release-retired', this.dropRetiredSourceTable(tableName));
   }
 
   /**
@@ -836,9 +835,11 @@ export class WorkingCsvStore {
     });
   }
 
-  private async retireSourceTable(tableName: string): Promise<void> {
-    this.artifactRegistry.transition(tableName, 'retired');
-    if (!this.tableLeases.has(tableName)) await this.dropRetiredSourceTable(tableName);
+  private retireSourceTable(tableName: string) {
+    return Effect.gen({ self: this }, function* () {
+      this.artifactRegistry.transition(tableName, 'retired');
+      if (!this.tableLeases.has(tableName)) yield* this.dropRetiredSourceTable(tableName);
+    });
   }
 
   private rollbackSourceRetirement(tableName: string): void {
@@ -856,49 +857,41 @@ export class WorkingCsvStore {
     );
   }
 
-  private async dropRetiredSourceTablesOwnedBy(workingCsvId: WorkingCsvId): Promise<void> {
-    for (const retired of this.retiredSourceTables()) {
-      if (retired.workingCsvId === workingCsvId) await this.dropRetiredSourceTable(retired.tableName);
-    }
+  private dropRetiredSourceTablesOwnedBy(workingCsvId: WorkingCsvId) {
+    return Effect.forEach(this.retiredSourceTables().filter((retired) => retired.workingCsvId === workingCsvId),
+      (retired) => this.dropRetiredSourceTable(retired.tableName), { discard: true });
   }
 
-  private async dropRetiredSourceTable(tableName: string): Promise<void> {
-    await dropWorkingCsvTable(this.table(tableName));
-    this.artifactRegistry.remove(tableName);
+  private dropRetiredSourceTable(tableName: string) {
+    return dropWorkingCsvTable(this.table(tableName)).pipe(
+      Effect.tap(() => Effect.sync(() => this.artifactRegistry.remove(tableName))),
+    );
   }
 
-  private requireWorkingCsv(workingCsvId: WorkingCsvId): WorkingCsvState {
-    const state = this.workingCsvs.get(workingCsvId);
-
-    if (!state) {
-      throw new WorkspaceRequestError({ message: 'Working CSV is no longer active.' });
-    }
-
-    return state;
+  private requireWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<WorkingCsvState, WorkspaceRequestError> {
+    return Effect.suspend(() => {
+      const state = this.workingCsvs.get(workingCsvId);
+      return state ? Effect.succeed(state) : Effect.fail(new WorkspaceRequestError({ message: 'Working CSV is no longer active.' }));
+    });
   }
 
-  private assertNotClosing(workingCsvId: WorkingCsvId): void {
-    if (this.closingWorkingCsvs.has(workingCsvId)) {
-      throw new WorkspaceRequestError({ message: 'Working CSV is closing.' });
-    }
+  private assertNotClosing(workingCsvId: WorkingCsvId): Effect.Effect<void, WorkspaceRequestError> {
+    return Effect.suspend(() => this.closingWorkingCsvs.has(workingCsvId)
+      ? Effect.fail(new WorkspaceRequestError({ message: 'Working CSV is closing.' })) : Effect.void);
   }
 
-  private assertAcceptingWork(): void {
-    if (this.lifecycle !== 'active') throw new WorkspaceRequestError({ message: 'CSV workspace is disposing.' });
+  private assertAcceptingWork(): Effect.Effect<void, WorkspaceRequestError> {
+    return Effect.suspend(() => this.lifecycle !== 'active'
+      ? Effect.fail(new WorkspaceRequestError({ message: 'CSV workspace is disposing.' })) : Effect.void);
   }
 
   /** One failing listener cannot suppress later listeners or fail the committed change. */
   private notifyDataChange(workingCsvId: WorkingCsvId): Effect.Effect<void> {
     return Effect.forEach([...this.dataChangeListeners], (listener) =>
-      attemptWorkspaceSync(() => listener(workingCsvId)).pipe(
+      Effect.sync(() => listener(workingCsvId)).pipe(
         Effect.catchCause((cause) => reportFailure('csv.notify-data-change', cause)),
       ), { discard: true });
   }
-}
-
-/** Adapts promise-based table work without turning unexpected defects into typed failures. */
-function attempt<A>(operation: () => Promise<A>): Effect.Effect<A, Error> {
-  return attemptWorkspacePromise(operation);
 }
 
 function commitDataChange(state: WorkingCsvState, rowCountDelta = 0): void {
@@ -959,10 +952,10 @@ function defaultColumnName(columns: readonly { name: string }[]): string {
   }
 }
 
-function requireColumnIndex(columns: readonly { name: string }[], name: string): number {
+function requireColumnIndex(columns: readonly { name: string }[], name: string): Result.Result<number, WorkspaceRequestError> {
   const index = columns.findIndex((column) => column.name === name);
-  if (index < 0) throw new WorkspaceRequestError({ message: `Unknown CSV column: ${name}` });
-  return index;
+  if (index < 0) return Result.fail(new WorkspaceRequestError({ message: `Unknown CSV column: ${name}` }));
+  return Result.succeed(index);
 }
 
 function hasConflictingColumnName(
@@ -984,12 +977,12 @@ function buildWorkingCsvView(state: WorkingCsvState): WorkingCsvView {
   };
 }
 
-function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
+function validateDialectOptions(options: CsvDialectOptions): Result.Result<CsvDialectOptions, CsvOpenError> {
   const dialect: Types.Mutable<CsvDialectOptions> = {};
 
   if (options.delimiter !== undefined && options.delimiter !== '') {
     if (options.delimiter.length !== 1) {
-      throw new CsvOpenError('Delimiter must be exactly one character.', 'dialect');
+      return Result.fail(new CsvOpenError('Delimiter must be exactly one character.', 'dialect'));
     }
 
     dialect.delimiter = options.delimiter;
@@ -999,7 +992,7 @@ function validateDialectOptions(options: CsvDialectOptions): CsvDialectOptions {
     dialect.header = options.header;
   }
 
-  return dialect;
+  return Result.succeed(dialect);
 }
 
 function isSupportedCsvSourceName(name: string): boolean {
