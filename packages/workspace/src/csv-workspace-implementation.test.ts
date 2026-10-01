@@ -30,10 +30,6 @@ describe('CSV source selection during workspace disposal', () => {
       connectWorker: unexpected,
       run: unexpected,
       readObjects: unexpected,
-      ownerConnectionEffect: unexpected,
-      connectWorkerEffect: unexpected,
-      runEffect: unexpected,
-      readObjectsEffect: unexpected,
       closeOwnerConnection: () => Effect.void,
       closeEngine: () => Effect.void,
     };

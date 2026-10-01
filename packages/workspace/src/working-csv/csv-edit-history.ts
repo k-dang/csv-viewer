@@ -86,10 +86,7 @@ export class CsvEditHistory {
     this.redoStack.length = 0;
   }
 
-  /**
-   * The command the next undo or redo replays. The history is unchanged until `commit` runs, so
-   * call it only after the replay succeeded.
-   */
+  /** Commit the history step only after its command replays successfully. */
   step(direction: 'undo' | 'redo'): Result.Result<CsvEditStep, WorkspaceRequestError> {
     const [from, to] = direction === 'undo' ? [this.undoStack, this.redoStack] : [this.redoStack, this.undoStack];
     return Result.map(

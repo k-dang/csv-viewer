@@ -219,10 +219,10 @@ export class WorkingCsvStore {
             })),
             Effect.mapError((error) => new DataEngineError(error)),
           ),
-          getOwnerConnection: () => this.database.ownerConnectionEffect(),
+          getOwnerConnection: () => this.database.ownerConnection(),
           connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
             if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError(new Error('CSV workspace is disposing.')));
-            return yield* this.database.connectWorkerEffect();
+            return yield* this.database.connectWorker();
           })),
         },
         this.artifactRegistry,
@@ -394,8 +394,8 @@ export class WorkingCsvStore {
         offset,
       }));
 
-      const [countRow] = yield* this.database.readObjectsEffect(query.countSql, query.values);
-      const rows = yield* this.database.readObjectsEffect(query.rowsSql, query.values);
+      const [countRow] = yield* this.database.readObjects(query.countSql, query.values);
+      const rows = yield* this.database.readObjects(query.rowsSql, query.values);
 
       return {
         workingCsvId: state.metadata.workingCsvId,
@@ -416,7 +416,7 @@ export class WorkingCsvStore {
         search: request.search ?? '',
         sort: request.sort ?? [],
       }));
-      const rows = yield* this.database.readObjectsEffect(query.sql, query.values);
+      const rows = yield* this.database.readObjects(query.sql, query.values);
 
       return {
         workingCsvId: state.metadata.workingCsvId,
@@ -437,7 +437,7 @@ export class WorkingCsvStore {
         filters: request.filters ?? [],
         search: request.search ?? '',
       }));
-      const rows = yield* this.database.readObjectsEffect(query.sql, query.values);
+      const rows = yield* this.database.readObjects(query.sql, query.values);
       const scopeRowCount = rows.length > 0 ? normalizeCount(rows[0].scope_row_count) : 0;
 
       return {
@@ -627,9 +627,9 @@ export class WorkingCsvStore {
       const prepared = yield* this.read(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
         const { metadata } = state;
         const connection = yield* Effect.acquireRelease(
-          this.database.connectWorkerEffect(),
-          // Carry release failure past the scope without turning a driver failure into a defect.
-          (worker) => worker.closeEffect().pipe(Effect.catch((error) => {
+          this.database.connectWorker(),
+          // Finalizers cannot fail; report a release failure after the scope closes.
+          (worker) => worker.close().pipe(Effect.catch((error) => {
             releaseFailure = error;
             return markCleanupFailed;
           })),
@@ -676,7 +676,7 @@ export class WorkingCsvStore {
       if (!isSupportedCsvSourceName(description.name)) {
         return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
       }
-      yield* observeStage('csv.prepare-table', this.database.ownerConnectionEffect().pipe(Effect.mapError(normalizeEngineError)));
+      yield* observeStage('csv.prepare-table', this.database.ownerConnection().pipe(Effect.mapError(normalizeEngineError)));
       const tableName = buildWorkingCsvTableName(crypto.randomUUID());
       const table = this.table(tableName);
       yield* Effect.acquireRelease(
@@ -722,7 +722,7 @@ export class WorkingCsvStore {
     return this.table(state.tableName);
   }
 
-  /** Runs Effect table work under a lease. Reads stay off the mutation queue. */
+  /** Reads hold a lease without joining the mutation queue. */
   private read<A, E>(workingCsvId: WorkingCsvId, operation: (state: WorkingCsvState) => Effect.Effect<A, E, Scope.Scope>): Effect.Effect<A, E | WorkspaceRequestError> {
     return Effect.scoped(this.lease(workingCsvId).pipe(Effect.flatMap(operation)));
   }

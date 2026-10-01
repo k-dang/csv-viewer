@@ -31,13 +31,13 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     const query = Promise.withResolvers<never>();
     const released: string[] = [];
     const connection = stubConnection({
-      readObjectsCancellableEffect: () => driverEffect(() => {
+      readObjectsCancellable: () => driverEffect(() => {
         started.resolve();
         return query.promise;
       }, async () => {
         cancelled.resolve();
       }),
-      closeEffect: () => Effect.sync(() => {
+      close: () => Effect.sync(() => {
         released.push('connection');
       }),
     });
@@ -70,11 +70,11 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
         released.push('source');
       }),
       connectWorker: () => Effect.succeed(stubConnection({
-        readObjectsCancellableEffect: () => Effect.sync(() => {
+        readObjectsCancellable: () => Effect.sync(() => {
           queried = true;
           return [];
         }),
-        closeEffect: () => Effect.sync(() => {
+        close: () => Effect.sync(() => {
           released.push('connection');
         }),
       })),
@@ -114,7 +114,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     await requested.promise;
     Effect.runFork(Fiber.interrupt(fiber));
     connection.resolve(stubConnection({
-      closeEffect: () => Effect.sync(() => {
+      close: () => Effect.sync(() => {
         closed = true;
       }),
     }));
@@ -126,7 +126,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
   it('releases the baseline and connection when candidate acquisition fails', async () => {
     const released: string[] = [];
     const connection = stubConnection({
-      closeEffect: () => Effect.sync(() => {
+      close: () => Effect.sync(() => {
         released.push('connection');
       }),
     });
@@ -155,8 +155,8 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     let closeFails = true;
     let workerClosed = false;
     const connection = stubConnection({
-      readObjectsCancellableEffect: () => Effect.fail(new DataEngineError(queryFailure)),
-      closeEffect: () => Effect.suspend(() => closeFails
+      readObjectsCancellable: () => Effect.fail(new DataEngineError(queryFailure)),
+      close: () => Effect.suspend(() => closeFails
         ? Effect.fail(new DataEngineError(new Error('close failed')))
         : Effect.sync(() => { workerClosed = true; })),
     });
@@ -184,13 +184,13 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
   it('continues independent disposal after a failed worker close', async () => {
     const dropped: string[] = [];
     const owner = stubConnection({
-      runEffect: (sql) => Effect.sync(() => {
+      run: (sql) => Effect.sync(() => {
         dropped.push(sql);
       }),
     });
     const worker = stubConnection({
-      readObjectsCancellableEffect: () => Effect.succeed(summary),
-      closeEffect: () => Effect.fail(new DataEngineError(new Error('close failed'))),
+      readObjectsCancellable: () => Effect.succeed(summary),
+      close: () => Effect.fail(new DataEngineError(new Error('close failed'))),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(worker),
@@ -213,7 +213,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     let dropped = false;
     let workerClosed = false;
     const owner = stubConnection({
-      readObjectsEffect: (sql) => Effect.suspend(() => {
+      readObjects: (sql) => Effect.suspend(() => {
         if (sql.includes('count(*)')) {
           const read = reads[readCount++];
           if (readCount === reads.length) readStarted.resolve();
@@ -221,14 +221,14 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
         }
         return Effect.succeed([]);
       }),
-      runEffect: () => Effect.sync(() => {
+      run: () => Effect.sync(() => {
         dropped = true;
       }),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(stubConnection({
-        readObjectsCancellableEffect: () => Effect.succeed(summary),
-        closeEffect: () => Effect.sync(() => {
+        readObjectsCancellable: () => Effect.succeed(summary),
+        close: () => Effect.sync(() => {
           workerClosed = true;
         }),
       })),
@@ -268,18 +268,16 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     const read = Promise.withResolvers<EngineRow[]>();
     let settled = false;
     let dropped = false;
-    let cancellationRequested = false;
     const owner = stubConnection({
-      readObjectsEffect: (sql) => Effect.suspend(() => {
+      readObjects: (sql) => Effect.suspend(() => {
         if (!sql.includes('count(*)')) return Effect.succeed([]);
         readStarted.resolve();
         return Effect.promise(() => read.promise);
       }),
-      cancelRunning: async () => { cancellationRequested = true; },
-      runEffect: () => Effect.sync(() => { dropped = true; }),
+      run: () => Effect.sync(() => { dropped = true; }),
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: () => Effect.succeed(stubConnection({ readObjectsCancellableEffect: () => Effect.succeed(summary) })),
+      connectWorker: () => Effect.succeed(stubConnection({ readObjectsCancellable: () => Effect.succeed(summary) })),
       getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
@@ -299,7 +297,6 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       await Effect.runPromise(Effect.yieldNow);
       expect(settled).toBe(false);
       expect(dropped).toBe(false);
-      expect(cancellationRequested).toBe(false);
     } finally {
       read.resolve([{ count: 0n }]);
       await Promise.all([interruption, retirement]);
