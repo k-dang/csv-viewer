@@ -84,11 +84,11 @@ export function holdNextRowRead(database: WorkspaceDatabase) {
 }
 
 export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise<void> {
-  const connection = await database.ownerConnection();
-  const run = connection.run.bind(connection);
-  connection.run = (sql, values) => {
+  const connection = await Effect.runPromise(database.ownerConnectionEffect());
+  const run = connection.runEffect.bind(connection);
+  connection.runEffect = (sql, values) => {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) return run(sql, values);
-    connection.run = run;
-    return Promise.reject(new Error('PRIVATE snapshot cleanup failure'));
+    connection.runEffect = run;
+    return Effect.fail(new DataEngineError(new Error('PRIVATE snapshot cleanup failure')));
   };
 }

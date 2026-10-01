@@ -1,6 +1,6 @@
 import { observeStage, retainDiagnosticContext } from '../workspace-diagnostics';
 import { Deferred, Effect, Exit, Cause, type Scope } from 'effect';
-import { cleanupEffect, comparisonQuery, databaseEffect } from './comparison-effects';
+import { cleanupEffect } from './comparison-effects';
 import type {
   ComparisonRow,
   ComparisonOperationId,
@@ -37,7 +37,7 @@ export type ComparisonSource = {
 export type DuckDbComparisonAccess = {
   /** Leases a Working CSV's current table until the calling scope closes. */
   acquireSource(workingCsvId: WorkingCsvId): Effect.Effect<ComparisonSource, DataEngineError, Scope.Scope>;
-  getOwnerConnection(): Promise<WorkspaceDatabaseConnection>;
+  getOwnerConnection(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError>;
   /** Admitted as workspace work, so disposal cannot close the database while it connects. */
   connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError>;
 };
@@ -62,10 +62,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const writer = yield* Effect.acquireRelease(
       this.database.connectWorker(),
       (connection) => Effect.gen({ self: this }, function* () {
-        const release = yield* retainDiagnosticContext(observeStage('comparison.release-worker', cleanupEffect(async () => {
-          await connection.close();
-          this.failedWorkers.delete(connection);
-        })));
+        const release = yield* retainDiagnosticContext(observeStage('comparison.release-worker', cleanupEffect(connection.closeEffect().pipe(
+          Effect.tap(() => Effect.sync(() => this.failedWorkers.delete(connection))),
+        ))));
         this.failedWorkers.set(connection, release);
         yield* release;
       }),
@@ -104,31 +103,31 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const keyOrder = key
       .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
       .join(', ');
-    const blankCountRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+    const blankCountRows = yield* writer.readObjectsCancellableEffect(
       `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
-    ));
-    const blankExampleRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+    );
+    const blankExampleRows = yield* writer.readObjectsCancellableEffect(
       `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id, ${keyProjection} FROM ${table}
        WHERE ${active} AND (${blank}) ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
-    ));
-    const duplicateCountRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+    );
+    const duplicateCountRows = yield* writer.readObjectsCancellableEffect(
       `SELECT count(*)::BIGINT AS count FROM (
         SELECT 1 FROM ${table} WHERE ${active} AND (${present}) GROUP BY ${keyGroup} HAVING count(*) > 1
       ) duplicate_groups`,
-    ));
-    const duplicateGroupRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+    );
+    const duplicateGroupRows = yield* writer.readObjectsCancellableEffect(
       `SELECT ${keyProjection}, count(*)::BIGINT AS row_count FROM ${table} WHERE ${active} AND (${present})
        GROUP BY ${keyGroup} HAVING count(*) > 1 ORDER BY ${keyOrder} LIMIT 5`,
-    ));
+    );
     const duplicateExamples: SourceKeyDiagnostics['duplicateExamples'] = [];
     for (const group of duplicateGroupRows) {
       const keyValues = key.map((_column, index) => String(group[`key_${index}`]));
       const conditions = key.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
-      const rowIdRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+      const rowIdRows = yield* writer.readObjectsCancellableEffect(
         `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${table}
          WHERE ${active} AND ${conditions} ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
         keyValues,
-      ));
+      );
       duplicateExamples.push({
         keyValues,
         rowCount: normalizeCount(group.row_count),
@@ -188,24 +187,24 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       owner: { kind: 'comparison', comparisonId: request.comparisonId, operationId: request.artifactId },
       role: 'staging',
     });
-    yield* comparisonQuery(writer, () => writer.runCancellable(
+    yield* writer.runCancellableEffect(
       `CREATE TABLE ${table} AS SELECT ${projection}
        FROM (SELECT * FROM ${quoteIdentifier(baseline.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) b
        FULL OUTER JOIN (SELECT * FROM ${quoteIdentifier(candidate.tableName)} WHERE ${quoteIdentifier(csvDeletedField)} = false) c ON ${join}`,
-    ));
+    );
     const changedSums = request.valueColumns
       .map(
         (_column, index) =>
           `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
       )
       .join(', ');
-    const summaryRows = yield* comparisonQuery(writer, () => writer.readObjectsCancellable(
+    const summaryRows = yield* writer.readObjectsCancellableEffect(
       `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
         coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
         coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
         coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
         count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
-    ));
+    );
     const row = summaryRows[0];
     return {
       rows: {
@@ -243,18 +242,18 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       this.acquireRead(request.artifactId),
       () => this.releaseRead(request.artifactId),
     );
-    const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
+    const connection = yield* this.database.getOwnerConnection();
     const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
     const where = request.differencesOnly ? ` WHERE classification <> 'unchanged'` : '';
     const order = Array.from({ length: request.keyCount }, (_value, index) =>
       `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
     ).join(', ');
-    const countRows = yield* databaseEffect(() => connection.readObjects(
+    const countRows = yield* connection.readObjectsEffect(
       `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
-    ));
-    const resultRows = yield* databaseEffect(() => connection.readObjects(
+    );
+    const resultRows = yield* connection.readObjectsEffect(
       `SELECT * FROM ${table}${where}${order ? ` ORDER BY ${order} ASC` : ''} LIMIT ${request.limit} OFFSET ${request.offset}`,
-    ));
+    );
     const rows = resultRows.map((row): ComparisonRow => {
       const classification = parseClassification(row.classification);
       const baselineSide =
@@ -369,8 +368,8 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const tableName = buildComparisonTableName(artifactId);
     this.artifactRegistry.transition(tableName, 'retired');
     yield* this.waitForReaders(artifactId);
-    const connection = yield* databaseEffect(() => this.database.getOwnerConnection());
-    yield* databaseEffect(() => connection.run(buildDropTableSql(tableName)));
+    const connection = yield* this.database.getOwnerConnection();
+    yield* connection.runEffect(buildDropTableSql(tableName));
     this.artifactRegistry.remove(tableName);
     this.snapshotReleases.delete(artifactId);
   });

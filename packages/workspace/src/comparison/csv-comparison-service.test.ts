@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, ManagedRuntime } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanupEffect, databaseEffect } from './comparison-effects';
+import { cleanupEffect } from './comparison-effects';
+import { DataEngineError } from '../database';
 import type {
   CloseComparisonResult,
   ComparisonOperationId,
@@ -103,11 +104,11 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
 
   openAttempt() {
     return Effect.acquireRelease(Effect.succeed({
-      validateKey: () => databaseEffect(() => this.validateKey()),
-      createSnapshot: (request: CreateComparisonSnapshotRequest) => databaseEffect(() => this.createSnapshot(request)).pipe(
+      validateKey: () => Effect.tryPromise({ try: () => this.validateKey(), catch: (cause) => new DataEngineError(cause) }),
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => Effect.tryPromise({ try: () => this.createSnapshot(request), catch: (cause) => new DataEngineError(cause) }).pipe(
         Effect.onInterrupt(() => Effect.sync(() => this.cancel(request.artifactId))),
       ),
-    }), () => cleanupEffect(() => this.release()));
+    }), () => cleanupEffect(Effect.tryPromise({ try: () => this.release(), catch: (cause) => new DataEngineError(cause) })));
   }
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
@@ -129,21 +130,20 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   }
 
   readWindow(_request: ReadComparisonSnapshotWindowRequest) {
-    return databaseEffect(async (): Promise<StoredComparisonWindow> => {
-      if (this.failWindowReads) throw new Error('scripted read failure');
-      return { totalRowCount: 0, rows: [] };
-    });
+    return Effect.suspend(() => this.failWindowReads
+      ? Effect.fail(new DataEngineError(new Error('scripted read failure')))
+      : Effect.succeed<StoredComparisonWindow>({ totalRowCount: 0, rows: [] }));
   }
 
   dropSnapshot(artifactId: string) {
-    return databaseEffect(async (): Promise<void> => {
+    return Effect.gen({ self: this }, function* () {
       this.droppedArtifacts.push(artifactId);
       if (this.deferDrops) {
-        await new Promise<void>((resolve) => this.pendingDrops.push(resolve));
+        yield* Effect.promise(() => new Promise<void>((resolve) => this.pendingDrops.push(resolve)));
       }
       if (this.dropFailuresRemaining > 0) {
         this.dropFailuresRemaining -= 1;
-        throw new Error('scripted drop failure');
+        return yield* Effect.fail(new DataEngineError(new Error('scripted drop failure')));
       }
     });
   }
@@ -168,7 +168,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
   }
 
   dispose() {
-    return databaseEffect(async (): Promise<void> => {
+    return Effect.sync(() => {
       this.releaseDrops();
       this.releaseWorkers();
       this.disposeCalled = true;

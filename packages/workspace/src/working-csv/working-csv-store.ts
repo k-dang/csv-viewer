@@ -219,7 +219,7 @@ export class WorkingCsvStore {
             })),
             Effect.mapError((error) => new DataEngineError(error)),
           ),
-          getOwnerConnection: () => this.database.ownerConnection(),
+          getOwnerConnection: () => this.database.ownerConnectionEffect(),
           connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
             if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError(new Error('CSV workspace is disposing.')));
             return yield* this.database.connectWorkerEffect();
