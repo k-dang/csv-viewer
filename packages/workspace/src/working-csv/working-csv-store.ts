@@ -1,7 +1,6 @@
 import { DataEngineError } from '../database';
 import { Cause, Deferred, Effect, Latch, Result, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure } from '../workspace-diagnostics';
-import { databaseEffect } from '../comparison/comparison-effects';
 import { attemptWorkspacePromise, attemptWorkspaceSync, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
@@ -220,10 +219,10 @@ export class WorkingCsvStore {
             })),
             Effect.mapError((error) => new DataEngineError(error)),
           ),
-          getOwnerConnection: () => this.database.ownerConnection(),
+          getOwnerConnection: () => this.database.ownerConnectionEffect(),
           connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
             if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError(new Error('CSV workspace is disposing.')));
-            return yield* databaseEffect(() => this.database.connectWorker());
+            return yield* this.database.connectWorkerEffect();
           })),
         },
         this.artifactRegistry,

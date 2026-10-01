@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Fiber } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
+import { DataEngineError, driverEffect, type WorkspaceDatabaseConnection } from '../database';
 import type { EngineRow } from '../query/csv-result-normalization';
 import { stubConnection } from '../../test/stub-connection';
 import { DuckDbComparisonExecutor, type ComparisonSource } from './duckdb-comparison-executor';
@@ -31,25 +31,22 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     const query = Promise.withResolvers<never>();
     const released: string[] = [];
     const connection = stubConnection({
-      readObjectsCancellable: () => {
+      readObjectsCancellableEffect: () => driverEffect(() => {
         started.resolve();
         return query.promise;
-      },
-      cancelRunning: async () => {
+      }, async () => {
         cancelled.resolve();
-      },
-      close: async () => {
+      }),
+      closeEffect: () => Effect.sync(() => {
         released.push('connection');
-      },
+      }),
     });
     const executor = new DuckDbComparisonExecutor({
       acquireSource: () => source(() => {
         released.push('source');
       }),
       connectWorker: () => Effect.succeed(connection),
-      getOwnerConnection: async () => {
-        throw new Error('Cancellation must not use the owner connection.');
-      },
+      getOwnerConnection: () => Effect.die(new Error('Cancellation must not use the owner connection.')),
     });
     const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -73,15 +70,15 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
         released.push('source');
       }),
       connectWorker: () => Effect.succeed(stubConnection({
-        readObjectsCancellable: () => {
+        readObjectsCancellableEffect: () => Effect.sync(() => {
           queried = true;
-          return Promise.resolve([]);
-        },
-        close: async () => {
+          return [];
+        }),
+        closeEffect: () => Effect.sync(() => {
           released.push('connection');
-        },
+        }),
       })),
-      getOwnerConnection: async () => stubConnection(),
+      getOwnerConnection: () => Effect.succeed(stubConnection()),
     });
     const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -108,7 +105,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
         queried = true;
         return source();
       }),
-      getOwnerConnection: async () => stubConnection(),
+      getOwnerConnection: () => Effect.succeed(stubConnection()),
     });
     const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
@@ -117,9 +114,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     await requested.promise;
     Effect.runFork(Fiber.interrupt(fiber));
     connection.resolve(stubConnection({
-      close: async () => {
+      closeEffect: () => Effect.sync(() => {
         closed = true;
-      },
+      }),
     }));
     expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(fiber)))).toBe(true);
     expect(closed).toBe(true);
@@ -129,13 +126,13 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
   it('releases the baseline and connection when candidate acquisition fails', async () => {
     const released: string[] = [];
     const connection = stubConnection({
-      close: async () => {
+      closeEffect: () => Effect.sync(() => {
         released.push('connection');
-      },
+      }),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(connection),
-      getOwnerConnection: async () => connection,
+      getOwnerConnection: () => Effect.succeed(connection),
       acquireSource: (id) => id === 'candidate'
         ? Effect.fail(new DataEngineError(new Error('candidate unavailable')))
         : source(() => {
@@ -153,23 +150,19 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     ]);
   });
 
-  it.each(['throws', 'rejects'] as const)('retains query and cleanup causes when the driver %s and retries cleanup', async (failureMode) => {
+  it('retains typed query and cleanup causes and retries cleanup', async () => {
     const queryFailure = new Error('query failed');
     let closeFails = true;
     let workerClosed = false;
     const connection = stubConnection({
-      readObjectsCancellable: () => {
-        if (failureMode === 'throws') throw queryFailure;
-        return Promise.reject(queryFailure);
-      },
-      close: async () => {
-        if (closeFails) throw new Error('close failed');
-        workerClosed = true;
-      },
+      readObjectsCancellableEffect: () => Effect.fail(new DataEngineError(queryFailure)),
+      closeEffect: () => Effect.suspend(() => closeFails
+        ? Effect.fail(new DataEngineError(new Error('close failed')))
+        : Effect.sync(() => { workerClosed = true; })),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(connection),
-      getOwnerConnection: async () => connection,
+      getOwnerConnection: () => Effect.succeed(connection),
       acquireSource: () => source(),
     });
     const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
@@ -181,7 +174,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       { cause: queryFailure },
     ]);
     expect(exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)).toMatchObject([
-      { name: 'ComparisonCleanupError', cause: { message: 'close failed' } },
+      { name: 'ComparisonCleanupError', cause: { name: 'DataEngineError', cause: { message: 'close failed' } } },
     ]);
     closeFails = false;
     await Effect.runPromise(executor.dispose());
@@ -191,19 +184,17 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
   it('continues independent disposal after a failed worker close', async () => {
     const dropped: string[] = [];
     const owner = stubConnection({
-      run: async (sql) => {
+      runEffect: (sql) => Effect.sync(() => {
         dropped.push(sql);
-      },
+      }),
     });
     const worker = stubConnection({
-      readObjectsCancellable: async () => summary,
-      close: async () => {
-        throw new Error('close failed');
-      },
+      readObjectsCancellableEffect: () => Effect.succeed(summary),
+      closeEffect: () => Effect.fail(new DataEngineError(new Error('close failed'))),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(worker),
-      getOwnerConnection: async () => owner,
+      getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
     await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
@@ -222,26 +213,26 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     let dropped = false;
     let workerClosed = false;
     const owner = stubConnection({
-      readObjects: (sql) => {
+      readObjectsEffect: (sql) => Effect.suspend(() => {
         if (sql.includes('count(*)')) {
           const read = reads[readCount++];
           if (readCount === reads.length) readStarted.resolve();
-          return read.promise;
+          return Effect.promise(() => read.promise);
         }
-        return Promise.resolve([]);
-      },
-      run: async () => {
+        return Effect.succeed([]);
+      }),
+      runEffect: () => Effect.sync(() => {
         dropped = true;
-      },
+      }),
     });
     const executor = new DuckDbComparisonExecutor({
       connectWorker: () => Effect.succeed(stubConnection({
-        readObjectsCancellable: async () => summary,
-        close: async () => {
+        readObjectsCancellableEffect: () => Effect.succeed(summary),
+        closeEffect: () => Effect.sync(() => {
           workerClosed = true;
-        },
+        }),
       })),
-      getOwnerConnection: async () => owner,
+      getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
@@ -279,17 +270,17 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     let dropped = false;
     let cancellationRequested = false;
     const owner = stubConnection({
-      readObjects: (sql) => {
-        if (!sql.includes('count(*)')) return Promise.resolve([]);
+      readObjectsEffect: (sql) => Effect.suspend(() => {
+        if (!sql.includes('count(*)')) return Effect.succeed([]);
         readStarted.resolve();
-        return read.promise;
-      },
+        return Effect.promise(() => read.promise);
+      }),
       cancelRunning: async () => { cancellationRequested = true; },
-      run: async () => { dropped = true; },
+      runEffect: () => Effect.sync(() => { dropped = true; }),
     });
     const executor = new DuckDbComparisonExecutor({
-      connectWorker: () => Effect.succeed(stubConnection({ readObjectsCancellable: async () => summary })),
-      getOwnerConnection: async () => owner,
+      connectWorker: () => Effect.succeed(stubConnection({ readObjectsCancellableEffect: () => Effect.succeed(summary) })),
+      getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
