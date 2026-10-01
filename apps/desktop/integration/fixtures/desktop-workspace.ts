@@ -24,7 +24,7 @@ import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/wo
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -116,6 +116,10 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
   failNextCsvLoad(): void { failNextCsvLoad(this.database); }
+
+  failNextExportPreparation(failure: 'read' | 'serialization') { return failNextExportPreparation(this.database, failure); }
+
+  failNextExportWorkerRelease(): void { failNextExportWorkerRelease(this.database); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
   failNextEngineSourceRelease(): void {

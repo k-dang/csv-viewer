@@ -163,7 +163,7 @@ describe('web CsvViewer composition', () => {
     viewer = started.viewer;
     await expect(viewer.call({ operation: 'csv.open' })).resolves.toMatchObject({ status: 'opened' });
     const owner = await database.ownerConnection();
-    const run = vi.spyOn(owner, 'run');
+    const run = vi.spyOn(owner, 'runEffect');
 
     Deferred.doneUnsafe(database.stopped, Effect.void);
     await viewer.dispose();

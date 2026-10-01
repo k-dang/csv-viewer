@@ -26,9 +26,8 @@ export type DuckDbWasmDatabaseOptions = {
 };
 
 /**
- * The driver calls in flight on one engine. DuckDB-Wasm drops the requests a failed Worker held
- * without settling them, so stopping the engine rejects every tracked call instead. That keeps
- * each database Effect's interruption, which waits for its call to settle, from waiting forever.
+ * DuckDB-Wasm drops pending requests when its Worker fails. Reject them here so queries and
+ * interruption can settle after an engine stop.
  */
 class EngineCalls {
   private readonly pending = new Set<(error: Error) => void>();
@@ -89,8 +88,12 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
   }
 
   readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
-    return this.calls.effect(() => this.readStreamedRows(sql, values), async () => {
-      await this.connection.cancelSent();
+    return Effect.suspend(() => {
+      let cancelled = false;
+      return this.calls.effect(() => this.readStreamedRows(sql, values, () => cancelled), async () => {
+        cancelled = true;
+        await this.connection.cancelSent();
+      });
     });
   }
 
@@ -151,12 +154,17 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
     }
   }
 
-  private async readStreamedRows(sql: string, values?: QueryValues): Promise<EngineRow[]> {
+  private async readStreamedRows(sql: string, values: QueryValues | undefined, isCancelled: () => boolean): Promise<EngineRow[]> {
     let statement: AsyncPreparedStatement | undefined;
     try {
-      const stream = values?.length
-        ? await (statement = await this.connection.prepare(sql)).send(...values)
-        : await this.connection.send(sql);
+      let stream: Awaited<ReturnType<AsyncDuckDBConnection['send']>>;
+      if (values?.length) {
+        statement = await this.connection.prepare(sql);
+        if (isCancelled()) return [];
+        stream = await statement.send(...values);
+      } else {
+        stream = await this.connection.send(sql);
+      }
       const rows: EngineRow[] = [];
       for await (const batch of stream) {
         for (const row of batch) {

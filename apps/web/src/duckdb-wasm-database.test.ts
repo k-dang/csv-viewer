@@ -1,6 +1,6 @@
-import { AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
+import { AsyncDuckDBConnection, AsyncPreparedStatement } from '@duckdb/duckdb-wasm';
 import { stoppedEngineMessage } from '@csv-viewer/workspace/database';
-import { Deferred, Effect, Fiber } from 'effect';
+import { Deferred, Effect, Exit, Fiber } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNodeDuckDbWasmDatabase, nodeWasmOptions } from '../integration/fixtures/wasm-workspace';
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
@@ -48,6 +48,52 @@ async function openCrashableDatabase() {
 }
 
 describe('DuckDbWasmWorkspaceDatabase', () => {
+  it('cancels a parameterized query during preparation without executing it', async () => {
+    database = await openNodeDatabase();
+    const worker = await Effect.runPromise(database.connectWorkerEffect());
+    const prepared = Promise.withResolvers<void>();
+    const releasePreparation = Promise.withResolvers<void>();
+    const cancelled = Promise.withResolvers<void>();
+    const prepare = AsyncDuckDBConnection.prototype.prepare;
+    const cancelSent = AsyncDuckDBConnection.prototype.cancelSent;
+    const close = vi.spyOn(AsyncPreparedStatement.prototype, 'close');
+    vi.spyOn(AsyncDuckDBConnection.prototype, 'prepare').mockImplementation(async function (this: AsyncDuckDBConnection, sql: string) {
+      const statement = await prepare.call(this, sql);
+      prepared.resolve();
+      await releasePreparation.promise;
+      return statement;
+    });
+    const cancel = vi.spyOn(AsyncDuckDBConnection.prototype, 'cancelSent').mockImplementation(async function (this: AsyncDuckDBConnection) {
+      try {
+        return await cancelSent.call(this);
+      } finally {
+        cancelled.resolve();
+      }
+    });
+    try {
+      const work = Effect.runFork(worker.readObjectsCancellableEffect(
+        'CREATE TABLE missed_cancel AS SELECT ?::INTEGER AS answer', [42],
+      ));
+      await prepared.promise;
+      const interruption = Effect.runPromise(Fiber.interrupt(work));
+      await cancelled.promise;
+      releasePreparation.resolve();
+
+      await interruption;
+      await expect(cancel.mock.results[0].value).resolves.toBe(false);
+      expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
+      expect(close).toHaveBeenCalledOnce();
+      await expect(Effect.runPromise(database.readObjectsEffect(
+        "SELECT count(*) AS count FROM information_schema.tables WHERE table_name = 'missed_cancel'",
+      ))).resolves.toEqual([{ count: 0n }]);
+      await expect(Effect.runPromise(worker.readObjectsEffect('SELECT 42 AS answer')))
+        .resolves.toEqual([{ answer: 42 }]);
+    } finally {
+      releasePreparation.resolve();
+      await Effect.runPromise(worker.closeEffect());
+    }
+  });
+
   it('runs parameterized queries on the pinned in-memory DuckDB core', async () => {
     database = await openNodeDatabase();
 

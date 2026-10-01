@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
-import { cleanupEffect, databaseEffect } from '../../src/comparison/comparison-effects';
+import { cleanupEffect } from '../../src/comparison/comparison-effects';
+import { DataEngineError } from '../../src/database';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
@@ -33,17 +34,13 @@ class ControlledExecutor implements ComparisonExecutor {
 
   openAttempt() {
     return Effect.acquireRelease(Effect.succeed({
-      validateKey: () => databaseEffect(() => this.validateKey()),
+      validateKey: () => Effect.succeed(validDiagnostics),
       // Wait for releaseCancellation() before finishing interruption.
-      createSnapshot: (request: CreateComparisonSnapshotRequest) => databaseEffect(() => this.createSnapshot(request)).pipe(Effect.uninterruptible),
-    }), () => cleanupEffect(async () => {
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => Effect.tryPromise({ try: () => this.createSnapshot(request), catch: (cause) => new DataEngineError(cause) }).pipe(Effect.uninterruptible),
+    }), () => cleanupEffect(Effect.gen({ self: this }, function* () {
       this.cleanupStarted.resolve();
-      if (this.holdCleanup) await this.cleanupAllowed.promise;
-    }));
-  }
-
-  async validateKey(): Promise<SourceKeyDiagnostics> {
-    return validDiagnostics;
+      if (this.holdCleanup) yield* Effect.promise(() => this.cleanupAllowed.promise);
+    })));
   }
 
   createSnapshot(_request: CreateComparisonSnapshotRequest): Promise<ComparisonSummary> {
@@ -94,22 +91,22 @@ function waitForComparing(fixture: WorkspaceContractFixture, comparisonId: strin
 export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} CsvWorkspace lifecycle`, () => {
     let fixture: WorkspaceContractFixture;
-    let controlledFixture: WorkspaceContractFixture | undefined;
     let executor: ControlledExecutor;
 
     beforeEach(async () => {
       fixture = await factory.create();
-      controlledFixture = undefined;
     });
 
     afterEach(async () => {
-      await Promise.all([fixture.dispose(), controlledFixture?.dispose()]);
+      await fixture.dispose();
     });
 
     async function createControlledFixture(): Promise<WorkspaceContractFixture> {
+      // Opening another Wasm fixture resets the shared engine, so release its current owner first.
+      await fixture.dispose();
       executor = new ControlledExecutor();
-      controlledFixture = await factory.create(executor);
-      return controlledFixture;
+      fixture = await factory.create(executor);
+      return fixture;
     }
 
     it('executes, reads, swaps, and cleans up a real comparison', async () => {
