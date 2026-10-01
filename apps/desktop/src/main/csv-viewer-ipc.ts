@@ -1,7 +1,7 @@
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
-import { genericWorkspaceFailure, type WorkspaceRequestError } from '@csv-viewer/workspace/errors';
+import { genericWorkspaceFailure, isExpectedWorkspaceError, type WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import path from 'node:path';
-import { Cause, Effect, Exit, Schema } from 'effect';
+import { Effect, Exit, Schema } from 'effect';
 import type { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 import type { CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
 import { ipcChannels } from '../ipc-channels';
@@ -42,7 +42,7 @@ export function registerDroppedSourceHandler(
     const exit = await Effect.runPromiseExit(Effect.suspend(() => acquire(filePath)));
     if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };
     const [reason] = exit.cause.reasons;
-    const message = !Cause.hasDies(exit.cause) && reason?._tag === 'Fail'
+    const message = exit.cause.reasons.length === 1 && reason._tag === 'Fail' && isExpectedWorkspaceError(reason.error)
       ? reason.error.message : genericWorkspaceFailure;
     return { ok: false, message };
   });

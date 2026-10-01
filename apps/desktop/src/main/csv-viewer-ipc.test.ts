@@ -84,6 +84,13 @@ describe('CsvViewer Electron request bridge', () => {
     expect(unexpected).toEqual({ ok: false, message: 'The CSV workspace could not complete the request.' });
     expect(JSON.stringify(unexpected)).not.toContain('PRIVATE');
 
+    const unexpectedAcquire = () => Effect.fail(new Error('PRIVATE unexpected failure at C:\\PRIVATE-MISSING.csv'));
+    // SAFETY: Deliberately violates the host's typed failure contract to test IPC sanitization.
+    registerDroppedSourceHandler(ipc, unexpectedAcquire as never);
+    await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
+      ok: false, message: 'The CSV workspace could not complete the request.',
+    });
+
     registerDroppedSourceHandler(ipc, () => Effect.die(new CsvSourceUnavailableError('unreadable', 'PRIVATE unexpected source error.')));
     await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
       ok: false, message: 'The CSV workspace could not complete the request.',
