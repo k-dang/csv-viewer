@@ -14,6 +14,12 @@ Working CSV work coordinates through three primitives in the store:
 - **Mutation queue.** Cell edits, row and column edits, undo, redo, and reopen run one at a time per Working CSV, in call order. A mutation takes its lease and its queue position when the request starts, so a close waits for queued work. When its turn begins, it resolves the current Working CSV state, so work queued behind a reopen runs against the replacement. Reads stay off the queue and run concurrently.
 - **Admission.** Opens and reopens hold an admission until their scope closes. A Comparison worker connection holds one only while it connects. Comparison disposal closes open worker connections before the store releases tables. Disposal stops new admission and waits for admitted work before it releases tables and the database.
 
+## Database operations
+
+Aligned Comparison composes the database's typed Effects directly, including owner reads, worker acquisition, cancellable queries, and releases. Runtime adapters classify driver failures once. Interrupting a cancellable query cancels and awaits driver work; other database operations cannot be interrupted before the driver settles. Worker release failures retain their separate `cleanup-failed` diagnostics and remain available for disposal to retry.
+
+Working CSV operations still use the transitional Promise surface until their migration. Promise adaptation belongs inside runtime adapters; once that migration is complete, the shared entry adapter will be the workspace's only Promise boundary.
+
 ## Open and reopen
 
 An open operation reserves a Working CSV table as a staging artifact before loading the CSV Source. Inside that scope, it acquires an engine-readable source reference, loads the table, then releases the reference. A source release failure is reported as cleanup failure without discarding a successfully loaded Working CSV. The staging finalizer drops the table unless publication marks it current. If a drop fails, the artifact stays registered so workspace disposal can retry it. The admission covers the Recent CSV Source write, so disposal waits for accepted opens.

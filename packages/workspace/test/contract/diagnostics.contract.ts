@@ -596,7 +596,7 @@ function failingExecutor(mode: 'recoverable-failure' | 'defect' | 'cleanup-faile
     openAttempt: () => Effect.acquireRelease(Effect.succeed({
       validateKey: () => Effect.succeed({ blankRowCount: 0, duplicateGroupCount: 0, blankExamples: [], duplicateExamples: [] }),
       createSnapshot: () => Effect.sync(entered).pipe(Effect.andThen(snapshot)),
-    }), () => cleanupEffect(async () => { if (mode === 'cleanup-failed') throw driverError; })),
+    }), () => cleanupEffect(mode === 'cleanup-failed' ? Effect.fail(new DataEngineError(driverError)) : Effect.void)),
     activateSnapshot: () => undefined,
     readWindow: () => Effect.succeed({ totalRowCount: 0, rows: [] }),
     dropSnapshot: () => Effect.void,
@@ -609,14 +609,15 @@ function retryCleanupExecutor(): ComparisonExecutor {
   const secret = new Error('PRIVATE driver failure');
   let closeFails = true;
   const connection = stubConnection({
-    readObjectsCancellable: async () => { throw secret; },
-    close: async () => {
-      if (closeFails) { closeFails = false; throw secret; }
-    },
+    readObjectsCancellableEffect: () => Effect.fail(new DataEngineError(secret)),
+    closeEffect: () => Effect.suspend(() => {
+      if (closeFails) { closeFails = false; return Effect.fail(new DataEngineError(secret)); }
+      return Effect.void;
+    }),
   });
   return new DuckDbComparisonExecutor({
     connectWorker: () => Effect.succeed(connection),
-    getOwnerConnection: async () => connection,
+    getOwnerConnection: () => Effect.succeed(connection),
     acquireSource: () => Effect.succeed({ tableName: 'PRIVATE-table', columns: [{ name: 'id', type: 'VARCHAR' }] }),
   });
 }
