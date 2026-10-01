@@ -60,7 +60,7 @@ Preconditions:
 - The Recent list heading reads `RECENT CSV SOURCES` in `text` and `wait` (CSS uppercase). `wait --text "Recent CSV Sources"` times out. The seeded buttons keep their file names.
 - A Recent CSV Source whose path is gone does not stay as a dead button. The empty window drops it from the list and from `recent-files.json`.
 - Wait for grid values after metadata appears. The row count can paint before the cells.
-- An edited tab's accessible name includes Unexported Changes. An exact filename match can select a different tab when names repeat.
+- The helper's tab name is the file name. The dirty marker is a separate image named `Unexported Changes`. `--role tab --name "Unexported Changes"` matches nothing. Two tabs with the same file name are ambiguous. Pass `--nth`.
 - A drop during loading is declined, not queued. Retry after loading completes.
 - A drop while any dialog is open is declined silently, and the Copy column toast counts as one (`role="dialog"`). Close toasts with `click --role button --name "Close toast" --nth 0` before dropping.
 - Folders are rejected even when their names end in .csv. Text and in-app grid drags must retain their normal behavior.
