@@ -14,14 +14,17 @@
 - [x] Update the workspace README to describe where Promises are allowed and replace obsolete Promise-adapter comments. The database interface documents interruption behavior for both query kinds. Remove obsolete documentation and temporary migration notes from production code.
 - [x] All existing shared CsvViewer contract cases pass unchanged on native DuckDB and DuckDB-Wasm, including expected-failure and defect diagnostics. Preserve assertions while adapting fixture mechanisms. Do not add tests counting adapters or asserting a particular Effect combinator.
 - [x] Real-driver cancellation, settlement, and sanitization tests from ticket 02 pass, along with controlled Comparison executor, host, IPC, startup/fatal-stop, lifecycle, and export coverage. Timing tests use synchronization barriers rather than sleeps.
-- [ ] With the verification skill on desktop and web: open a CSV Source, search/filter, edit cells, attempt a blank column rename, undo/redo, Export CSV, run and cancel an Aligned Comparison, and close. Confirm the existing messages and results, inspect edit and cancellation diagnostics, and confirm reopen and desktop quit behavior remain intact.
-- [ ] Complete the remaining resource-lifetime web UI verification: open two CSV Sources, run and cancel an Aligned Comparison, reopen with changed dialect options, and reload during startup. Read startup, acquisition, and release diagnostics; inspect checking, unsupported, and fatal states for visual defects. Record any checks requiring human interaction as pending rather than treating automated coverage as completed visual verification.
+- [x] With the verification skill on desktop and web: open a CSV Source, search/filter, edit cells, attempt a blank column rename, undo/redo, run and cancel an Aligned Comparison, reopen, and close. Confirm the existing messages and results, inspect edit and cancellation diagnostics, and verify web Export CSV through the downloaded bytes and cleared Unexported Changes state.
+- [x] Complete resource-lifetime web UI verification for opening two CSV Sources, running and cancelling an Aligned Comparison, reopening with changed dialect options, and reloading during startup. Read startup, acquisition, source/table/worker release diagnostics, and inspect the checking state for visual defects.
+- [ ] Complete desktop native Export CSV and quit/menu verification with human interaction.
+- [ ] Inspect unsupported-browser and fatal web states using an unsupported browser and a real Worker failure.
+- [ ] Capture complete live old-workspace database-release diagnostics after browser navigation.
 - [x] Required type, lint, and test checks and both desktop and web builds pass. Record verification results and any justified store-size increase in ticket comments. No changes to lease, queue, admission, artifact registry, or resource-lifetime rules are introduced.
 
 ## Comments
 
 - This is the contract step, blocked by every consumer migration. Verification performed in earlier tickets remains useful evidence; run the complete final checks here without adding redundant smoke tests or tests for deleted implementation details.
-- The removed resource-lifetime tickets had completed implementation and automated checks. Their last UI pass opened two CSV Sources, applied a Comparison, reopened with changed dialect options, and inspected acquisition and release diagnostics. Comparison finished before cancellation could be clicked; reload during startup and checking/unsupported/fatal visual verification remained pending. The checkbox above carries that unfinished verification forward.
+- The removed resource-lifetime tickets had completed implementation and automated checks. This ticket completed their remaining Comparison cancellation, startup reload, and checking-state visual verification. Unsupported/fatal visuals and complete post-navigation release diagnostics remain pending above.
 
 ### Implementation and boundary audit (2026-10-01)
 
@@ -54,7 +57,7 @@ A direct CDP navigation on the isolated browser caught the real Checking browser
 
 ### Remaining manual verification
 
-The two live-verification checklist items remain unchecked because their required manual paths are not certified:
+Completed live flows are checked separately above. These checks remain pending:
 
 - Desktop native Export CSV dialog and quit/menu behavior. The exact verification skill rule is: "Desktop Export CSV requires a human to finish the OS dialog. An enabled button is not export proof." Its native-control limitation also states: "CDP cannot trigger Electron menu accelerators." The unattended pass therefore did not invoke those dialogs or claim quit from process cleanup. Shared contracts, host/IPC, and desktop intent/disposal specs passed.
 - Web unsupported-browser and fatal-state visual inspection. The feature guide requires an unsupported browser and a real Worker failure, and says "Leave it unverified rather than faking it." No such browser or user path to crash the Worker was available. Existing startup/fatal-state automated tests passed. Checking-state visual inspection and reload during startup are now complete, rather than carried forward again.
