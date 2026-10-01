@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -86,9 +87,8 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         },
         path.join(directory, 'recent-sources.json'),
       );
-      const opening = DuckDbWorkspaceDatabase.open();
-      const workspace = await createCsvViewer(() => opening, host, { executor, diagnostics });
-      const database = await opening;
+      const database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
+      const workspace = await createCsvViewer(Effect.succeed(database), host, { executor, diagnostics });
       return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
     } catch (error) {
       await rm(directory, { recursive: true, force: true });

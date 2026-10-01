@@ -253,7 +253,7 @@ function confirmWorkspaceCloseOnce(
 app.whenReady().then(async () => {
   registerContentSecurityPolicy();
   createApplicationMenu();
-  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open, workspaceHost);
+  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost);
   registerCsvViewerRequestHandler(ipcMain, workspace);
   registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
   workspace.onEvent(sendEvent);

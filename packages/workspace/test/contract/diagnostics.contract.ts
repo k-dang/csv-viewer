@@ -1,7 +1,6 @@
 import { Effect, Logger } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { DuckDbComparisonExecutor } from '../../src/comparison/duckdb-comparison-executor';
-import type { WorkspaceDatabaseConnection } from '../../src/database';
 import { DataEngineError } from '../../src/database';
 import { cleanupEffect } from '../../src/comparison/comparison-effects';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
@@ -9,6 +8,7 @@ import type { ComparisonSummary } from '../../src/csv-viewer';
 import type { WorkspaceContractFixture } from './workspace-contract';
 import type { WorkspaceContractFactory } from './workspace-contract';
 import { diagnosticCapture } from '../diagnostic-capture';
+import { stubConnection } from '../stub-connection';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
@@ -608,16 +608,12 @@ function failingExecutor(mode: 'recoverable-failure' | 'defect' | 'cleanup-faile
 function retryCleanupExecutor(): ComparisonExecutor {
   const secret = new Error('PRIVATE driver failure');
   let closeFails = true;
-  const connection: WorkspaceDatabaseConnection = {
-    run: async () => undefined,
-    readObjects: async () => [],
-    runCancellable: async () => undefined,
+  const connection = stubConnection({
     readObjectsCancellable: async () => { throw secret; },
-    cancelRunning: async () => undefined,
     close: async () => {
       if (closeFails) { closeFails = false; throw secret; }
     },
-  };
+  });
   return new DuckDbComparisonExecutor({
     connectWorker: () => Effect.succeed(connection),
     getOwnerConnection: async () => connection,

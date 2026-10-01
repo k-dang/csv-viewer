@@ -154,7 +154,7 @@ function createQuietWorker(reference: string): NodeWebWorker {
   return new WebWorker(`data:text/javascript,${encodeURIComponent(bootstrap)}`, { type: 'module', }) as NodeWebWorker;
 }
 
-const nodeWasmOptions = {
+export const nodeWasmOptions = {
   mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-eh.wasm'),
   mainWorker: pathToFileURL(require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-eh.worker.cjs')).toString(),
   createWorker: (reference: string) =>
@@ -240,7 +240,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = await createCsvViewer(() => database.open(), host, { executor, diagnostics });
+    const workspace = await createCsvViewer(database.open(), host, { executor, diagnostics });
     return new WasmWorkspaceFixture(workspace, database, host);
   }
 

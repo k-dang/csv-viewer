@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { DataEngineError, type OwnedWorkspaceDatabase, type WorkspaceDatabase } from '../../src/database';
 
 export function failNextMetadataRead(database: WorkspaceDatabase): void {
@@ -29,10 +30,9 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
 
 export function failNextDatabaseRelease(database: OwnedWorkspaceDatabase): void {
   const close = database.closeOwnerConnection.bind(database);
-  database.closeOwnerConnection = async () => {
+  database.closeOwnerConnection = () => {
     database.closeOwnerConnection = close;
-    await close();
-    throw new Error('PRIVATE database release failure');
+    return close().pipe(Effect.andThen(Effect.fail(new DataEngineError(new Error('PRIVATE database release failure')))));
   };
 }
 

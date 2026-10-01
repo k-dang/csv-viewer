@@ -1,41 +1,37 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DuckDBConnection, DuckDBPendingResult } from '@duckdb/node-api';
+import { Effect } from 'effect';
+import { afterEach, expect, it, vi } from 'vitest';
+import { describeDatabaseInterruption, driverMethod } from '../../../../packages/workspace/test/contract/database-interruption.contract';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 
-let database: DuckDbWorkspaceDatabase;
-
-beforeEach(async () => {
-  database = await DuckDbWorkspaceDatabase.open();
+describeDatabaseInterruption('DuckDbWorkspaceDatabase', {
+  open: () => Effect.runPromise(DuckDbWorkspaceDatabase.open()),
+  cancellableStart: driverMethod(DuckDBConnection.prototype, 'start'),
+  cancellableExecution: driverMethod(DuckDBPendingResult.prototype, 'readAll'),
+  read: driverMethod(DuckDBConnection.prototype, 'runAndReadAll'),
 });
 
-afterEach(async () => {
-  await database.closeOwnerConnection();
-  await database.closeEngine();
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
-describe('DuckDbWorkspaceDatabase', () => {
-  it('normalizes driver query errors', async () => {
-    await expect(database.readObjects('SELECT * FROM missing_table')).rejects.toMatchObject({
-      name: 'DataEngineError',
-      message: 'The data engine could not complete the operation.',
-    });
-  });
+// Comparison cancellation still uses the Promise surface until the executor moves to Effects.
+it('cancels Promise-surface work cancelled before the driver starts executing it', async () => {
+  const database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
+  const worker = await database.connectWorker();
+  const started = driverMethod(DuckDBConnection.prototype, 'start').observe();
+  const work = worker.runCancellable(
+    'CREATE TABLE cancelled_work AS SELECT sum(a.range * b.range) FROM range(1000000) a, range(1000000) b',
+  );
+  await started;
 
-  it('interrupts long work without publishing its table and keeps the connection usable', async () => {
-    const worker = await database.connectWorker();
-    const work = worker.runCancellable(
-      'CREATE TABLE cancelled_native_work AS SELECT sum(a.range * b.range) FROM range(1000000) a, range(1000000) b',
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  await worker.cancelRunning();
 
-    await worker.cancelRunning();
-
-    await expect(work).rejects.toThrow();
-    await expect(
-      database.readObjects(
-        "SELECT count(*)::BIGINT AS count FROM information_schema.tables WHERE table_name = 'cancelled_native_work'",
-      ),
-    ).resolves.toEqual([{ count: 0n }]);
-    await expect(worker.readObjects('SELECT 42 AS answer')).resolves.toEqual([{ answer: 42 }]);
-    await worker.close();
-  }, 15_000);
-});
+  await expect(work).rejects.toThrow();
+  await expect(database.readObjects(
+    "SELECT count(*)::BIGINT AS count FROM information_schema.tables WHERE table_name = 'cancelled_work'",
+  )).resolves.toEqual([{ count: 0n }]);
+  await worker.close();
+  await Effect.runPromise(database.closeOwnerConnection());
+  await Effect.runPromise(database.closeEngine());
+}, 15_000);

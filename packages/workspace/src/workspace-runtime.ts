@@ -1,9 +1,8 @@
 import { diagnosticsLayer, observeStage, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Context, Effect, Exit, Layer } from 'effect';
-import { databaseEffect } from './comparison/comparison-effects';
 import { ComparisonExecutor } from './comparison/comparison-executor';
 import { CsvComparisonService } from './comparison/csv-comparison-service';
-import type { OwnedWorkspaceDatabase } from './database';
+import type { DataEngineError, OwnedWorkspaceDatabase } from './database';
 import { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 
@@ -20,20 +19,20 @@ export const Comparisons = Context.Service<CsvComparisonService>('csv-viewer/Com
  * Finalizers cannot fail, so `databaseRelease` tells disposal whether the database released.
  */
 export function makeWorkspaceLayer(
-  openDatabase: (signal: AbortSignal) => Promise<OwnedWorkspaceDatabase>,
+  openDatabase: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>,
   host: CsvWorkspaceHost,
   executor?: ComparisonExecutor,
   diagnostics?: WorkspaceDiagnostics,
-  startupCheck?: (signal: AbortSignal) => Promise<void>,
+  startupCheck?: Effect.Effect<void, DataEngineError>,
 ) {
   const databaseRelease = { failed: false };
   const database = Layer.effect(Database, Effect.acquireRelease(
-    observeStage('workspace.acquire-database', databaseEffect(openDatabase)),
+    observeStage('workspace.acquire-database', openDatabase),
     (acquired) => releaseDatabase(acquired).pipe(Effect.catchCause(() => Effect.sync(() => {
       databaseRelease.failed = true;
     }))),
     { interruptible: true },
-  ).pipe(Effect.tap(() => startupCheck ? observeStage('web.startup-check', databaseEffect(startupCheck)) : Effect.void)));
+  ).pipe(Effect.tap(() => startupCheck ? observeStage('web.startup-check', startupCheck) : Effect.void)));
   const resources = Layer.mergeAll(database, Layer.succeed(Host, host));
   const csvs = Layer.effect(WorkingCsv, Effect.gen(function* () {
     return new WorkingCsvStore(yield* Host, yield* Database);
@@ -52,8 +51,8 @@ export function makeWorkspaceLayer(
 /** Closes the owner connection, then the engine even if that failed. Each failed step is its own stage. */
 function releaseDatabase(database: OwnedWorkspaceDatabase) {
   return observeStage('workspace.release-database', Effect.gen(function* () {
-    const connection = yield* Effect.exit(observeStage('workspace.close-database-connection', databaseEffect(() => database.closeOwnerConnection())));
-    const engine = yield* Effect.exit(observeStage('workspace.close-database-engine', databaseEffect(() => database.closeEngine())));
+    const connection = yield* Effect.exit(observeStage('workspace.close-database-connection', database.closeOwnerConnection()));
+    const engine = yield* Effect.exit(observeStage('workspace.close-database-engine', database.closeEngine()));
     yield* Exit.asVoidAll([connection, engine]);
   }));
 }
