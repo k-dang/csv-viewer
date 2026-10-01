@@ -40,7 +40,7 @@ describe('DesktopWorkspaceHost behavior', () => {
       sourceId, suggestedName: 'people.csv', contents: 'name\nGrace\n',
     }));
 
-    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.')));
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The export destination no longer exists.')));
   });
 
 

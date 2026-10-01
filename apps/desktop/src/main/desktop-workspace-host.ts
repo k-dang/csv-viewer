@@ -133,7 +133,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
           yield* Effect.promise(() => this.prompts.showSourceConflict());
           continue;
         }
-        yield* filesystemEffect(() => writeFile(destinationPath, request.contents, 'utf8')).pipe(Effect.mapError(toSourceUnavailableError));
+        yield* filesystemEffect(() => writeFile(destinationPath, request.contents, 'utf8')).pipe(Effect.mapError(toExportDestinationError));
         return { status: 'delivered' } satisfies CsvExportDelivery;
       }
     });
@@ -208,7 +208,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       const sourceIdentity = this.sources.get(sourceId)?.identity;
       if (!sourceIdentity) return Effect.succeed(false);
       return filesystemEffect(() => captureFileIdentity(destinationPath)).pipe(
-        Effect.mapError(toSourceUnavailableError),
+        Effect.mapError(toExportDestinationError),
         Effect.map((destinationIdentity) => destinationIdentity ? sameFileIdentity(sourceIdentity, destinationIdentity) : false),
       );
     });
@@ -318,6 +318,16 @@ function toSourceUnavailableError(cause: NodeJS.ErrnoException): CsvSourceUnavai
     return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
   }
   return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
+}
+
+function toExportDestinationError(cause: NodeJS.ErrnoException): CsvSourceUnavailableError {
+  if (cause.code === 'ENOENT') {
+    return new CsvSourceUnavailableError('missing-source', 'The export destination no longer exists.');
+  }
+  if (cause.code === 'EACCES' || cause.code === 'EPERM') {
+    return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the export destination.');
+  }
+  return new CsvSourceUnavailableError('unreadable', 'The export destination could not be accessed.');
 }
 
 function isRecentSourceEntry(value: JsonValue): value is RecentSourceEntry {
