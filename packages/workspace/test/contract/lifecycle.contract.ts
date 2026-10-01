@@ -91,22 +91,22 @@ function waitForComparing(fixture: WorkspaceContractFixture, comparisonId: strin
 export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} CsvWorkspace lifecycle`, () => {
     let fixture: WorkspaceContractFixture;
-    let controlledFixture: WorkspaceContractFixture | undefined;
     let executor: ControlledExecutor;
 
     beforeEach(async () => {
       fixture = await factory.create();
-      controlledFixture = undefined;
     });
 
     afterEach(async () => {
-      await Promise.all([fixture.dispose(), controlledFixture?.dispose()]);
+      await fixture.dispose();
     });
 
     async function createControlledFixture(): Promise<WorkspaceContractFixture> {
+      // Opening another Wasm fixture resets the shared engine, so release its current owner first.
+      await fixture.dispose();
       executor = new ControlledExecutor();
-      controlledFixture = await factory.create(executor);
-      return controlledFixture;
+      fixture = await factory.create(executor);
+      return fixture;
     }
 
     it('executes, reads, swaps, and cleans up a real comparison', async () => {
