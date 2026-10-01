@@ -7,7 +7,7 @@ import type { CsvComparisonService } from './comparison/csv-comparison-service';
 import type { WorkingCsvStore } from './working-csv/working-csv-store';
 import type { CsvWorkspaceHost } from './workspace-host';
 import type { CreateCsvViewerOptions, CsvWorkspaceOwner } from './csv-workspace';
-import { attemptWorkspacePromise, genericWorkspaceFailure, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError } from './errors';
+import { genericWorkspaceFailure, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError } from './errors';
 import { CloseImpact, CsvViewerRequest } from './csv-viewer-requests';
 import type {
   BeginComparisonResult,
@@ -139,7 +139,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
       return this.runEffect(malformed, 'csv-viewer.request', {}, 'malformed-request');
     }
     const identifiers = Option.getOrElse(decodeIdentifiers(request.value), () => ({}));
-    return this.runEffect(this.handle(request.value), request.value.operation, identifiers);
+    return this.runEffect(Effect.suspend(() => this.handle(request.value)), request.value.operation, identifiers);
   }
 
   private handle(request: CsvViewerRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, Error> {
@@ -151,7 +151,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
       case 'csv.reopen':
         return this.reopenCsv(request.workingCsvId, request.options);
       case 'csv.get-recent-sources':
-        return attemptWorkspacePromise(() => this.host.recentSources());
+        return this.host.recentSources();
       case 'csv.get-rows':
         return this.csvStore.getRows(request);
       case 'csv.get-column-values':
@@ -276,7 +276,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
       }
       // Source selection may outlive the workspace; admission protects only the open that follows it.
-      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', attemptWorkspacePromise(() => this.host.acquireSource())));
+      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', this.host.acquireSource()));
       if (!sourceId) return { status: 'cancelled' } satisfies OpenCsvResult;
       if (sourceId instanceof Object) return sourceId;
       let retained = false;
@@ -303,7 +303,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   private recordRecentSource(sourceId: CsvSourceId) {
-    return observeCleanup('csv.record-recent', attemptWorkspacePromise(() => this.host.recordRecentSource(sourceId)));
+    return observeCleanup('csv.record-recent', Effect.suspend(() => this.host.recordRecentSource(sourceId)));
   }
 
   private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, Error> {
@@ -316,7 +316,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
       let existing: WorkingCsvView = initial;
       while (true) {
         while (existing.editState.hasUnexportedChanges) {
-          const canContinue = yield* observeStage('csv.confirm-discard', attemptWorkspacePromise(() => this.host.confirmDiscardChanges(existing.source.name)));
+          const canContinue = yield* observeStage('csv.confirm-discard', this.host.confirmDiscardChanges(existing.source.name));
           if (!canContinue) return { status: 'cancelled' } satisfies OpenCsvResult;
           if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
           const current = this.csvStore.getState(workingCsvId);

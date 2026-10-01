@@ -2,6 +2,8 @@
 
 Every `CsvViewer` request runs as an Effect through one shared entry adapter. `CsvViewer` remains the promise and event boundary for desktop IPC and the web renderer. Requests use the workspace runtime's services but not its scope, so disposal settles admitted work by the rules below instead of interrupting it. Background Comparison work belongs to the workspace scope.
 
+Runtime hosts return Effects and classify platform failures at their edges: expected source access and request rejections are typed failures; unexpected platform exceptions are defects. Promises for filesystem access, browser file reads, and prompts stay inside those hosts. The shared engine-source helper accepts Effects and manages only source lifetime and cleanup diagnostics. The entry adapter converts request Effects to transport Promises; remaining Promise-based database and table work is migrated separately.
+
 ## Resource lifetimes
 
 Each runtime builds the workspace through `createCsvViewer`, which builds one Layer in acquisition order: the database and the runtime's host, then the Working CSV, Comparison, and diagnostics services built on both. The database acquires its engine and owner connection eagerly, so the workspace exists only after acquisition succeeds, and a failed acquisition releases whatever it acquired. Disposal stops admission, settles Comparisons, and releases every Working CSV table, then closes the runtime scope once, which releases the database. The database finalizer closes the owner connection, then the engine. Finalizers cannot fail, so disposal carries the release outcome explicitly: a failed release rejects disposal, and every later call returns the same rejection.

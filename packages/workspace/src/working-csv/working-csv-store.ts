@@ -645,11 +645,11 @@ export class WorkingCsvStore {
         };
       });
 
-      const delivery = yield* observeStage('csv.deliver-export', attempt(() => this.host.deliverExport({
+      const delivery = yield* observeStage('csv.deliver-export', this.host.deliverExport({
         sourceId: prepared.sourceId,
         suggestedName: prepared.suggestedName,
         contents: prepared.contents,
-      })));
+      }));
       if (delivery.status === 'cancelled') return { status: 'cancelled' } satisfies CsvExportOutcome;
 
       const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
@@ -667,9 +667,7 @@ export class WorkingCsvStore {
   ) {
     return Effect.gen({ self: this }, function* () {
       const dialect = yield* attemptWorkspaceSync(() => validateDialectOptions(options));
-      const description = yield* observeStage('csv.describe-source', attemptWorkspacePromise(
-        () => this.host.describeSource(sourceId),
-      ).pipe(Effect.mapError(normalizeOpenError)));
+      const description = yield* observeStage('csv.describe-source', this.host.describeSource(sourceId).pipe(Effect.mapError(normalizeOpenError)));
       if (!isSupportedCsvSourceName(description.name)) {
         return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
       }

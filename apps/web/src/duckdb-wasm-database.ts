@@ -34,17 +34,14 @@ class EngineCalls {
   private readonly pending = new Set<(error: Error) => void>();
   private stopError: Error | null = null;
 
-  /** Set once the engine stops; every later operation fails with it. */
   get stoppedError(): Error | null {
     return this.stopError;
   }
 
-  /** Runs one driver call as a database Effect that also settles when the engine stops. */
   effect<A>(operation: () => Promise<A>, cancel?: () => Promise<void>): Effect.Effect<A, DataEngineError> {
     return driverEffect(() => this.track(operation), cancel && (() => this.track(cancel)));
   }
 
-  /** Starts `call` unless the engine has stopped, and rejects it if the engine stops first. */
   track<A>(call: () => Promise<A>): Promise<A> {
     if (this.stopError) return Promise.reject(this.stopError);
     return new Promise<A>((resolve, reject) => {

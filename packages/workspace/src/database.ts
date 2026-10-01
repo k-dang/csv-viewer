@@ -28,7 +28,6 @@ export interface WorkspaceDatabaseConnection {
   close(): Promise<void>;
   runEffect(sql: string, values?: QueryValues): Effect.Effect<void, DataEngineError>;
   readObjectsEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError>;
-  /** Runs long work on the cancellable path; interrupting it cancels the driver work. */
   runCancellableEffect(sql: string): Effect.Effect<void, DataEngineError>;
   readObjectsCancellableEffect(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError>;
   closeEffect(): Effect.Effect<void, DataEngineError>;

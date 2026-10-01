@@ -1,7 +1,8 @@
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
-import { genericWorkspaceFailure, isExpectedWorkspaceError, WorkspaceRequestError } from '@csv-viewer/workspace/errors';
+import { genericWorkspaceFailure, type WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import path from 'node:path';
-import { Schema } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
+import type { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 import type { CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
 import { ipcChannels } from '../ipc-channels';
 
@@ -32,16 +33,17 @@ export function registerCsvViewerRequestHandler(ipc: CsvViewerIpcMain, workspace
 /** Registers dropped-file acquisition, which does not enter the shared workspace adapter. */
 export function registerDroppedSourceHandler(
   ipc: CsvViewerIpcMain,
-  acquire: (filePath: string) => Promise<string>,
+  acquire: (filePath: string) => Effect.Effect<string, CsvSourceUnavailableError | WorkspaceRequestError>,
 ): void {
   ipc.handle(ipcChannels.acquireDroppedSource, async (_event, filePath) => {
-    try {
-      if (!Schema.is(Schema.String)(filePath) || !path.isAbsolute(filePath)) {
-        throw new WorkspaceRequestError({ message: 'Drop a file from your device.' });
-      }
-      return { ok: true, value: await acquire(filePath) };
-    } catch (error) {
-      return { ok: false, message: isExpectedWorkspaceError(error) ? error.message : genericWorkspaceFailure };
+    if (!Schema.is(Schema.String)(filePath) || !path.isAbsolute(filePath)) {
+      return { ok: false, message: 'Drop a file from your device.' };
     }
+    const exit = await Effect.runPromiseExit(Effect.suspend(() => acquire(filePath)));
+    if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };
+    const [reason] = exit.cause.reasons;
+    const message = !Cause.hasDies(exit.cause) && reason?._tag === 'Fail'
+      ? reason.error.message : genericWorkspaceFailure;
+    return { ok: false, message };
   });
 }

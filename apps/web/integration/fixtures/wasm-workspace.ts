@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { driverEffect } from '../../../../packages/workspace/src/database';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { AsyncDuckDB, VoidLogger } from '@duckdb/duckdb-wasm';
@@ -60,50 +62,51 @@ class WasmContractHost implements CsvWorkspaceHost {
 
   constructor(private readonly database: DuckDbWasmWorkspaceDatabase) {}
 
-  acquireSource(): Promise<CsvSourceId | null> {
-    return Promise.resolve(null);
+  acquireSource(): Effect.Effect<CsvSourceId | null> {
+    return Effect.succeed(null);
   }
 
   releaseSource(): void {
     // Contract fixtures remain available for subsequent source selections.
   }
 
-  async describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
-    const source = this.requireSource(sourceId);
-    return {
+  describeSource(sourceId: CsvSourceId) {
+    return this.requireSource(sourceId).pipe(Effect.map((source) => ({
       sourceId,
       name: source.name,
       location: source.name,
       sizeBytes: encoder.encode(source.contents).byteLength,
       defaultDelimiter: defaultDelimiterForSourceName(source.name),
-    };
+    } satisfies CsvSourceDescription)));
   }
 
   acquireEngineSource(sourceId: CsvSourceId) {
-    return scopedEngineSource(async () => {
-      const source = this.requireSource(sourceId);
+    return scopedEngineSource(Effect.gen({ self: this }, function* () {
+      const source = yield* this.requireSource(sourceId);
       const extension = source.name.split('.').pop() ?? 'csv';
-      return this.database.registerFileBuffer(`contract-${crypto.randomUUID()}.${extension}`, encoder.encode(source.contents));
-    }, (reference) => this.database.dropFile(reference));
+      return yield* driverEffect(() => this.database.registerFileBuffer(`contract-${crypto.randomUUID()}.${extension}`, encoder.encode(source.contents)));
+    }), (reference) => driverEffect(() => this.database.dropFile(reference)));
   }
 
-  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
-    const name = this.exportNames.shift();
-    if (!name) return Promise.resolve({ status: 'cancelled' });
-    this.exports.set(name, request.contents);
-    return Promise.resolve({ status: 'delivered' });
+  deliverExport(request: CsvExportRequestForDelivery) {
+    return Effect.sync(() => {
+      const name = this.exportNames.shift();
+      if (!name) return { status: 'cancelled' } satisfies CsvExportDelivery;
+      this.exports.set(name, request.contents);
+      return { status: 'delivered' } satisfies CsvExportDelivery;
+    });
   }
 
-  recentSources(): Promise<RecentCsvSource[]> {
-    return Promise.resolve([]);
+  recentSources(): Effect.Effect<RecentCsvSource[]> {
+    return Effect.succeed([]);
   }
 
-  recordRecentSource(): Promise<void> {
-    return Promise.resolve();
+  recordRecentSource() {
+    return Effect.void;
   }
 
-  confirmDiscardChanges(): Promise<boolean> {
-    return Promise.resolve(true);
+  confirmDiscardChanges() {
+    return Effect.succeed(true);
   }
 
   writeSource(fileName: string, contents: string): CsvSourceId {
@@ -134,12 +137,14 @@ class WasmContractHost implements CsvWorkspaceHost {
     };
   }
 
-  private requireSource(sourceId: CsvSourceId): MemorySource & { contents: string } {
-    const source = this.sourcesById.get(sourceId);
-    if (!source || source.contents === null) {
-      throw new CsvSourceUnavailableError('missing-source', 'CSV Source is no longer available.');
-    }
-    return { ...source, contents: source.contents };
+  private requireSource(sourceId: CsvSourceId) {
+    return Effect.suspend(() => {
+      const source = this.sourcesById.get(sourceId);
+      if (!source || source.contents === null) {
+        return Effect.fail(new CsvSourceUnavailableError('missing-source', 'CSV Source is no longer available.'));
+      }
+      return Effect.succeed({ ...source, contents: source.contents });
+    });
   }
 }
 
@@ -260,7 +265,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {
       this.host.describeSource = describeSource;
-      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+      return Effect.die(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
       }));
     };
@@ -269,9 +274,9 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
     const recentSources = this.host.recentSources.bind(this.host);
     this.host.recentSources = () => {
       this.host.recentSources = recentSources;
-      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+      throw new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
-      }));
+      });
     };
   }
 

@@ -37,20 +37,20 @@ export type CsvSourceUnavailableCode = 'missing-source' | 'permission-denied' | 
 export interface CsvWorkspaceHost {
   readonly capabilities: CsvViewerCapabilities;
   /** Select and reserve one CSV Source, return a capacity rejection, or null for cancellation. */
-  acquireSource(): Promise<CsvSourceId | CsvCapacityExceeded | null>;
+  acquireSource(): Effect.Effect<CsvSourceId | CsvCapacityExceeded | null, CsvSourceUnavailableError | WorkspaceRequestError>;
   /** Releases resources reserved for a CSV Source. Durable source identity may be retained. */
   releaseSource(sourceId: CsvSourceId): void;
-  describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription>;
+  describeSource(sourceId: CsvSourceId): Effect.Effect<CsvSourceDescription, CsvSourceUnavailableError | WorkspaceRequestError>;
   /**
    * Acquires an engine-readable reference for the current scope. The host releases it when the
    * scope closes, after the reader has finished. The opaque reference is passed to the reader;
    * hosts do not build SQL.
    */
   acquireEngineSource(sourceId: CsvSourceId): Effect.Effect<string, WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError, Scope.Scope>;
-  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery>;
-  recentSources(): Promise<RecentCsvSource[]>;
-  recordRecentSource(sourceId: CsvSourceId): Promise<void>;
-  confirmDiscardChanges(sourceName: string): Promise<boolean>;
+  deliverExport(request: CsvExportRequestForDelivery): Effect.Effect<CsvExportDelivery, CsvSourceUnavailableError | WorkspaceRequestError>;
+  recentSources(): Effect.Effect<RecentCsvSource[], CsvSourceUnavailableError | WorkspaceRequestError>;
+  recordRecentSource(sourceId: CsvSourceId): Effect.Effect<void, CsvSourceUnavailableError | WorkspaceRequestError>;
+  confirmDiscardChanges(sourceName: string): Effect.Effect<boolean, CsvSourceUnavailableError | WorkspaceRequestError>;
 }
 
 export class CsvSourceUnavailableError extends Error {

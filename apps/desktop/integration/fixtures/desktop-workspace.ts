@@ -107,7 +107,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   sourceId(filePath: string): Promise<CsvSourceId> {
-    return this.host.registerSource(filePath);
+    return Effect.runPromise(this.host.registerSource(filePath));
   }
 
   async registerSource(fileName: string, contents: string): Promise<CsvSourceId> {
@@ -123,8 +123,8 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     this.host.acquireEngineSource = (sourceId) => {
       this.host.acquireEngineSource = original;
       return scopedEngineSource(
-        async () => (await this.host.describeSource(sourceId)).location,
-        async () => { throw new Error('PRIVATE engine source reference at C:\\PRIVATE.csv'); },
+        this.host.describeSource(sourceId).pipe(Effect.map((source) => source.location)),
+        () => { throw new Error('PRIVATE engine source reference at C:\\PRIVATE.csv'); },
       );
     };
   }
@@ -133,7 +133,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {
       this.host.describeSource = describeSource;
-      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+      return Effect.die(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
       }));
     };
@@ -142,9 +142,9 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     const recentSources = this.host.recentSources.bind(this.host);
     this.host.recentSources = () => {
       this.host.recentSources = recentSources;
-      return Promise.reject(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
+      throw new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
-      }));
+      });
     };
   }
 
