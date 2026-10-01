@@ -1,7 +1,7 @@
 import { DataEngineError } from '../database';
 import { Cause, Deferred, Effect, Latch, Result, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
-import { attemptWorkspacePromise, WorkspaceRequestError } from '../errors';
+import { WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
   CsvCellEditRequest,
@@ -650,11 +650,11 @@ export class WorkingCsvStore {
       }));
       if (releaseFailure) return yield* Effect.fail(releaseFailure);
 
-      const delivery = yield* observeStage('csv.deliver-export', attemptWorkspacePromise(() => this.host.deliverExport({
+      const delivery = yield* observeStage('csv.deliver-export', this.host.deliverExport({
         sourceId: prepared.sourceId,
         suggestedName: prepared.suggestedName,
         contents: prepared.contents,
-      })));
+      }));
       if (delivery.status === 'cancelled') return { status: 'cancelled' } satisfies CsvExportOutcome;
 
       const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
@@ -672,9 +672,7 @@ export class WorkingCsvStore {
   ) {
     return Effect.gen({ self: this }, function* () {
       const dialect = yield* Effect.fromResult(validateDialectOptions(options));
-      const description = yield* observeStage('csv.describe-source', attemptWorkspacePromise(
-        () => this.host.describeSource(sourceId),
-      ).pipe(Effect.mapError(normalizeOpenError)));
+      const description = yield* observeStage('csv.describe-source', this.host.describeSource(sourceId).pipe(Effect.mapError(normalizeOpenError)));
       if (!isSupportedCsvSourceName(description.name)) {
         return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
       }

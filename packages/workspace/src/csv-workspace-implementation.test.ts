@@ -12,17 +12,17 @@ describe('CSV source selection during workspace disposal', () => {
     const releaseSource = vi.fn();
     const host: CsvWorkspaceHost = {
       capabilities: { recentCsvSources: false, exportCsvSuccessMessage: '', warnOnPageUnload: false },
-      acquireSource: () => {
+      acquireSource: () => Effect.promise(() => {
         pickerEntered.resolve();
         return selected.promise;
-      },
+      }),
       releaseSource,
-      describeSource: async () => { throw new Error('Source must not open after disposal.'); },
+      describeSource: () => Effect.die(new Error('Source must not open after disposal.')),
       acquireEngineSource: () => { throw new Error('Source must not open after disposal.'); },
-      deliverExport: async () => ({ status: 'cancelled' }),
-      recentSources: async () => [],
-      recordRecentSource: async () => undefined,
-      confirmDiscardChanges: async () => true,
+      deliverExport: () => Effect.succeed({ status: 'cancelled' }),
+      recentSources: () => Effect.succeed([]),
+      recordRecentSource: () => Effect.void,
+      confirmDiscardChanges: () => Effect.succeed(true),
     };
     const unexpected = () => { throw new Error('No database work expected.'); };
     const database: OwnedWorkspaceDatabase = {

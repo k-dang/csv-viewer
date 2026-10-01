@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { driverEffect } from '@csv-viewer/workspace/database';
 import type {
   CsvCapacityExceeded,
   CsvSourceId,
@@ -42,10 +44,8 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     private readonly limits: WebCsvCapacityLimits = webCsvCapacityLimits,
   ) {}
 
-  async acquireSource(): Promise<CsvSourceId | CsvCapacityExceeded | null> {
-    const file = await this.pickFile();
-    if (!file) return null;
-    return this.registerSource(file);
+  acquireSource() {
+    return Effect.promise(() => this.pickFile()).pipe(Effect.map((file) => file ? this.registerSource(file) : null));
   }
 
   /** Reserves selected or dropped bytes under the same browser capacity policy. */
@@ -77,72 +77,68 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     this.sources.delete(sourceId);
   }
 
-  describeSource(sourceId: CsvSourceId): Promise<CsvSourceDescription> {
-    const source = this.requireSource(sourceId);
-    return Promise.resolve({
+  describeSource(sourceId: CsvSourceId) {
+    return this.requireSource(sourceId).pipe(Effect.map((source) => ({
       sourceId,
       name: source.name,
       location: 'This browser session',
       sizeBytes: source.size,
       defaultDelimiter: defaultDelimiterForSourceName(source.name),
-    });
+    } satisfies CsvSourceDescription)));
   }
 
   acquireEngineSource(sourceId: CsvSourceId) {
-    return scopedEngineSource(async () => {
-      const source = this.requireSource(sourceId);
-      let contents: ArrayBuffer;
+    return scopedEngineSource(Effect.gen({ self: this }, function* () {
+      const source = yield* this.requireSource(sourceId);
+      const contents = yield* Effect.tryPromise({
+        try: () => source.arrayBuffer(),
+        catch: () => new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.'),
+      });
+      return yield* driverEffect(() => this.database.registerFileBuffer(source.name, new Uint8Array(contents)));
+    }), (reference) => driverEffect(() => this.database.dropFile(reference)));
+  }
+
+  deliverExport(request: CsvExportRequestForDelivery) {
+    return Effect.sync(() => {
+      const url = URL.createObjectURL(
+        new Blob([request.contents], { type: 'text/csv;charset=utf-8' }),
+      );
+      const download = document.createElement('a');
+      download.href = url;
+      download.download = request.suggestedName;
+      download.hidden = true;
+      document.body.append(download);
+
       try {
-        contents = await source.arrayBuffer();
-      } catch {
-        throw new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
+        download.click();
+        return { status: 'delivered' } satisfies CsvExportDelivery;
+      } finally {
+        download.remove();
+        // Let the browser consume the click before invalidating the Blob URL.
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
       }
-      return this.database.registerFileBuffer(source.name, new Uint8Array(contents));
-    }, (reference) => this.database.dropFile(reference));
+    });
   }
 
-  deliverExport(request: CsvExportRequestForDelivery): Promise<CsvExportDelivery> {
-    const url = URL.createObjectURL(
-      new Blob([request.contents], { type: 'text/csv;charset=utf-8' }),
-    );
-    const download = document.createElement('a');
-    download.href = url;
-    download.download = request.suggestedName;
-    download.hidden = true;
-    document.body.append(download);
-
-    try {
-      download.click();
-      return Promise.resolve({ status: 'delivered' });
-    } finally {
-      download.remove();
-      // Let the browser consume the click before invalidating the Blob URL.
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    }
+  recentSources(): Effect.Effect<RecentCsvSource[]> {
+    return Effect.succeed([]);
   }
 
-  recentSources(): Promise<RecentCsvSource[]> {
-    return Promise.resolve([]);
+  recordRecentSource() {
+    return Effect.void;
   }
 
-  recordRecentSource(): Promise<void> {
-    return Promise.resolve();
+  confirmDiscardChanges(sourceName: string) {
+    return Effect.sync(() => window.confirm(`Reopen ${sourceName}?\n\nUnexported Changes will be lost.`));
   }
 
-  confirmDiscardChanges(sourceName: string): Promise<boolean> {
-    return Promise.resolve(
-      window.confirm(`Reopen ${sourceName}?\n\nUnexported Changes will be lost.`),
-    );
-  }
-
-  private requireSource(sourceId: CsvSourceId): File {
-    const source = this.sources.get(sourceId);
-    if (!source) {
-      throw new CsvSourceUnavailableError(
+  private requireSource(sourceId: CsvSourceId) {
+    return Effect.suspend(() => {
+      const source = this.sources.get(sourceId);
+      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError(
         'missing-source',
         'Select the CSV Source again. It is no longer available in this browser session.',
-      );
-    }
-    return source;
+      ));
+    });
   }
 }

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { Effect, Exit } from 'effect';
+import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { WebWorkspaceHost } from './web-workspace-host';
@@ -8,6 +10,27 @@ afterEach(() => {
 });
 
 describe('WebWorkspaceHost', () => {
+  it('keeps unexpected picker rejections as defects even when they use a source error class', async () => {
+    const failure = new CsvSourceUnavailableError('unreadable', 'PRIVATE picker failure.');
+    const host = new WebWorkspaceHost(createNodeDuckDbWasmDatabase(), async () => { throw failure; });
+
+    const exit = await Effect.runPromiseExit(host.acquireSource());
+
+    expect(exit).toEqual(Exit.die(failure));
+  });
+
+  it('classifies a failed File read as an unreadable source without leaking browser details', async () => {
+    const file = new File(['name\nAda\n'], 'people.csv');
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => { throw new Error('PRIVATE browser failure.'); } });
+    const host = new WebWorkspaceHost(createNodeDuckDbWasmDatabase(), async () => file);
+    const sourceId = await Effect.runPromise(host.acquireSource());
+    if (!sourceId || sourceId instanceof Object) throw new Error('CSV Source was not selected.');
+
+    const exit = await Effect.runPromiseExit(Effect.scoped(host.acquireEngineSource(sourceId)));
+
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.')));
+  });
+
   it('hands an exported CSV to the browser as a named download', async () => {
     const downloadClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:export');
@@ -18,11 +41,11 @@ describe('WebWorkspaceHost', () => {
     );
 
     await expect(
-      host.deliverExport({
+      Effect.runPromise(host.deliverExport({
         sourceId: 'source-1',
         suggestedName: 'people.csv',
         contents: 'name\nAda\n',
-      }),
+      })),
     ).resolves.toEqual({ status: 'delivered' });
 
     const exportedBlob = createObjectUrl.mock.calls[0]?.[0];

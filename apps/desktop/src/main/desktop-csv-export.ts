@@ -1,30 +1,11 @@
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-type ChooseCsvExportDestinationOptions = {
-  chooseDestination: () => Promise<string | null>;
-  isSourceDestination: (destinationPath: string) => Promise<boolean>;
-  showSourceConflict: () => Promise<void>;
-};
-
 export type CanonicalFileIdentity = {
   canonicalPath: string;
   device: bigint;
   inode: bigint;
 };
-
-export async function chooseCsvExportDestination({
-  chooseDestination,
-  isSourceDestination,
-  showSourceConflict,
-}: ChooseCsvExportDestinationOptions): Promise<string | null> {
-  while (true) {
-    const destinationPath = await chooseDestination();
-    if (!destinationPath) return null;
-    if (!(await isSourceDestination(destinationPath))) return destinationPath;
-    await showSourceConflict();
-  }
-}
 
 export async function captureFileIdentity(filePath: string): Promise<CanonicalFileIdentity | null> {
   try {

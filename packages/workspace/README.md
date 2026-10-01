@@ -2,9 +2,11 @@
 
 Every `CsvViewer` request runs as an Effect through one shared entry adapter. `CsvViewer` remains the promise and event boundary for desktop IPC and the web renderer. Requests use the workspace runtime's services but not its scope, so disposal settles admitted work by the rules below instead of interrupting it. Background Comparison work belongs to the workspace scope.
 
+Runtime hosts return Effects and classify platform failures at their edges: expected source access and request rejections are typed failures; unexpected platform exceptions are defects. Promises for filesystem access, browser file reads, and prompts stay inside those hosts. The shared engine-source helper accepts Effects and manages only source lifetime and cleanup diagnostics.
+
 Working CSV table operations, reads, edits, history replay, and cleanup compose database Effects directly. Pure query construction, history calculation, and export serialization stay ordinary functions; expected validation returns `Result` or a typed Effect failure, while broken invariants are defects. Export holds its table lease and a scoped worker connection through reading and serialization, then releases both before host delivery. Only successful delivery marks the captured revision exported.
 
-Promises belong at runtime adapter edges and at the shared entry adapter. Source description and export delivery still use the existing host adapters until those host methods return Effects.
+Promises belong at runtime adapter edges and at the shared entry adapter, which converts request Effects to transport Promises.
 
 ## Resource lifetimes
 

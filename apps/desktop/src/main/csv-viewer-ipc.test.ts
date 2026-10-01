@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
@@ -72,19 +73,27 @@ describe('CsvViewer Electron request bridge', () => {
     type Ipc = Parameters<typeof registerDroppedSourceHandler>[0];
     let handler: Parameters<Ipc['handle']>[1] | undefined;
     const ipc: Ipc = { handle: (_channel, registered) => { handler = registered; } };
-    registerDroppedSourceHandler(ipc, async () => {
-      throw new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
-    });
+    registerDroppedSourceHandler(ipc, () => Effect.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.')));
     if (!handler) throw new Error('Dropped-source handler was not registered.');
     const missingPath = path.resolve('PRIVATE-MISSING.csv');
     const missing = await handler(ipcEvent, missingPath);
     expect(() => unwrapCsvViewerIpcResponse(missing)).toThrow(/^The CSV Source no longer exists\.$/);
 
-    registerDroppedSourceHandler(ipc, async () => {
-      throw new Error('PRIVATE internal failure at C:\\PRIVATE-MISSING.csv');
-    });
+    registerDroppedSourceHandler(ipc, () => Effect.die(new Error('PRIVATE internal failure at C:\\PRIVATE-MISSING.csv')));
     const unexpected = await handler(ipcEvent, missingPath);
     expect(unexpected).toEqual({ ok: false, message: 'The CSV workspace could not complete the request.' });
     expect(JSON.stringify(unexpected)).not.toContain('PRIVATE');
+
+    const unexpectedAcquire = () => Effect.fail(new Error('PRIVATE unexpected failure at C:\\PRIVATE-MISSING.csv'));
+    // SAFETY: Deliberately violates the host's typed failure contract to test IPC sanitization.
+    registerDroppedSourceHandler(ipc, unexpectedAcquire as never);
+    await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
+      ok: false, message: 'The CSV workspace could not complete the request.',
+    });
+
+    registerDroppedSourceHandler(ipc, () => Effect.die(new CsvSourceUnavailableError('unreadable', 'PRIVATE unexpected source error.')));
+    await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
+      ok: false, message: 'The CSV workspace could not complete the request.',
+    });
   });
 });

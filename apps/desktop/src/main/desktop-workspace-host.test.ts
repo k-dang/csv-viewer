@@ -1,7 +1,10 @@
 import { chmod, link, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { Effect, Exit } from 'effect';
+import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
+import { diagnosticCapture } from '../../../../packages/workspace/test/diagnostic-capture';
 
 describe('DesktopWorkspaceHost behavior', () => {
   let fixture: CsvWorkspaceFixture;
@@ -16,9 +19,30 @@ describe('DesktopWorkspaceHost behavior', () => {
 
   it('normalizes a missing dropped file without exposing its path', async () => {
     const filePath = fixture.file('PRIVATE-missing.csv');
-    await expect(fixture.host.acquireDroppedSource(filePath))
-      .rejects.toThrow(/^The CSV Source no longer exists\.$/);
+    const exit = await Effect.runPromiseExit(fixture.host.acquireDroppedSource(filePath));
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.')));
   });
+
+  it('keeps unexpected discard-prompt rejections as defects even when they use a source error class', async () => {
+    const failure = new CsvSourceUnavailableError('unreadable', 'PRIVATE prompt failure.');
+    fixture.prompts.holdDiscardPrompt = async () => { throw failure; };
+
+    const exit = await Effect.runPromiseExit(fixture.host.confirmDiscardChanges('people.csv'));
+
+    expect(exit).toEqual(Exit.die(failure));
+  });
+
+  it('classifies an export filesystem failure without exposing the destination path', async () => {
+    const sourceId = await fixture.registerSource('people.csv', 'name\nAda\n');
+    fixture.prompts.exportChoices.push(path.join(fixture.file('PRIVATE-missing-directory'), 'output.csv'));
+
+    const exit = await Effect.runPromiseExit(fixture.host.deliverExport({
+      sourceId, suggestedName: 'people.csv', contents: 'name\nGrace\n',
+    }));
+
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The export destination no longer exists.')));
+  });
+
 
   it('maps hard links for one CSV Source to one open Working CSV', async () => {
     const filePath = await fixture.writeSource('dedupe.csv', 'value\n1\n');
@@ -103,7 +127,7 @@ describe('DesktopWorkspaceHost behavior', () => {
     const sourceId = await fixture.registerSource('PRIVATE.csv', 'name\nAda\n');
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      await fixture.host.recordRecentSource(sourceId);
+      await Effect.runPromise(fixture.host.recordRecentSource(sourceId));
       expect(warning.mock.calls.some(([message]) =>
         /^Unable to write Recent CSV Sources \((permission-denied|io-failure)\)\.$/.test(String(message)),
       )).toBe(true);
@@ -205,7 +229,7 @@ describe('DesktopWorkspaceHost behavior', () => {
 
     await Promise.all([
       fixture.viewer.call({ operation: 'csv.get-recent-sources' }),
-      fixture.host.recordRecentSource(freshId),
+      Effect.runPromise(fixture.host.recordRecentSource(freshId)),
     ]);
 
     const stored = await readStoredRecents(fixture);
@@ -285,3 +309,28 @@ describe('DesktopWorkspaceHost behavior', () => {
 function readStoredRecents(fixture: CsvWorkspaceFixture): Promise<string> {
   return readFile(path.join(fixture.directory, 'recent-sources.json'), 'utf8');
 }
+
+it('keeps an opened CSV readable when recording its Recent CSV Source throws synchronously', async () => {
+  const capture = diagnosticCapture();
+  const fixture = await CsvWorkspaceFixture.create(undefined, capture.configuration);
+  try {
+    const sourceId = await fixture.registerSource('people.csv', 'name\nAda\n');
+    vi.spyOn(fixture.host, 'recordRecentSource').mockImplementationOnce(() => {
+      throw new Error('PRIVATE recent source failure.');
+    });
+
+    const opened = await fixture.viewer.call({ operation: 'csv.open-recent', sourceId });
+    if (opened.status !== 'opened') throw new Error(`Open was ${opened.status}.`);
+    await expect(fixture.viewer.call({
+      operation: 'csv.get-rows', workingCsvId: opened.workingCsv.workingCsvId, offset: 0, limit: 10,
+    })).resolves.toMatchObject({ rows: [{ name: 'Ada' }] });
+
+    const records = capture.completed();
+    const opening = records.find((record) => record.message === 'csv.open-recent');
+    expect(opening?.annotations).toMatchObject({ outcome: 'opened', cleanup: 'cleanup-failed' });
+    expect(capture.outcome('csv.record-recent')).toBe('cleanup-failed');
+    expect(capture.logs.join('')).not.toContain('PRIVATE');
+  } finally {
+    await fixture.dispose();
+  }
+});
