@@ -14,6 +14,8 @@ Prefer **web** for shared UI and Export CSV verification. Use **desktop** for Re
 
 Drive only an instance started by `control-csv-viewer.mjs launch`. Never attach to a user's `pnpm run dev` window or the default Electron userData directory.
 
+For web lifecycle failure checks, use the project Playwright suite described in [Web runtime lifecycle](features/web-lifecycle.md). That runner owns its browser profile and server instead of using the helper's recorded run. Controlled faults at the engine boundary are valid verification when the resulting UI and recovery use the real application.
+
 All helper commands below are run from the repo root:
 
 ```powershell
@@ -70,7 +72,7 @@ Web readiness is that the app rendered past its own startup gate: the `h1` stops
 
 The dev server port is private to the run and `--strictPort` makes a collision fail loudly rather than drift. Never pass the port through pnpm's `--` separator: pnpm forwards `--` to vite as a literal argument, vite ignores the port flags, and the server silently binds 5173 - the shared port this skill must never touch.
 
-Because it is the dev server, this target does not exercise the production bundle. A claim about built asset emission needs `pnpm run build:web` and a human.
+Because it is the dev server, this target does not exercise the production bundle. Use the built-bundle test command in [Web runtime lifecycle](features/web-lifecycle.md) to verify emitted Worker/WASM assets.
 
 Launch refuses if `current.json` points at a live pid. Cleanup first. Do not start a second instance against the same run file.
 
