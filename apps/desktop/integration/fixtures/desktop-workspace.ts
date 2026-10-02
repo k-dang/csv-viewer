@@ -24,7 +24,7 @@ import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/wo
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -119,7 +119,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   failNextExportPreparation(failure: 'read' | 'serialization') { return failNextExportPreparation(this.database, failure); }
 
-  failNextExportWorkerRelease(): void { failNextExportWorkerRelease(this.database); }
+  failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
   failNextEngineSourceRelease(): void {
@@ -155,6 +155,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextSnapshotDrop(): Promise<void> { return failNextSnapshotDrop(this.database); }
 
   holdNextRowRead() { return holdNextRowRead(this.database); }
+  holdNextExportRead() { return holdNextExportRead(this.database); }
 
   async removeSource(fileName: string): Promise<void> {
     await unlink(this.file(fileName));
