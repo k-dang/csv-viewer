@@ -80,6 +80,31 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose().catch(() => undefined); }
     });
 
+    it('retries an in-flight export worker release after another Working CSV fails to release', async () => {
+      // Bound once the export is held; called when Working CSV release starts.
+      let releaseExport = () => {};
+      const capture = diagnosticCapture((record) => {
+        if (record.message === 'workspace.release-csvs' && record.annotations.outcome === 'started') releaseExport();
+      });
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        await fixture.openSource('PRIVATE-FIRST.csv', 'name\nAda\n');
+        const { workingCsvId } = await fixture.openSource('PRIVATE-SECOND.csv', 'name\nGrace\n');
+        const closed = fixture.failNextExportWorkerRelease(1);
+        const hold = fixture.holdNextExportRead();
+        const exporting = fixture.viewer.call({ operation: 'csv.export', workingCsvId });
+        await hold.entered;
+        releaseExport = hold.release;
+        fixture.failNextTableDrop();
+
+        const exportRejected = expect(exporting).rejects.toThrow('The data engine could not complete the operation.');
+        await expect(fixture.disposeWorkspace()).rejects.toThrow('The CSV workspace could not complete the request.');
+        await exportRejected;
+        expect(closed()).toBe(true);
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose().catch(() => undefined); }
+    });
+
     it('separates expected synchronous and Promise failures from a host defect', async () => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);

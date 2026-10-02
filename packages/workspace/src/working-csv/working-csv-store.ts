@@ -353,9 +353,9 @@ export class WorkingCsvStore {
     return Effect.gen({ self: this }, function* () {
       yield* observeStage('workspace.await-work', this.workSettled.await);
       for (const workingCsvId of this.workingCsvs.keys()) this.beginClose(workingCsvId);
-      for (const workingCsvId of [...this.workingCsvs.keys()]) {
-        yield* this.closeWorkingCsv(workingCsvId);
-      }
+      // Every close waits for its Working CSV's leases, so attempt each one even after a failure.
+      const closes = yield* Effect.forEach([...this.workingCsvs.keys()], (workingCsvId) => Effect.exit(this.closeWorkingCsv(workingCsvId)));
+      yield* Exit.asVoidAll(closes);
       if (this.tableLeases.size > 0) {
         throw new Error('Working CSV source lease invariant violated during disposal.');
       }

@@ -49,6 +49,8 @@ export interface WorkspaceContractFixture {
   /** Fail one Comparison snapshot deletion; a later cleanup attempt uses the real driver. */
   failNextSnapshotDrop(): Promise<void>;
   holdNextRowRead(): { entered: Promise<void>; release: () => void };
+  /** Hold the next export's row read until released. */
+  holdNextExportRead(): { entered: Promise<void>; release: () => void };
   /** Writes `fileName` inside the fixture, creating it or replacing what is there. */
   writeSource(fileName: string, contents: string): Promise<string>;
   /** Points the next Export CSV at `fileName` and returns a reader for the delivered bytes. */

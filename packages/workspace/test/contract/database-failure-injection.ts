@@ -90,6 +90,25 @@ export function holdNextRowRead(database: WorkspaceDatabase) {
   return { entered: entered.promise, release: () => resume.resolve() };
 }
 
+export function holdNextExportRead(database: WorkspaceDatabase) {
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const connect = database.connectWorker.bind(database);
+  database.connectWorker = () => {
+    database.connectWorker = connect;
+    return connect().pipe(Effect.map((connection) => {
+      const read = connection.readObjectsCancellable.bind(connection);
+      connection.readObjectsCancellable = (sql, values) => Effect.gen(function* () {
+        entered.resolve();
+        yield* Effect.promise(() => resume.promise);
+        return yield* read(sql, values);
+      });
+      return connection;
+    }));
+  };
+  return { entered: entered.promise, release: () => resume.resolve() };
+}
+
 export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise<void> {
   const connection = await Effect.runPromise(database.ownerConnection());
   const run = connection.run.bind(connection);
