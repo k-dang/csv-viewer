@@ -119,7 +119,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   failNextExportPreparation(failure: 'read' | 'serialization') { return failNextExportPreparation(this.database, failure); }
 
-  failNextExportWorkerRelease(): void { failNextExportWorkerRelease(this.database); }
+  failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
   failNextEngineSourceRelease(): void {

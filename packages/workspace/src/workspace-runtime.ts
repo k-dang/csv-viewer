@@ -14,7 +14,7 @@ export const Comparisons = Context.Service<CsvComparisonService>('csv-viewer/Com
 /**
  * One runtime per workspace, read top to bottom in acquisition order: the database and the host,
  * then the Working CSV and Comparison services built on both. Disposal settles Comparison work and
- * releases Working CSV tables before closing the layer scope, which releases the database. The
+ * releases Working CSV resources before closing the layer scope, which releases the database. The
  * scope also owns background Comparison attempts, not their resources.
  * Finalizers cannot fail, so `databaseRelease` tells disposal whether the database released.
  */

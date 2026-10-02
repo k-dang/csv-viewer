@@ -22,16 +22,23 @@ export function failNextExportPreparation(database: WorkspaceDatabase, failure: 
   return () => released;
 }
 
-export function failNextExportWorkerRelease(database: WorkspaceDatabase): void {
+export function failNextExportWorkerRelease(database: WorkspaceDatabase, failures: number): () => boolean {
+  let remaining = failures;
+  let closed = false;
   const connect = database.connectWorker.bind(database);
   database.connectWorker = () => {
     database.connectWorker = connect;
     return connect().pipe(Effect.map((connection) => {
       const close = connection.close.bind(connection);
-      connection.close = () => close().pipe(Effect.andThen(Effect.fail(new DataEngineError(new Error('PRIVATE export release failure')))));
+      connection.close = () => Effect.suspend(() => {
+        if (remaining === 0) return close().pipe(Effect.tap(() => Effect.sync(() => { closed = true; })));
+        remaining -= 1;
+        return Effect.fail(new DataEngineError(new Error('PRIVATE export release failure')));
+      });
       return connection;
     }));
   };
+  return () => closed;
 }
 
 export function failNextMetadataRead(database: WorkspaceDatabase): void {

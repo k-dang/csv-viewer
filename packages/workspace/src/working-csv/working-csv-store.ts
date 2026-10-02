@@ -1,5 +1,5 @@
 import { DataEngineError } from '../database';
-import { Cause, Deferred, Effect, Latch, Result, type Scope, type Types } from 'effect';
+import { Cause, Deferred, Effect, Exit, Latch, Result, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
 import { WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
@@ -27,7 +27,7 @@ import type {
   WorkingCsvView,
 } from '../csv-viewer';
 import type { ComparisonExecutor } from '../comparison/comparison-executor';
-import type { WorkspaceDatabase } from '../database';
+import type { WorkspaceDatabase, WorkspaceDatabaseConnection } from '../database';
 import { CsvEditHistory, rowCountDelta, type CsvEditDraft } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import {
@@ -97,6 +97,8 @@ export class WorkingCsvStore {
   private mutationTails = new Map<WorkingCsvId, Deferred.Deferred<void>>();
   /** The table release in flight for each closing Working CSV. */
   private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, Error>>();
+  /** Export workers whose close failed. Disposal retries them before the database is released. */
+  private readonly unreleasedExportWorkers = new Set<WorkspaceDatabaseConnection>();
   private admittedWork = 0;
   /** Open while no admitted open, reopen, or worker connection setup is running. */
   private readonly workSettled = Latch.makeUnsafe(true);
@@ -321,11 +323,17 @@ export class WorkingCsvStore {
     }));
   }
 
-  /** Waits for admitted work and releases every table. The runtime releases the database afterward. */
+  /**
+   * Waits for admitted work, releases every table, then retries failed export worker releases even
+   * if a table release failed. A failed retry is reported as cleanup failure. The runtime releases
+   * the database afterward.
+   */
   disposeStore(): Effect.Effect<void, Error> {
-    return Effect.suspend(() => {
+    return Effect.gen({ self: this }, function* () {
       this.beginDisposal();
-      return this.releaseAllTables();
+      const tableRelease = yield* Effect.exit(this.releaseAllTables());
+      const workerReleases = yield* Effect.forEach([...this.unreleasedExportWorkers], (worker) => Effect.exit(this.releaseExportWorker(worker)));
+      yield* Exit.asVoidAll([tableRelease, ...workerReleases]);
     }).pipe(
       Effect.ensuring(Effect.sync(() => {
         this.lifecycle = 'disposed';
@@ -619,7 +627,8 @@ export class WorkingCsvStore {
    * holding one across a prompt would block closing the Working CSV and disposing the workspace.
    * The Working CSV can therefore be closed or replaced while the prompt is open, and a delivered
    * export never fails afterwards: the exported revision is only recorded against the history it
-   * was serialized from.
+   * was serialized from. A failed worker release rejects the export before delivery, and the store
+   * keeps that worker for disposal to retry.
    */
   exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, Error> {
     return Effect.gen({ self: this }, function* () {
@@ -629,10 +638,9 @@ export class WorkingCsvStore {
         const connection = yield* Effect.acquireRelease(
           this.database.connectWorker(),
           // Finalizers cannot fail; report a release failure after the scope closes.
-          (worker) => worker.close().pipe(Effect.catch((error) => {
+          (worker) => this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => {
             releaseFailure = error;
-            return markCleanupFailed;
-          })),
+          }))),
         );
         const rows = yield* readExportRows(connection, state.tableName, metadata.columns);
         return {
@@ -661,6 +669,17 @@ export class WorkingCsvStore {
       if (state.history === prepared.state.history) state.history.markExported(prepared.revisionId);
       return { status: 'exported', editState: buildEditState(state) } satisfies CsvExportOutcome;
     });
+  }
+
+  /** A failed close is reported as cleanup failure and keeps the worker owned by the store, so disposal can retry it. */
+  private releaseExportWorker(worker: WorkspaceDatabaseConnection): Effect.Effect<void, DataEngineError> {
+    return worker.close().pipe(
+      Effect.onExit((exit) => Effect.sync(() => {
+        if (Exit.isSuccess(exit)) this.unreleasedExportWorkers.delete(worker);
+        else this.unreleasedExportWorkers.add(worker);
+      })),
+      Effect.tapError(() => markCleanupFailed),
+    );
   }
 
   private createWorkingCsv(
