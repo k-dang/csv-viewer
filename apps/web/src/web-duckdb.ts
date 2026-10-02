@@ -1,5 +1,5 @@
 import mainModule from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
-import mainWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
+import mainWorker from './web-duckdb-worker?worker&url';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 
 /** Creates the browser's single-threaded database from assets emitted by the web build. */
@@ -7,7 +7,7 @@ export function createWebDuckDb(): DuckDbWasmWorkspaceDatabase {
   return new DuckDbWasmWorkspaceDatabase({
     mainModule: localExecutableAsset(mainModule, window.location.href),
     mainWorker: localExecutableAsset(mainWorker, window.location.href),
-    createWorker: (reference) => Promise.resolve(new Worker(reference)),
+    createWorker: (reference) => Promise.resolve(new Worker(reference, { type: 'module' })),
   });
 }
 
