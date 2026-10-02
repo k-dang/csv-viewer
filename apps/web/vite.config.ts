@@ -7,6 +7,10 @@ export default defineConfig({
   root: __dirname,
   base: './',
   plugins: [react(), tailwindcss()],
+  worker: {
+    // DuckDB marks its package side-effect-free, but this prebundled entry installs onmessage.
+    rollupOptions: { treeshake: false },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '../../packages/ui/src'),

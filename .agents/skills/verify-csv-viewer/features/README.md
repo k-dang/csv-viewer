@@ -9,6 +9,8 @@ This directory is the maintained source for verifying the user-facing behavior o
 - One run at a time. `cleanup` before switching targets.
 - Never drive a `pnpm run dev` window or the user's default Electron userData.
 
+The [web lifecycle recipe](./web-lifecycle.md) also provides a project Playwright command for controlled startup/Worker failures and navigation. Its test runner owns the browser and server; it does not require a helper-launched run. Record injected faults explicitly and inspect the real rendered result.
+
 Per target:
 
 - **desktop.** Seeded Recent CSV Sources are `fixtures/phase-2-sample.csv` and `fixtures/phase-2-sample-edited.csv`. Native Open/Export dialogs are out of band: open CSVs with `drop --file <fixture>` or Recent CSV Sources on the empty window, and never click `Open CSV` or `Export CSV`.
