@@ -74,9 +74,9 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   const worker = await workerReady;
   await openCsv(page);
   await captureState(page, testInfo, 'before-worker-failure');
-  // Throw in the live DuckDB Worker; the browser delivers a genuine Worker error to the adapter.
+  // Reject in the live Worker to exercise the unhandledrejection bridge and adapter error listener.
   await worker.evaluate(() => {
-    setTimeout(() => { throw new Error('PRIVATE injected Worker failure'); }, 0);
+    setTimeout(() => { void Promise.reject(new Error('PRIVATE injected Worker failure')); }, 0);
   });
   await expect(page.getByRole('heading', { name: 'The workspace stopped', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open CSV', exact: true })).toHaveCount(0);
