@@ -35,7 +35,7 @@ async function openCsv(page: Page) {
   await expect(page.getByRole('gridcell', { name: 'Ada', exact: true })).toBeVisible();
 }
 
-test('can open another CSV after source preparation defects without exhausting capacity', async ({ page }, testInfo) => {
+test('can open another CSV after source preparation defects without exhausting capacity', { tag: '@dev' }, async ({ page }, testInfo) => {
   await page.route('**/src/web-workspace-host.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
@@ -137,7 +137,7 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   await attachDiagnostics(testInfo, diagnostics);
 });
 
-test('navigation starts disposal and creates a usable empty workspace', async ({ page }, testInfo) => {
+test('navigation starts disposal and creates a usable empty workspace', { tag: '@dev' }, async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);
   // Observe the existing disposal callback synchronously: unload need not finish async cleanup.
   await page.route('**/src/main.tsx', async (route) => {

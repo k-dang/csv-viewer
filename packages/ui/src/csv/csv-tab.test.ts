@@ -17,6 +17,7 @@ const rowWindow = (filteredRowCount: number): CsvRowWindow => ({
   offset: 0,
   rows: [],
   filteredRowCount,
+  totalRowCount: workingCsv.rowCount,
 });
 
 const counts = (scopeRowCount: number): CsvColumnValueCounts => ({

@@ -167,7 +167,7 @@ export class CsvTab {
       this.set({
         queryStatus: 'ready',
         filteredRowCount: window.filteredRowCount,
-        totalRowCount: this.state.hasActiveQuery ? this.state.totalRowCount : window.filteredRowCount,
+        totalRowCount: window.totalRowCount,
       });
       return window;
     } catch (error) {

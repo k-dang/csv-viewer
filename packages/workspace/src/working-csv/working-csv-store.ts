@@ -451,6 +451,7 @@ class WorkingCsvStore implements WorkingCsvs {
         workingCsvId: state.metadata.workingCsvId,
         offset,
         filteredRowCount: normalizeCount(countRow.filtered_row_count),
+        totalRowCount: state.metadata.rowCount,
         rows: rows.map(normalizeRow),
       };
     }));

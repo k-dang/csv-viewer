@@ -1,12 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
-// Reuse the engine failure/recovery cases against emitted assets. Navigation's source
-// instrumentation belongs to the dev-server suite.
+// Run user workflows against emitted assets, excluding cases that instrument Vite source.
 export default defineConfig({
   testDir: './e2e',
-  testMatch: 'web-lifecycle.spec.ts',
-  grep: /cannot load|Worker failure/,
-  use: { browserName: 'chromium', baseURL: 'http://127.0.0.1:4174' },
+  testIgnore: ['desktop/**', 'drag-and-drop.spec.ts', 'tab-lifecycle.spec.ts', 'comparison-cancellation.spec.ts'],
+  grepInvert: /@dev/,
+  workers: 2,
+  forbidOnly: Boolean(process.env.CI),
+  use: { browserName: 'chromium', baseURL: 'http://127.0.0.1:4174', screenshot: 'only-on-failure', trace: 'retain-on-failure' },
   outputDir: 'test-results/web-build',
   webServer: {
     command: 'pnpm run build:web && pnpm --filter @csv-viewer/web exec vite preview --host 127.0.0.1 --port 4174 --strictPort',
