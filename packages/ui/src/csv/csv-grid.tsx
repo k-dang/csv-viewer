@@ -11,6 +11,7 @@ import {
   ModuleRegistry,
   NumberFilterModule,
   RenderApiModule,
+  RowApiModule,
   RowSelectionModule,
   TextEditorModule,
   TextFilterModule,
@@ -19,13 +20,13 @@ import {
   type GridApi,
   type GridReadyEvent,
   type IDatasource,
+  type ICellEditorParams,
   type SelectionChangedEvent,
 } from 'ag-grid-community';
 import {
   ArrowDown,
   ArrowUp,
   BarChart3,
-  FileDown,
   Plus,
   Redo2,
   RotateCcw,
@@ -46,6 +47,7 @@ import { formatCellValue, formatFileSize, formatNumber } from './csv-format';
 import { QueryStatusIndicator } from './query-status-indicator';
 import { CsvStatsPanel } from './csv-stats-panel';
 import { CsvColumnMenu } from './csv-column-menu';
+import { CsvExportControls } from './csv-export-controls';
 
 ModuleRegistry.registerModules([
   CellApiModule,
@@ -55,6 +57,7 @@ ModuleRegistry.registerModules([
   InfiniteRowModelModule,
   NumberFilterModule,
   RenderApiModule,
+  RowApiModule,
   RowSelectionModule,
   TextEditorModule,
   TextFilterModule,
@@ -91,7 +94,8 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
     stats,
   } = state;
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
-  const revertingCellRef = useRef(false);
+  const pendingCellCommit = useRef<Promise<boolean> | null>(null);
+  const failedCellEdit = useRef<{ rowId: string; column: string; value: string } | null>(null);
 
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
@@ -175,16 +179,64 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   }
 
   async function onCellValueChanged(event: CellValueChangedEvent<CsvRow>) {
-    if (revertingCellRef.current) return;
+    if (event.source === 'csv-viewer-revert') return;
     const rowId = event.data?.[csvInternalRowIdField];
     const column = event.colDef.field;
     if (!rowId || !column) return;
 
-    const accepted = await tab.editCell(rowId, column, String(event.newValue ?? ''));
-    if (accepted) return;
-    revertingCellRef.current = true;
-    event.node.setDataValue(column, event.oldValue);
-    revertingCellRef.current = false;
+    const accepted = await commitCell(rowId, column, String(event.newValue ?? ''));
+    if (accepted) { failedCellEdit.current = null; return; }
+    failedCellEdit.current = { rowId, column, value: String(event.newValue ?? '') };
+    event.node.setDataValue(column, event.oldValue, 'csv-viewer-revert');
+    if (event.rowIndex !== null) event.api.startEditingCell({ rowIndex: event.rowIndex, colKey: column });
+  }
+
+  async function commitCell(rowId: string, column: string, value: string): Promise<boolean> {
+    const commit = tab.editCell(rowId, column, value);
+    pendingCellCommit.current = commit;
+    const accepted = await commit;
+    if (pendingCellCommit.current === commit) pendingCellCommit.current = null;
+    return accepted;
+  }
+
+  async function commitEditing(): Promise<boolean> {
+    if (pendingCellCommit.current && !(await pendingCellCommit.current)) return false;
+    const api = gridApiRef.current;
+    const cell = api?.getEditingCells()[0];
+    if (!api || !cell) return true;
+    const row = api.getDisplayedRowAtIndex(cell.rowIndex)?.data;
+    const editor = api.getCellEditorInstances({ columns: [cell.colId] })[0];
+    if (!row || !editor) return false;
+    // Commit the draft before moving focus; rejected writes leave the editor intact.
+    const value = String(editor.getValue() ?? '');
+    const accepted = value === String(row[cell.colId] ?? '')
+      || await commitCell(row[csvInternalRowIdField], cell.colId, value);
+    if (accepted) {
+      failedCellEdit.current = null;
+      // A slow write must not discard text typed, or another editor opened, while it awaited.
+      if (api.getCellEditorInstances({ columns: [cell.colId] })[0] !== editor || String(editor.getValue() ?? '') !== value) return false;
+      api.stopEditing(true);
+    }
+    return accepted;
+  }
+
+  async function exportView() {
+    if (!(await commitEditing())) return;
+    syncGridQuery();
+    if (tab.snapshot().queryStatus !== 'ready') return;
+    await tab.exportView();
+  }
+
+  function syncGridQuery() {
+    const api = gridApiRef.current;
+    if (api) {
+      const sorted = api.getColumnState().filter((column) => column.sort)
+        .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0));
+      const sort = sorted.flatMap((column) => column.sort === 'asc' || column.sort === 'desc'
+        ? [{ column: column.colId, direction: column.sort }] : []);
+      // SAFETY: The grid registers only the built-in text, number, and date filters.
+      tab.setGridQuery(sort, toCsvFilterDescriptors(api.getFilterModel() as AgFilterModel));
+    }
   }
 
   function onSelectionChanged(event: SelectionChangedEvent<CsvRow>) {
@@ -332,10 +384,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
                 <Redo2 />
               </Button>
           <Separator orientation="vertical" className="mx-1 h-5 self-center" />
-          <Button type="button" variant="outline" size="sm" onClick={() => void tab.export()} aria-label="Export CSV">
-            <FileDown />
-            Export
-          </Button>
+          <CsvExportControls tab={tab} commitEditing={commitEditing} exportView={exportView} />
           <Button
             type="button"
             variant={stats.open ? 'default' : 'ghost'}
@@ -362,6 +411,11 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
               defaultColDef={{
                 editable: true,
                 cellEditor: 'agTextCellEditor',
+                cellEditorParams: (params: ICellEditorParams<CsvRow>) => {
+                  const failed = failedCellEdit.current;
+                  return failed && failed.rowId === params.data?.[csvInternalRowIdField] && failed.column === params.column.getColId()
+                    ? { value: failed.value } : {};
+                },
                 minWidth: 120,
               }}
               getRowId={(params) => params.data[csvInternalRowIdField]}
@@ -380,7 +434,9 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
               ensureDomOrder
               suppressDragLeaveHidesColumns
               onGridReady={onGridReady}
-              onCellValueChanged={onCellValueChanged}
+                onCellValueChanged={onCellValueChanged}
+                onSortChanged={syncGridQuery}
+                onFilterChanged={syncGridQuery}
               onSelectionChanged={onSelectionChanged}
               onCellFocused={onCellFocused}
               onCellKeyDown={onCellKeyDown}

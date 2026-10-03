@@ -17,8 +17,16 @@ A previously opened CSV Source that CSV Viewer can attempt to reopen without req
 _Avoid_: Recent file, file history, remembered filename
 
 **Export CSV**:
-The operation that delivers a Working CSV as a separate output. Export CSV never overwrites or replaces the Working CSV's CSV Source, and a successful export preserves edit history while establishing the current state as exported.
+The operation that delivers the complete Working CSV as a separate output. Export CSV never overwrites or replaces the Working CSV's CSV Source, and a successful export preserves edit history while establishing the current state as exported.
 _Avoid_: Save, Save As, overwrite, write back
+
+**Current CSV View**:
+All rows of a Working CSV matching its current global search and column filters, in its current sort order, with every column in Working CSV order. Row selection, scrolling, and visual column arrangement do not change the Current CSV View.
+_Avoid_: Visible rows, selected rows, screen contents
+
+**Export Current View**:
+The operation that delivers the Current CSV View and working-copy edits captured together at export start as a separate CSV output. It preserves the Working CSV's Unexported Changes status, even when the view includes every row.
+_Avoid_: Export selection, export viewport, save view
 
 **Unexported Changes**:
 Changes in a Working CSV that are not represented by its latest successful Export CSV or, before any export, by its CSV Source. Unexported Changes determine whether closing would discard work, independently of undo and redo availability.

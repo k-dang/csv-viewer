@@ -37,6 +37,8 @@ Double-click a cell to edit it. Values are treated as text, so identifiers such 
 
 Choose **Export CSV** to save the complete working copy, including all row and column edits, using its delimiter and header settings. Search, filters, and sort order do not restrict the export. Desktop prompts for a separate destination and prevents overwriting that CSV's source file; web starts a browser download. Closing a tab with unexported changes asks for confirmation.
 
+Open **Export options** beside Export and choose **Export current view** to extract every matching row in the current sort order, including rows beyond the loaded grid. All columns use working-copy order, regardless of selection or visual arrangement. The menu shows the matching count and disables the action for empty or unresolved queries. An active cell editor commits first; a failed commit keeps the draft open. Preparation offers **Cancel**, and delivery suggests a `-view` filename using the current delimiter and header settings. View export preserves **Unexported Changes** and undo/redo history, even when every row matches.
+
 ## Search, copy, and stats
 
 Search across all columns with **Global search**, or use column headers to sort and filter. **Clear query** resets search, filters, and sorting. Each CSV tab keeps its own query, column focus, and edits.
@@ -106,7 +108,7 @@ Build both apps with `pnpm build`, or create desktop packages with `pnpm package
 
 - Cell values are edited as text, without numeric, date, or boolean validation.
 - Appending a row is disabled while sorting, filtering, or searching. Inserting above or below requires exactly one selected row.
-- Reordering columns is not supported.
+- Dragging headers changes their visual arrangement; exports retain working-copy column order.
 - Spreadsheet features such as formulas, pivot tables, charts, joins, and SQL editing are not supported.
 
 ## Contributing

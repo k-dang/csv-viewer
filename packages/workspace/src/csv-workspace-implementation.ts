@@ -28,6 +28,11 @@ import type {
 } from './csv-viewer';
 
 type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
+type ExportRequest = Extract<CsvViewerRequest, { operation: 'csv.export' | 'csv.export-view' | 'csv.cancel-view-export' }>;
+
+function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
+  return request.operation === 'csv.export' || request.operation === 'csv.export-view' || request.operation === 'csv.cancel-view-export';
+}
 type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>['layer']>;
 
 /** The opaque identifiers a request carries. Diagnostics drop anything that is not a UUID. */
@@ -143,6 +148,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   private handle(request: CsvViewerRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, ExpectedWorkspaceError> {
+    if (isExportRequest(request)) return this.handleExport(request);
     switch (request.operation) {
       case 'csv.open':
         return this.openCsv(request);
@@ -176,14 +182,23 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         return this.workingCsvs.undo(request.workingCsvId);
       case 'csv.redo':
         return this.workingCsvs.redo(request.workingCsvId);
-      case 'csv.export':
-        return Effect.suspend(() => this.workingCsvs.has(request.workingCsvId)
-          ? this.workingCsvs.exportCsv(request.workingCsvId)
-          : Effect.succeed({ status: 'cancelled' } satisfies CsvExportOutcome));
       case 'csv.close':
         return this.closeCsv(request);
       default:
         return this.handleComparison(request);
+    }
+  }
+
+  private handleExport(request: ExportRequest): Effect.Effect<CsvViewerResult<ExportRequest>, ExpectedWorkspaceError> {
+    switch (request.operation) {
+      case 'csv.export':
+        return Effect.suspend(() => this.workingCsvs.has(request.workingCsvId)
+          ? this.workingCsvs.exportCsv(request.workingCsvId)
+          : Effect.succeed({ status: 'cancelled' } satisfies CsvExportOutcome));
+      case 'csv.export-view':
+        return this.workingCsvs.exportView(request);
+      case 'csv.cancel-view-export':
+        return this.workingCsvs.cancelViewExport(request);
     }
   }
 
@@ -254,8 +269,12 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     const stopComparisons = this.comparisons.subscribe((event) => {
       if (!this.engineStopped) listener({ type: 'comparison', event });
     });
+    const stopExports = this.workingCsvs.subscribeToViewExports((event) => {
+      if (!this.engineStopped) listener({ type: 'view-export', event });
+    });
     return () => {
       stopComparisons();
+      stopExports();
       this.listeners.delete(listener);
     };
   }

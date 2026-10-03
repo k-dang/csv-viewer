@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, Semaphore } from 'effect';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { scopedEngineSource } from '@csv-viewer/workspace/engine-source';
@@ -22,6 +22,12 @@ import {
 } from './desktop-csv-export';
 
 const maxRecentSources = 8;
+
+/** The platform write boundary; failures can occur after writing only part of the staging file. */
+export type DesktopExportWriter = (temporaryPath: string, contents: string) => Promise<void>;
+
+const writeExportContents: DesktopExportWriter = (temporaryPath, contents) =>
+  writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' });
 
 export type DesktopWorkspacePrompts = {
   /** Ask for one CSV Source to open. Resolves to null when cancelled. */
@@ -53,6 +59,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   constructor(
     private readonly prompts: DesktopWorkspacePrompts,
     private readonly recentSourcesPath: string,
+    private readonly writeExport: DesktopExportWriter = writeExportContents,
   ) {}
 
   /** Maps a file path to its stable, opaque CSV Source identity for this workspace session. */
@@ -124,16 +131,20 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   deliverExport(request: CsvExportRequestForDelivery) {
     return Effect.gen({ self: this }, function* () {
       const source = yield* this.requireSource(request.sourceId);
-      const defaultPath = path.join(path.dirname(source.filePath), buildDefaultExportName(request.suggestedName));
+      const defaultPath = path.join(path.dirname(source.filePath), request.kind === 'view' ? request.suggestedName : buildDefaultExportName(request.suggestedName));
       while (true) {
         const destinationPath = yield* Effect.promise(() => this.prompts.chooseExportDestination(defaultPath));
         if (!destinationPath) return { status: 'cancelled' } satisfies CsvExportDelivery;
-        const conflicts = yield* this.isSourceDestination(request.sourceId, destinationPath);
+        const conflicts = yield* filesystemEffect(() => isSourceDestination(source, destinationPath)).pipe(Effect.mapError(toExportDestinationError));
         if (conflicts) {
           yield* Effect.promise(() => this.prompts.showSourceConflict());
           continue;
         }
-        yield* filesystemEffect(() => writeFile(destinationPath, request.contents, 'utf8')).pipe(Effect.mapError(toExportDestinationError));
+        const published = yield* filesystemEffect(() => publishExport(source, destinationPath, request.contents, this.writeExport)).pipe(Effect.mapError(toExportDestinationError));
+        if (!published) {
+          yield* Effect.promise(() => this.prompts.showSourceConflict());
+          continue;
+        }
         return { status: 'delivered' } satisfies CsvExportDelivery;
       }
     });
@@ -201,17 +212,6 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
 
   confirmDiscardChanges(sourceName: string) {
     return Effect.promise(() => this.prompts.confirmDiscardChanges(sourceName));
-  }
-
-  private isSourceDestination(sourceId: CsvSourceId, destinationPath: string) {
-    return Effect.suspend(() => {
-      const sourceIdentity = this.sources.get(sourceId)?.identity;
-      if (!sourceIdentity) return Effect.succeed(false);
-      return filesystemEffect(() => captureFileIdentity(destinationPath)).pipe(
-        Effect.mapError(toExportDestinationError),
-        Effect.map((destinationIdentity) => destinationIdentity ? sameFileIdentity(sourceIdentity, destinationIdentity) : false),
-      );
-    });
   }
 
   private requireSource(sourceId: CsvSourceId) {
@@ -299,6 +299,30 @@ function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: stri
 function buildDefaultExportName(sourceName: string): string {
   const parsed = path.parse(sourceName);
   return `${parsed.name}-edited${parsed.ext || '.csv'}`;
+}
+
+async function isSourceDestination(source: RegisteredSource, destinationPath: string): Promise<boolean> {
+  if (normalizeCanonicalPath(path.resolve(destinationPath)) === normalizeCanonicalPath(path.resolve(source.filePath))) return true;
+  const destination = await captureFileIdentity(destinationPath);
+  return source.identity !== null && destination !== null && sameFileIdentity(source.identity, destination);
+}
+
+/** Publish in one rename after a complete write; failures preserve any existing destination. */
+async function publishExport(source: RegisteredSource, destinationPath: string, contents: string, write: DesktopExportWriter): Promise<boolean> {
+  const temporaryPath = path.join(path.dirname(destinationPath), `.csv-viewer-${crypto.randomUUID()}.tmp`);
+  try {
+    await write(temporaryPath, contents);
+    if (await isSourceDestination(source, destinationPath)) return false;
+    await rename(temporaryPath, destinationPath);
+    return true;
+  } finally {
+    await removeStagedExport(temporaryPath);
+  }
+}
+
+async function removeStagedExport(temporaryPath: string): Promise<void> {
+  try { await unlink(temporaryPath); }
+  catch (cause) { if (!isFileSystemError(cause) || cause.code !== 'ENOENT') throw cause; }
 }
 
 function toSourceUnavailableError(cause: NodeJS.ErrnoException): CsvSourceUnavailableError {
