@@ -13,7 +13,7 @@
     "@csv-viewer/ui": "workspace:*",
     "@csv-viewer/workspace": "workspace:*",
     "@duckdb/duckdb-wasm": "catalog:",
-    "effect": "4.0.0-rc.115",
+    "effect": "4.0.0",
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
