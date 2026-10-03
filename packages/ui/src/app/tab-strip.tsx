@@ -23,7 +23,7 @@ export function TabStrip({ tabs, activeTabId, onSelectTab, onCloseTab, label }: 
       <TabsList
         aria-label={label}
         variant="line"
-        className="h-auto w-full min-w-0 flex-col items-stretch gap-0.5 rounded-none p-0"
+        className="h-auto w-full min-w-0 flex-col items-stretch gap-0.5 rounded-none p-0 group-data-collapsed/sidebar:items-center"
       >
         {tabs.map((tab) =>
           tab.kind === 'csv' ? (
@@ -114,17 +114,21 @@ function TabItem({
     <div
       title={title}
       className={cn(
-        'group flex w-full items-center rounded-md',
+        'group flex w-full items-center rounded-md group-data-collapsed/sidebar:w-8',
         isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
     >
       <TabsTrigger
         value={id}
-        className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none"
+        className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none group-data-collapsed/sidebar:h-8 group-data-collapsed/sidebar:justify-center group-data-collapsed/sidebar:p-0 group-data-collapsed/sidebar:[&>svg]:size-4"
       >
         {icon}
         <span className="truncate group-data-collapsed/sidebar:sr-only">{label}</span>
-        {badge}
+        {badge ? (
+          <span className="flex items-center group-data-collapsed/sidebar:absolute group-data-collapsed/sidebar:top-1 group-data-collapsed/sidebar:right-1">
+            {badge}
+          </span>
+        ) : null}
       </TabsTrigger>
       <Button
         type="button"
