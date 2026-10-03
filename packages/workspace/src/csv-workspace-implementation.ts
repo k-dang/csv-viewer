@@ -1,11 +1,11 @@
 import { OperationCleanup, diagnosticsLayer, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure, type WorkspaceDiagnostics } from './workspace-diagnostics';
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
-import { Comparisons, Host, WorkingCsv, makeWorkspaceLayer } from './workspace-runtime';
+import { makeWorkspaceLayer } from './workspace-runtime';
 import { stoppedEngineMessage, type DataEngineError, type OwnedWorkspaceDatabase } from './database';
-import type { CsvComparisonService } from './comparison/csv-comparison-service';
-import type { WorkingCsvStore } from './working-csv/working-csv-store';
-import type { CsvSourceUnavailableError, CsvWorkspaceHost } from './workspace-host';
+import { Comparisons } from './comparison/csv-comparison-service';
+import { WorkingCsvs } from './working-csv/working-csv-store';
+import { CsvWorkspaceHost, type CsvSourceUnavailableError } from './workspace-host';
 import type { CreateCsvViewerOptions, CsvWorkspaceOwner } from './csv-workspace';
 import { genericWorkspaceFailure, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError, type ExpectedWorkspaceError } from './errors';
 import { CloseImpact, CsvViewerRequest } from './csv-viewer-requests';
@@ -56,8 +56,8 @@ const engineStoppedEvent: Extract<CsvViewerEvent, { type: 'fatal-error' }> = {
 export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   private disposal: Promise<void> | null = null;
   private readonly host: CsvWorkspaceHost;
-  private readonly csvStore: WorkingCsvStore;
-  private readonly comparisonStore: CsvComparisonService;
+  private readonly csvStore: WorkingCsvs;
+  private readonly comparisonStore: Comparisons;
   private readonly listeners = new Set<(event: CsvViewerEvent) => void>();
 
   private constructor(
@@ -67,8 +67,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     private readonly databaseRelease: { readonly failed: boolean },
     private readonly stopped: Deferred.Deferred<void> | undefined,
   ) {
-    this.host = Context.get(context, Host);
-    this.csvStore = Context.get(context, WorkingCsv);
+    this.host = Context.get(context, CsvWorkspaceHost);
+    this.csvStore = Context.get(context, WorkingCsvs);
     this.comparisonStore = Context.get(context, Comparisons);
   }
 

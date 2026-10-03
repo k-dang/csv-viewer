@@ -1,24 +1,28 @@
-import { Effect, Logger } from 'effect';
+import { Effect, Layer, Logger } from 'effect';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
-import { DataEngineError } from '../../../packages/workspace/src/database';
+import { DataEngineError, WorkspaceDatabase } from '../../../packages/workspace/src/database';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
-import { WorkingCsvStore } from '../../../packages/workspace/src/working-csv/working-csv-store';
+import { WorkingCsvs, workingCsvsLayer } from '../../../packages/workspace/src/working-csv/working-csv-store';
+import { CsvWorkspaceHost } from '../../../packages/workspace/src/workspace-host';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
 
 /**
  * Store invariants that the CsvWorkspace surface cannot observe: refusing work after its own
  * disposal validation fails, and isolation between the data-change listeners the Comparison area relies on.
- * These drive a bare WorkingCsvStore, so they borrow only the fixture's host and temp directory.
+ * These build the Working CSV Layer alone, so they borrow only the fixture's host and temp directory.
  */
 let fixture: CsvWorkspaceFixture;
 let database: DuckDbWorkspaceDatabase;
-let store: WorkingCsvStore;
+let store: WorkingCsvs;
 
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
   database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
-  store = new WorkingCsvStore(fixture.host, database);
+  store = Effect.runSync(Effect.service(WorkingCsvs).pipe(Effect.provide(workingCsvsLayer.pipe(Layer.provide(Layer.mergeAll(
+    Layer.succeed(CsvWorkspaceHost, fixture.host),
+    Layer.succeed(WorkspaceDatabase, database),
+  ))))));
 });
 
 afterEach(async () => {
@@ -38,7 +42,7 @@ async function openWorkingCsv(fileName: string, contents: string) {
   return outcome.workingCsv;
 }
 
-describe('WorkingCsvStore invariants', () => {
+describe('Working CSV store invariants', () => {
   it('rejects a store open once disposal begins', async () => {
     const workingCsv = await openWorkingCsv('open-before-disposal.csv', 'name\nAda\n');
     const lateSourceId = await fixture.registerSource('late-open.csv', 'name\nGrace\n');

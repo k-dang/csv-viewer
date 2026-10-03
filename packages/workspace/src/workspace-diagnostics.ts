@@ -1,5 +1,4 @@
-import { Cause, Context, Effect, Exit, Logger, Option, References, Schema, Tracer } from 'effect';
-import { ComparisonCleanupError } from './comparison/comparison-effects';
+import { Cause, Context, Effect, Exit, Logger, Option, Predicate, References, Schema, Tracer } from 'effect';
 
 export interface WorkspaceDiagnostics {
   readonly logger?: Logger.Logger<unknown, void>;
@@ -25,9 +24,12 @@ function approvedField(key: string, value: unknown): boolean {
   return false;
 }
 
-/** Classify only the outer typed reasons. Never inspect or serialize nested driver causes. */
+/**
+ * Classify only the outer typed reasons. Never inspect or serialize nested driver causes.
+ * Matches `ComparisonCleanupError` by tag, so the database module can report its own stages.
+ */
 export function diagnosticCause(cause: Cause.Cause<unknown>): string {
-  if (cause.reasons.some((reason) => reason._tag === 'Die' && reason.defect instanceof ComparisonCleanupError)) return 'cleanup-failed';
+  if (cause.reasons.some(isCleanupFailure)) return 'cleanup-failed';
   if (Cause.hasDies(cause)) return 'defect';
   if (Cause.hasFails(cause)) return 'recoverable-failure';
   return 'interrupted';
@@ -46,8 +48,12 @@ export function observeStage<A, E, R>(stage: string, effect: Effect.Effect<A, E,
   }).pipe(Effect.withLogSpan(stage), Effect.withSpan(stage, {}, { captureStackTrace: false }));
 }
 
+function isCleanupFailure(reason: Cause.Reason<unknown>): boolean {
+  return reason._tag === 'Die' && Predicate.isTagged(reason.defect, 'ComparisonCleanupError');
+}
+
 export function recordOutcome(outcome: string, cause?: Cause.Cause<unknown>, cleanup?: 'succeeded' | 'cleanup-failed') {
-  const fields = cause ? { outcome, cleanup, failureCategory: diagnosticCause(cause), recoverableFailure: Cause.hasFails(cause), defect: cause.reasons.some((reason) => reason._tag === 'Die' && !(reason.defect instanceof ComparisonCleanupError)), interrupted: Cause.hasInterrupts(cause) } : { outcome, cleanup, failureCategory: cleanup === 'cleanup-failed' ? 'cleanup-failed' : undefined };
+  const fields = cause ? { outcome, cleanup, failureCategory: diagnosticCause(cause), recoverableFailure: Cause.hasFails(cause), defect: cause.reasons.some((reason) => reason._tag === 'Die' && !isCleanupFailure(reason)), interrupted: Cause.hasInterrupts(cause) } : { outcome, cleanup, failureCategory: cleanup === 'cleanup-failed' ? 'cleanup-failed' : undefined };
   return Effect.annotateCurrentSpan(fields);
 }
 
