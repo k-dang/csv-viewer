@@ -338,7 +338,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         if (readers) readers.count += 1;
         else this.readers.set(artifactId, { count: 1, drained });
       },
-      catch: (cause) => new DataEngineError(cause),
+      catch: (cause) => new DataEngineError({ cause }),
     });
   });
 

@@ -104,11 +104,11 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
 
   openAttempt() {
     return Effect.acquireRelease(Effect.succeed({
-      validateKey: () => Effect.tryPromise({ try: () => this.validateKey(), catch: (cause) => new DataEngineError(cause) }),
-      createSnapshot: (request: CreateComparisonSnapshotRequest) => Effect.tryPromise({ try: () => this.createSnapshot(request), catch: (cause) => new DataEngineError(cause) }).pipe(
+      validateKey: () => Effect.tryPromise({ try: () => this.validateKey(), catch: (cause) => new DataEngineError({ cause }) }),
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => Effect.tryPromise({ try: () => this.createSnapshot(request), catch: (cause) => new DataEngineError({ cause }) }).pipe(
         Effect.onInterrupt(() => Effect.sync(() => this.cancel(request.artifactId))),
       ),
-    }), () => cleanupEffect(Effect.tryPromise({ try: () => this.release(), catch: (cause) => new DataEngineError(cause) })));
+    }), () => cleanupEffect(Effect.tryPromise({ try: () => this.release(), catch: (cause) => new DataEngineError({ cause }) })));
   }
 
   async validateKey(): Promise<SourceKeyDiagnostics> {
@@ -131,7 +131,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
 
   readWindow(_request: ReadComparisonSnapshotWindowRequest) {
     return Effect.suspend(() => this.failWindowReads
-      ? Effect.fail(new DataEngineError(new Error('scripted read failure')))
+      ? Effect.fail(new DataEngineError({ cause: new Error('scripted read failure') }))
       : Effect.succeed<StoredComparisonWindow>({ totalRowCount: 0, rows: [] }));
   }
 
@@ -143,7 +143,7 @@ class ScriptedComparisonExecutor implements ComparisonExecutor {
       }
       if (this.dropFailuresRemaining > 0) {
         this.dropFailuresRemaining -= 1;
-        return yield* Effect.fail(new DataEngineError(new Error('scripted drop failure')));
+        return yield* Effect.fail(new DataEngineError({ cause: new Error('scripted drop failure') }));
       }
     });
   }

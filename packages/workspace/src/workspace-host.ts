@@ -1,5 +1,5 @@
 import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './csv-viewer';
-import type { Effect, Scope } from 'effect';
+import { Data, type Effect, type Scope } from 'effect';
 import type { DataEngineError } from './database';
 import type { WorkspaceRequestError } from './errors';
 
@@ -53,12 +53,8 @@ export interface CsvWorkspaceHost {
   confirmDiscardChanges(sourceName: string): Effect.Effect<boolean, CsvSourceUnavailableError | WorkspaceRequestError>;
 }
 
-export class CsvSourceUnavailableError extends Error {
-  constructor(
-    readonly code: CsvSourceUnavailableCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'CsvSourceUnavailableError';
-  }
-}
+/** An expected CSV Source or export destination access failure, classified by the host. Its message is safe to show. */
+export class CsvSourceUnavailableError extends Data.TaggedError('CsvSourceUnavailableError')<{
+  code: CsvSourceUnavailableCode;
+  message: string;
+}> {}

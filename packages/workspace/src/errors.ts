@@ -10,7 +10,10 @@ export const genericWorkspaceFailure = 'The CSV workspace could not complete the
 /** The only rejection for a payload that does not decode as a CsvViewer request. It never includes decode issues. */
 export const malformedRequestMessage = 'Malformed CSV Viewer request.';
 
-export function isExpectedWorkspaceError(cause: unknown): cause is WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError {
+/** The declared failures a request may end with. Each carries a message that is safe to show the user. */
+export type ExpectedWorkspaceError = WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError;
+
+export function isExpectedWorkspaceError(cause: unknown): cause is ExpectedWorkspaceError {
   return cause instanceof WorkspaceRequestError || cause instanceof DataEngineError || cause instanceof CsvSourceUnavailableError;
 }
 

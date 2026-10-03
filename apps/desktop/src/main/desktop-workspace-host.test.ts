@@ -20,11 +20,11 @@ describe('DesktopWorkspaceHost behavior', () => {
   it('normalizes a missing dropped file without exposing its path', async () => {
     const filePath = fixture.file('PRIVATE-missing.csv');
     const exit = await Effect.runPromiseExit(fixture.host.acquireDroppedSource(filePath));
-    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.')));
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source no longer exists.' })));
   });
 
   it('keeps unexpected discard-prompt rejections as defects even when they use a source error class', async () => {
-    const failure = new CsvSourceUnavailableError('unreadable', 'PRIVATE prompt failure.');
+    const failure = new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE prompt failure.' });
     fixture.prompts.holdDiscardPrompt = async () => { throw failure; };
 
     const exit = await Effect.runPromiseExit(fixture.host.confirmDiscardChanges('people.csv'));
@@ -40,7 +40,7 @@ describe('DesktopWorkspaceHost behavior', () => {
       sourceId, suggestedName: 'people.csv', contents: 'name\nGrace\n',
     }));
 
-    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('missing-source', 'The export destination no longer exists.')));
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The export destination no longer exists.' })));
   });
 
 

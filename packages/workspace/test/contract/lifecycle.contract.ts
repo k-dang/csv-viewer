@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { cleanupEffect } from '../../src/comparison/comparison-effects';
-import { DataEngineError } from '../../src/database';
+import { driverEffect } from '../../src/database';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComparisonOperationId,
@@ -36,7 +36,7 @@ class ControlledExecutor implements ComparisonExecutor {
     return Effect.acquireRelease(Effect.succeed({
       validateKey: () => Effect.succeed(validDiagnostics),
       // Wait for releaseCancellation() before finishing interruption.
-      createSnapshot: (request: CreateComparisonSnapshotRequest) => Effect.tryPromise({ try: () => this.createSnapshot(request), catch: (cause) => new DataEngineError(cause) }).pipe(Effect.uninterruptible),
+      createSnapshot: (request: CreateComparisonSnapshotRequest) => driverEffect(() => this.createSnapshot(request)),
     }), () => cleanupEffect(Effect.gen({ self: this }, function* () {
       this.cleanupStarted.resolve();
       if (this.holdCleanup) yield* Effect.promise(() => this.cleanupAllowed.promise);

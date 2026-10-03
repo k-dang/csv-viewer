@@ -1,6 +1,8 @@
-import { Effect } from 'effect';
+import { Data, Effect } from 'effect';
 import type { QueryValues } from './query/csv-query';
 import type { EngineRow } from './query/csv-result-normalization';
+
+export const engineFailureMessage = 'The data engine could not complete the operation.';
 
 export const stoppedEngineMessage = 'The data engine has stopped. Reload CSV Viewer to start a new workspace.';
 
@@ -41,11 +43,9 @@ export interface OwnedWorkspaceDatabase extends WorkspaceDatabase {
   closeEngine(): Effect.Effect<void, DataEngineError>;
 }
 
-export class DataEngineError extends Error {
-  constructor(cause: unknown) {
-    super('The data engine could not complete the operation.', { cause });
-    this.name = 'DataEngineError';
-  }
+/** An expected engine failure, classified at the runtime edge. The fixed message keeps driver details from users. */
+export class DataEngineError extends Data.TaggedError('DataEngineError')<{ cause: unknown }> {
+  override readonly message = engineFailureMessage;
 }
 
 /**
@@ -56,7 +56,7 @@ export function driverEffect<A>(
   operation: () => Promise<A>,
   cancel?: () => Promise<void>,
 ): Effect.Effect<A, DataEngineError> {
-  const toEngineError = (cause: unknown) => new DataEngineError(cause);
+  const toEngineError = (cause: unknown) => new DataEngineError({ cause });
   if (!cancel) return Effect.uninterruptible(Effect.tryPromise({ try: operation, catch: toEngineError }));
   return Effect.callback<A, DataEngineError>((resume) => {
     let pending: Promise<A>;

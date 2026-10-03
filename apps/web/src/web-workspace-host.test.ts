@@ -11,7 +11,7 @@ afterEach(() => {
 
 describe('WebWorkspaceHost', () => {
   it('keeps unexpected picker rejections as defects even when they use a source error class', async () => {
-    const failure = new CsvSourceUnavailableError('unreadable', 'PRIVATE picker failure.');
+    const failure = new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE picker failure.' });
     const host = new WebWorkspaceHost(createNodeDuckDbWasmDatabase(), async () => { throw failure; });
 
     const exit = await Effect.runPromiseExit(host.acquireSource());
@@ -28,7 +28,7 @@ describe('WebWorkspaceHost', () => {
 
     const exit = await Effect.runPromiseExit(Effect.scoped(host.acquireEngineSource(sourceId)));
 
-    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.')));
+    expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError({ code: 'unreadable', message: 'The CSV Source could not be read.' })));
   });
 
   it('hands an exported CSV to the browser as a named download', async () => {

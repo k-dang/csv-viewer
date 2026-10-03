@@ -107,7 +107,7 @@ describe('WorkingCsvStore invariants', () => {
     database.run = (sql, values) => {
       if (!sql.startsWith('ALTER TABLE')) return run(sql, values);
       database.run = run;
-      return Effect.fail(new DataEngineError(new Error('PRIVATE replay failure')));
+      return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE replay failure') }));
     };
     await expect(Effect.runPromise(store.undo(workingCsvId))).rejects.toThrow();
 

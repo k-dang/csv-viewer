@@ -234,8 +234,8 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
 it('reports a failed startup check and failed cleanup without driver text', async () => {
   const capture = diagnosticCapture();
   const database = new FatalTestDatabase();
-  vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.fail(new DataEngineError(new Error('PRIVATE startup failure'))));
-  vi.spyOn(database, 'closeEngine').mockReturnValue(Effect.fail(new DataEngineError(new Error('PRIVATE termination failure'))));
+  vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE startup failure') })));
+  vi.spyOn(database, 'closeEngine').mockReturnValue(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE termination failure') })));
 
   await expect(startWebCsvViewer(database, async () => null, { diagnostics: capture.configuration }))
     .resolves.toEqual({ status: 'unsupported' });
