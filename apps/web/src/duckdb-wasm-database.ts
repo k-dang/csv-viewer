@@ -11,7 +11,7 @@ import { Deferred, Effect } from 'effect';
 import {
   driverEffect,
   stoppedEngineMessage,
-  type DataEngineError,
+  DataEngineError,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -202,7 +202,10 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   ownerConnection(): Effect.Effect<DuckDbWasmConnection, DataEngineError> {
-    return this.calls.effect(async () => this.opened().connection);
+    return Effect.try({
+      try: () => this.opened().connection,
+      catch: (cause) => new DataEngineError({ cause }),
+    });
   }
 
   connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {
@@ -217,12 +220,12 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.ownerConnection().pipe(Effect.flatMap((connection) => connection.readObjects(sql, values)));
   }
 
-  registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
-    return Effect.runPromise(this.calls.effect(() => this.registerBuffer(name, contents)));
+  registerFileBuffer(name: string, contents: Uint8Array): Effect.Effect<string, DataEngineError> {
+    return this.calls.effect(() => this.registerBuffer(name, contents));
   }
 
-  dropFile(reference: string): Promise<void> {
-    return Effect.runPromise(this.calls.effect(() => this.dropBuffer(reference)));
+  dropFile(reference: string): Effect.Effect<void, DataEngineError> {
+    return this.calls.effect(() => this.dropBuffer(reference));
   }
 
   private async registerBuffer(name: string, contents: Uint8Array): Promise<string> {

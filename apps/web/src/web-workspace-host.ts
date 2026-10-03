@@ -1,5 +1,4 @@
 import { Effect } from 'effect';
-import { driverEffect } from '@csv-viewer/workspace/database';
 import type {
   CsvCapacityExceeded,
   CsvSourceId,
@@ -94,8 +93,8 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
         try: () => source.arrayBuffer(),
         catch: () => new CsvSourceUnavailableError({ code: 'unreadable', message: 'The CSV Source could not be read.' }),
       });
-      return yield* driverEffect(() => this.database.registerFileBuffer(source.name, new Uint8Array(contents)));
-    }), (reference) => driverEffect(() => this.database.dropFile(reference)));
+      return yield* this.database.registerFileBuffer(source.name, new Uint8Array(contents));
+    }), (reference) => this.database.dropFile(reference));
   }
 
   deliverExport(request: CsvExportRequestForDelivery) {

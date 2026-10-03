@@ -114,10 +114,10 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
 
   it('reads registered memory files while rejecting remote sources and extension fetching', async () => {
     database = await openNodeDatabase();
-    const reference = await database.registerFileBuffer(
+    const reference = await Effect.runPromise(database.registerFileBuffer(
       'people.csv',
       new TextEncoder().encode('name,age\nAda,37\n'),
-    );
+    ));
 
     const rows = await Effect.runPromise(database.readObjects(
       `SELECT * FROM read_csv_auto('${reference}', all_varchar = true)`,

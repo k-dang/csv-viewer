@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Semaphore } from 'effect';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
@@ -48,7 +48,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   readonly capabilities = electronCsvViewerCapabilities;
   private readonly sources = new Map<CsvSourceId, RegisteredSource>();
   private readonly sourceIdsByIdentity = new Map<string, CsvSourceId>();
-  private recentEntriesUpdate: Promise<void> = Promise.resolve();
+  private readonly recentEntriesLock = Semaphore.makeUnsafe(1);
 
   constructor(
     private readonly prompts: DesktopWorkspacePrompts,
@@ -238,17 +238,13 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   }
 
   private modifyRecentEntries(update: (entries: RecentSourceEntry[]) => RecentSourceEntry[]) {
-    return Effect.suspend(() => {
-      const run = this.recentEntriesUpdate.then(() => Effect.runPromiseExit(Effect.gen({ self: this }, function* () {
-        const entries = yield* this.readRecentEntries();
-        const next = update(entries);
-        if (next.length === entries.length && next.every((entry, index) => entry === entries[index])) return entries;
-        yield* this.writeRecentEntries(next);
-        return next;
-      })));
-      this.recentEntriesUpdate = run.then(() => undefined);
-      return Effect.promise(() => run).pipe(Effect.flatten);
-    });
+    return Effect.gen({ self: this }, function* () {
+      const entries = yield* this.readRecentEntries();
+      const next = update(entries);
+      if (next.length === entries.length && next.every((entry, index) => entry === entries[index])) return entries;
+      yield* this.writeRecentEntries(next);
+      return next;
+    }).pipe(this.recentEntriesLock.withPermit, Effect.uninterruptible);
   }
 
   private writeRecentEntries(entries: RecentSourceEntry[]) {
