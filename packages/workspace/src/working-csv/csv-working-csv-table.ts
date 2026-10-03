@@ -127,11 +127,44 @@ export function columnsAfter(
           ? columns.filter((column) => column.name !== command.name)
           : spliceColumn(columns, command.index, { name: command.name, type: command.columnType }),
       );
+    case 'reorder-columns':
+      return orderedColumns(columns, direction === 'redo' ? command.oldIndexes : invertColumnOrder(command.oldIndexes));
     default: {
       const exhaustive: never = command;
       throw new Error(`Unsupported CSV edit command: ${String(exhaustive)}`);
     }
   }
+}
+
+function orderedColumns(
+  columns: readonly CsvColumn[],
+  order: readonly number[] | undefined,
+): QueryBuild<CsvColumn[]> {
+  if (!order || order.length !== columns.length) {
+    return Result.fail(new WorkspaceRequestError({ message: 'CSV column order is no longer valid.' }));
+  }
+  const seen = new Set<number>();
+  const next: CsvColumn[] = [];
+  for (const oldIndex of order) {
+    if (!Number.isInteger(oldIndex) || oldIndex < 0 || oldIndex >= columns.length || seen.has(oldIndex)) {
+      return Result.fail(new WorkspaceRequestError({ message: 'CSV column order is no longer valid.' }));
+    }
+    seen.add(oldIndex);
+    next.push(columns[oldIndex]);
+  }
+  return Result.succeed(next);
+}
+
+function invertColumnOrder(order: readonly number[]): number[] | undefined {
+  const inverse = Array.from({ length: order.length }, () => -1);
+  const seen = new Set<number>();
+  for (let newIndex = 0; newIndex < order.length; newIndex += 1) {
+    const oldIndex = order[newIndex];
+    if (!Number.isInteger(oldIndex) || oldIndex < 0 || oldIndex >= order.length || seen.has(oldIndex)) return undefined;
+    seen.add(oldIndex);
+    inverse[oldIndex] = newIndex;
+  }
+  return inverse;
 }
 
 function spliceColumn(columns: readonly CsvColumn[], index: number, column: CsvColumn): CsvColumn[] {
@@ -234,6 +267,8 @@ export const runEditCommand = Effect.fnUntraced(function* (
         redoing ? command.name : command.hiddenName,
         redoing ? command.hiddenName : command.name,
       );
+      return;
+    case 'reorder-columns':
       return;
     default: {
       const exhaustive: never = command;

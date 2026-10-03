@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
+import type { ColumnMovedEvent } from 'ag-grid-community';
 import type { AgGridReactProps } from 'ag-grid-react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
@@ -199,6 +200,96 @@ describe('CsvGrid', () => {
     expect(latest?.maintainColumnOrder).toBeFalsy();
   });
 
+  it('persists a finished header drag as the Working CSV column order', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+        { name: 'status', type: 'VARCHAR' },
+      ],
+    });
+    const reordered = [
+      { name: 'status', type: 'VARCHAR' },
+      { name: 'id', type: 'VARCHAR' },
+      { name: 'email', type: 'VARCHAR' },
+    ];
+    const reorderColumns = vi.fn(async () => ({
+      workingCsvId: workingCsv.workingCsvId,
+      columns: reordered,
+      hasUnexportedChanges: true,
+      canUndo: true,
+      canRedo: false,
+    }));
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.reorder-columns': reorderColumns } }), workingCsv);
+    let latest: AgGridReactProps<CsvRow> | undefined;
+    const CaptureGrid = (props: AgGridReactProps<CsvRow>) => {
+      latest = props;
+      return null;
+    };
+    const applyColumnState = vi.fn();
+
+    const { rerender } = render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+
+    await act(async () => {
+      await latest?.onColumnMoved?.(movedColumns(['status', 'id', 'email'], applyColumnState));
+    });
+    rerender(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+
+    expect(reorderColumns).toHaveBeenCalledWith({
+      operation: 'csv.reorder-columns',
+      workingCsvId: workingCsv.workingCsvId,
+      columns: ['status', 'id', 'email'],
+    });
+    expect(fieldNames(latest?.columnDefs)).toEqual(['status', 'id', 'email']);
+    expect(applyColumnState).not.toHaveBeenCalled();
+
+    reorderColumns.mockClear();
+    await act(async () => {
+      await latest?.onColumnMoved?.(movedColumns(['status', 'id', 'email'], applyColumnState, { finished: false }));
+      await latest?.onColumnMoved?.(movedColumns(['email', 'status', 'id'], applyColumnState, { source: 'gridOptionsChanged' }));
+    });
+    expect(reorderColumns).not.toHaveBeenCalled();
+    expect(fieldNames(latest?.columnDefs)).toEqual(['status', 'id', 'email']);
+  });
+
+  it('puts the headers back when the Working CSV rejects the new order', async () => {
+    const workingCsv = workingCsvFixture({
+      columns: [
+        { name: 'id', type: 'VARCHAR' },
+        { name: 'email', type: 'VARCHAR' },
+        { name: 'status', type: 'VARCHAR' },
+      ],
+    });
+    const tab = new CsvTab(
+      createTestCsvViewer({
+        handlers: {
+          'csv.reorder-columns': async () => {
+            throw new Error('CSV column order must list every column once.');
+          },
+        },
+      }),
+      workingCsv,
+    );
+    let latest: AgGridReactProps<CsvRow> | undefined;
+    const CaptureGrid = (props: AgGridReactProps<CsvRow>) => {
+      latest = props;
+      return null;
+    };
+    const applyColumnState = vi.fn();
+
+    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={CaptureGrid} />));
+    await act(async () => {
+      await latest?.onColumnMoved?.(movedColumns(['status', 'id', 'email'], applyColumnState));
+    });
+
+    expect(applyColumnState).toHaveBeenCalledWith({
+      state: [{ colId: 'id' }, { colId: 'email' }, { colId: 'status' }],
+      applyOrder: true,
+    });
+    expect(fieldNames(latest?.columnDefs)).toEqual(['id', 'email', 'status']);
+    expect(tab.snapshot().editError).toBe('CSV column order must list every column once.');
+  });
+
   it('splits Ctrl+C (copy cell) from Ctrl+Shift+A (copy column)', () => {
     const cell = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true });
     const column = new KeyboardEvent('keydown', { key: 'A', ctrlKey: true, shiftKey: true });
@@ -218,6 +309,35 @@ describe('CsvGrid', () => {
     expect(isCopyCellShortcut(shiftC)).toBe(false);
   });
 });
+
+type HeaderDrag = {
+  finished: boolean;
+  source: ColumnMovedEvent['source'];
+  api: {
+    getColumnState: () => { colId: string }[];
+    applyColumnState: (params: { state: { colId: string }[]; applyOrder: true }) => void;
+  };
+};
+
+function movedColumns(
+  names: string[],
+  applyColumnState: HeaderDrag['api']['applyColumnState'],
+  overrides: { finished?: boolean; source?: HeaderDrag['source'] } = {},
+): ColumnMovedEvent<CsvRow> {
+  return headerDrag({
+    finished: overrides.finished ?? true,
+    source: overrides.source ?? 'uiColumnMoved',
+    api: {
+      getColumnState: () => names.map((colId) => ({ colId })),
+      applyColumnState,
+    },
+  });
+}
+
+function headerDrag(event: HeaderDrag): ColumnMovedEvent<CsvRow> {
+  // SAFETY: CsvGrid.onColumnMoved reads finished, source, getColumnState, and applyColumnState.
+  return event as ColumnMovedEvent<CsvRow>;
+}
 
 function fieldNames(columnDefs: AgGridReactProps<CsvRow>['columnDefs']): string[] {
   if (!columnDefs) return [];

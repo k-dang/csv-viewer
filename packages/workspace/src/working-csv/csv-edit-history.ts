@@ -20,7 +20,8 @@ export type CsvEditDraft =
       index: number;
       columnType: string;
       hiddenName: string;
-    };
+    }
+  | { type: 'reorder-columns'; oldIndexes: number[] };
 
 export type CsvEditCommand = CsvEditDraft & {
   previousRevisionId: number;
@@ -115,6 +116,7 @@ export function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo
     case 'rename-column':
     case 'insert-column':
     case 'delete-column':
+    case 'reorder-columns':
       return 0;
     case 'delete-rows':
       return sign * -command.rowIds.length;

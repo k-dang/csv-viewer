@@ -24,6 +24,7 @@ import type {
   CsvInsertColumnRequest,
   CsvInsertRowRequest,
   CsvRenameColumnRequest,
+  CsvReorderColumnsRequest,
   CsvRowWindow,
   CsvRowWindowRequest,
   CsvSchemaEditState,
@@ -124,6 +125,7 @@ export interface WorkingCsvs {
   renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   insertColumn(request: CsvInsertColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   deleteColumn(request: CsvDeleteColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  reorderColumns(request: CsvReorderColumnsRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
@@ -647,6 +649,14 @@ class WorkingCsvStore implements WorkingCsvs {
     }));
   }
 
+  reorderColumns(request: CsvReorderColumnsRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
+    return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
+      const order = yield* Effect.fromResult(columnOrder(state.metadata.columns, request.columns));
+      if (order.every((oldIndex, newIndex) => oldIndex === newIndex)) return buildSchemaEditState(state);
+      return yield* this.commitSchemaEdit(state, { type: 'reorder-columns', oldIndexes: order });
+    }));
+  }
+
   undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.stepHistory(workingCsvId, 'undo');
   }
@@ -1102,7 +1112,7 @@ function buildSchemaEditState(state: WorkingCsvState): CsvSchemaEditState {
 
 type CsvSchemaEditDraft = Extract<
   CsvEditDraft,
-  { type: 'rename-column' | 'insert-column' | 'delete-column' }
+  { type: 'rename-column' | 'insert-column' | 'delete-column' | 'reorder-columns' }
 >;
 
 function isReservedCsvColumnName(name: string): boolean {
@@ -1121,6 +1131,27 @@ function defaultColumnName(columns: readonly { name: string }[]): string {
     const candidate = n === 1 ? 'New column' : `New column ${n}`;
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
+}
+
+function columnOrder(
+  columns: readonly { name: string }[],
+  names: readonly string[],
+): Result.Result<number[], WorkspaceRequestError> {
+  if (names.length !== columns.length) {
+    return Result.fail(new WorkspaceRequestError({ message: 'CSV column order must list every column once.' }));
+  }
+  const indexes = new Map(columns.map((column, index) => [column.name, index]));
+  const order: number[] = [];
+  const seen = new Set<number>();
+  for (const name of names) {
+    const index = indexes.get(name);
+    if (index === undefined || seen.has(index)) {
+      return Result.fail(new WorkspaceRequestError({ message: 'CSV column order must list every column once.' }));
+    }
+    seen.add(index);
+    order.push(index);
+  }
+  return Result.succeed(order);
 }
 
 function requireColumnIndex(columns: readonly { name: string }[], name: string): Result.Result<number, WorkspaceRequestError> {

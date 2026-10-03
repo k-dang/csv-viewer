@@ -1063,5 +1063,47 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
         changedSides: ['baseline'],
       });
     });
+
+    it('lists comparison columns in the baseline order after a reorder', async () => {
+      const baseline = await value.openSource(
+        'baseline.csv',
+        ['id,left,right', '1,a,b', '2,c,d', ''].join('\n'),
+      );
+      const candidate = await value.openSource(
+        'candidate.csv',
+        ['id,left,right', '1,a,B', '2,c,d', ''].join('\n'),
+      );
+      await value.viewer.call({
+        operation: 'csv.reorder-columns',
+        workingCsvId: baseline.workingCsvId,
+        columns: ['id', 'right', 'left'],
+      });
+
+      const comparison = await openComparison(value, baseline, candidate);
+      const applied = await applyKey(value, comparison.comparisonId, ['id']);
+
+      expect(applied.applied?.summary.changedColumns).toEqual([
+        { name: 'right', changedRowCount: 1 },
+        { name: 'left', changedRowCount: 0 },
+      ]);
+      const window = await readWindow(value, applied, { columns: 'csv-order' });
+      expect(window.valueColumns.map((column) => column.name)).toEqual(['right', 'left']);
+      expect(window.rows.map(observableRow)).toEqual([
+        {
+          classification: 'changed',
+          keyValues: ['1'],
+          baseline: ['b', 'a'],
+          candidate: ['B', 'a'],
+          changed: [true, false],
+        },
+        {
+          classification: 'unchanged',
+          keyValues: ['2'],
+          baseline: ['d', 'c'],
+          candidate: ['d', 'c'],
+          changed: [false, false],
+        },
+      ]);
+    });
   });
 }

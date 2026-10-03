@@ -266,6 +266,20 @@ export class CsvTab {
     );
   }
 
+  reorderColumns(columns: readonly string[]): Promise<boolean> {
+    const current = this.state.workingCsv.columns.map((column) => column.name);
+    if (columns.length === current.length && columns.every((name, index) => name === current[index])) {
+      return Promise.resolve(true);
+    }
+    return this.mutate('Unable to reorder columns.', () =>
+      this.viewer.call({
+        operation: 'csv.reorder-columns',
+        workingCsvId: this.workingCsvId,
+        columns: [...columns],
+      }),
+    );
+  }
+
   /**
    * Copies the focused column under the current query to the clipboard, one value per line, nulls
    * as empty lines. No-op without a focused column; a failure is shown like an edit error.
