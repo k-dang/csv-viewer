@@ -17,8 +17,8 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from './comparison-executor';
-import { DataEngineError, type WorkspaceDatabaseConnection } from '../database';
-import type { WorkspaceRequestError } from '../errors';
+import type { DataEngineError, WorkspaceDatabaseConnection } from '../database';
+import { WorkspaceRequestError } from '../errors';
 import {
   buildDropTableSql,
   isValidRowWindow,
@@ -36,10 +36,10 @@ export type ComparisonSource = {
 
 export type DuckDbComparisonAccess = {
   /** Leases a Working CSV's current table until the calling scope closes. */
-  acquireSource(workingCsvId: WorkingCsvId): Effect.Effect<ComparisonSource, DataEngineError, Scope.Scope>;
+  acquireSource(workingCsvId: WorkingCsvId): Effect.Effect<ComparisonSource, DataEngineError | WorkspaceRequestError, Scope.Scope>;
   getOwnerConnection(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError>;
   /** Admitted as workspace work, so disposal cannot close the database while it connects. */
-  connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError>;
+  connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError | WorkspaceRequestError>;
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
@@ -58,7 +58,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
 
   readonly openAttempt = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
-  ): Effect.fn.Return<ComparisonAttemptExecutor, DataEngineError, Scope.Scope> {
+  ): Effect.fn.Return<ComparisonAttemptExecutor, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     const writer = yield* Effect.acquireRelease(
       this.database.connectWorker(),
       (connection) => Effect.gen({ self: this }, function* () {
@@ -150,7 +150,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
     writer: WorkspaceDatabaseConnection,
     request: CreateComparisonSnapshotRequest,
-  ): Effect.fn.Return<ComparisonSummary, DataEngineError, Scope.Scope> {
+  ): Effect.fn.Return<ComparisonSummary, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     const baseline = yield* this.database.acquireSource(request.baselineId);
     const candidate = yield* this.database.acquireSource(request.candidateId);
     const tableName = buildComparisonTableName(request.artifactId);
@@ -232,7 +232,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   readonly readWindow = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     request: ReadComparisonSnapshotWindowRequest,
-  ): Effect.fn.Return<StoredComparisonWindow, DataEngineError, Scope.Scope> {
+  ): Effect.fn.Return<StoredComparisonWindow, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     if (!isValidRowWindow(request.offset, request.limit)) {
       throw new Error(
         'Comparison window requires a non-negative offset and a limit of at most 1,000.',
@@ -327,19 +327,14 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private readonly acquireRead = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     artifactId: ComparisonOperationId,
-  ): Effect.fn.Return<void, DataEngineError> {
+  ): Effect.fn.Return<void, WorkspaceRequestError> {
     const drained = yield* Deferred.make<void>();
-    yield* Effect.try({
-      try: () => {
-        if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
-          throw new Error('Comparison snapshot is no longer available.');
-        }
-        const readers = this.readers.get(artifactId);
-        if (readers) readers.count += 1;
-        else this.readers.set(artifactId, { count: 1, drained });
-      },
-      catch: (cause) => new DataEngineError({ cause }),
-    });
+    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
+      return yield* Effect.fail(new WorkspaceRequestError({ message: 'Comparison snapshot is no longer available.' }));
+    }
+    const readers = this.readers.get(artifactId);
+    if (readers) readers.count += 1;
+    else this.readers.set(artifactId, { count: 1, drained });
   });
 
   private readonly releaseRead = Effect.fnUntraced(function* (

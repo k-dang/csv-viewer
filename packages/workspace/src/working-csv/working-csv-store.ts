@@ -267,11 +267,10 @@ class WorkingCsvStore implements WorkingCsvs {
             tableName: state.tableName,
             columns: state.metadata.columns.map((column) => ({ ...column })),
           })),
-          Effect.mapError((error) => new DataEngineError({ cause: error })),
         ),
         getOwnerConnection: () => this.database.ownerConnection(),
         connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
-          if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError({ cause: new Error('CSV workspace is disposing.') }));
+          if (!(yield* this.admit())) return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV workspace is disposing.' }));
           return yield* this.database.connectWorker();
         })),
       },

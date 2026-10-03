@@ -109,12 +109,13 @@ export function holdNextExportRead(database: WorkspaceDatabase) {
   return { entered: entered.promise, release: () => resume.resolve() };
 }
 
-export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise<void> {
+export async function failNextSnapshotDrop(database: WorkspaceDatabase, mode: 'failure' | 'defect' = 'failure'): Promise<void> {
   const connection = await Effect.runPromise(database.ownerConnection());
   const run = connection.run.bind(connection);
   connection.run = (sql, values) => {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) return run(sql, values);
     connection.run = run;
-    return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE snapshot cleanup failure') }));
+    const cause = new Error('PRIVATE snapshot cleanup failure');
+    return mode === 'defect' ? Effect.die(cause) : Effect.fail(new DataEngineError({ cause }));
   };
 }
