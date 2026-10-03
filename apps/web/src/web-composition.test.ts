@@ -32,7 +32,12 @@ describe('web CsvViewer composition', () => {
     const releaseRegistration = Promise.withResolvers<void>();
     const register = AsyncDuckDB.prototype.registerFileBuffer;
     const registration = vi.spyOn(AsyncDuckDB.prototype, 'registerFileBuffer').mockImplementation(async function (this: AsyncDuckDB, reference, contents) {
-      await register.call(this, reference, contents);
+      try {
+        await register.call(this, reference, contents);
+      } catch (cause) {
+        registered.reject(cause);
+        throw cause;
+      }
       registered.resolve(reference);
       await releaseRegistration.promise;
     });
