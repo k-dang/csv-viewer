@@ -96,8 +96,7 @@ export function ComparisonGrid({
     [applied.key, changedCounts, valueColumns],
   );
 
-  // The grid remounts on every result or view-mode change (see `key`), so one datasource serves
-  // one result under one view mode; the Tab drops windows that arrive after either moved on.
+  const baselineColumnOrder = JSON.stringify(comparison.baseline.columns.map((column) => column.name));
   const datasource = useMemo<IDatasource>(
     () => ({
       getRows: (params) => {
@@ -116,7 +115,7 @@ export function ComparisonGrid({
   return (
     <div className="min-h-0 min-w-0 comparison-grid-frame" aria-label="Aligned comparison results">
       <AgGridReact<GridComparisonRow>
-        key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.workingCsvId}`}
+        key={`${applied.resultToken}:${rowsMode}:${columnsMode}:${comparison.baseline.workingCsvId}:${baselineColumnOrder}`}
         theme={gridTheme}
         rowModelType="infinite"
         datasource={datasource}

@@ -17,6 +17,7 @@ import {
   TextFilterModule,
   type CellValueChangedEvent,
   type ColDef,
+  type ColumnMovedEvent,
   type GridApi,
   type GridReadyEvent,
   type IDatasource,
@@ -168,6 +169,22 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
 
   function onGridReady(event: GridReadyEvent<CsvRow>) {
     gridApiRef.current = event.api;
+  }
+
+  async function onColumnMoved(event: ColumnMovedEvent<CsvRow>) {
+    if (!event.finished || event.source !== 'uiColumnMoved') return;
+    const current = tab.snapshot().workingCsv.columns.map((column) => column.name);
+    const known = new Set(current);
+    const names = event.api.getColumnState().flatMap((column) =>
+      column.colId && known.has(column.colId) ? [column.colId] : [],
+    );
+    const permutation = names.length === current.length && new Set(names).size === current.length;
+    if (permutation && names.every((name, index) => name === current[index])) return;
+    if (permutation && await tab.reorderColumns(names)) return;
+    event.api.applyColumnState({
+      state: current.map((colId) => ({ colId })),
+      applyOrder: true,
+    });
   }
 
   function clearQuery() {
@@ -434,6 +451,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
               ensureDomOrder
               suppressDragLeaveHidesColumns
               onGridReady={onGridReady}
+              onColumnMoved={onColumnMoved}
                 onCellValueChanged={onCellValueChanged}
                 onSortChanged={syncGridQuery}
                 onFilterChanged={syncGridQuery}
