@@ -8,7 +8,7 @@ async function compare(page: Page): Promise<void> {
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
 
-test('preserves cleanup defects when closing a source and permits a successful retry', async ({ page }, testInfo) => {
+test('preserves cleanup defects when closing a source and permits a successful retry', { tag: '@dev' }, async ({ page }, testInfo) => {
   const diagnostics: string[] = [];
   page.on('console', (message) => {
     if (message.text().includes('message=csv.close')) diagnostics.push(message.text());
