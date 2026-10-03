@@ -55,9 +55,9 @@ export function WorkbenchLayout({
         data-collapsed={collapsed ? '' : undefined}
         className="group/sidebar flex min-h-0 flex-col border-r bg-card/60"
       >
-        <div className="flex h-12 shrink-0 items-center gap-2.5 px-3.5">
+        <div className="flex h-12 shrink-0 items-center gap-2.5 px-3.5 group-data-collapsed/sidebar:justify-center group-data-collapsed/sidebar:gap-0 group-data-collapsed/sidebar:px-0">
           <div
-            className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground group-data-collapsed/sidebar:size-8"
             aria-hidden="true"
           >
             <Table2 className="size-4" />
@@ -66,8 +66,8 @@ export function WorkbenchLayout({
             CSV Viewer
           </h1>
         </div>
-        <div className="px-2">
-          <OpenCsvControl action={open} dialect={dialect} compact={collapsed} className="w-full" />
+        <div className="px-2 group-data-collapsed/sidebar:flex group-data-collapsed/sidebar:justify-center">
+          <OpenCsvControl action={open} dialect={dialect} compact={collapsed} className={collapsed ? undefined : 'w-full'} />
         </div>
         <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-2">
           <section className="grid gap-1">

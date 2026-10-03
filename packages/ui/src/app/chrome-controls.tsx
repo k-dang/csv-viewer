@@ -35,7 +35,7 @@ export function OpenCsvControl({
     return (
       <Button
         type="button"
-        size="icon"
+        size="icon-sm"
         onClick={action.onClick}
         disabled={action.disabled}
         title={action.label}
