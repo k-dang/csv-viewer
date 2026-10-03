@@ -145,7 +145,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   private handle(request: CsvViewerRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, ExpectedWorkspaceError> {
     switch (request.operation) {
       case 'csv.open':
-        return this.openCsv(request.options, request.sourceId);
+        return this.openCsv(request);
       case 'csv.open-recent':
         return this.openSource(request.sourceId, request.options).pipe(Effect.uninterruptible);
       case 'csv.reopen':
@@ -269,75 +269,80 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     return this.stopped !== undefined && Deferred.isDoneUnsafe(this.stopped);
   }
 
-  private openCsv(options?: CsvDialectOptions, reservedSourceId?: CsvSourceId): Effect.Effect<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.disposal) {
-        if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
-        return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
-      }
-      // Source selection may outlive the workspace; admission protects only the open that follows it.
-      const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', this.host.acquireSource()));
-      if (!sourceId) return { status: 'cancelled' } satisfies OpenCsvResult;
-      if (sourceId instanceof Object) return sourceId;
-      let retained = false;
-      try {
-        const result = yield* this.openSource(sourceId, options);
-        retained = result.status === 'opened' || result.status === 'already-open';
-        return result;
-      } finally {
-        if (!retained) this.host.releaseSource(sourceId);
-      }
-    }).pipe(Effect.uninterruptible);
-  }
+  private readonly openCsv = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    { options, sourceId: reservedSourceId }: Extract<CsvViewerRequest, { operation: 'csv.open' }>,
+  ): Effect.fn.Return<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError> {
+    if (this.disposal) {
+      if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
+      return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+    }
+    // Source selection may outlive the workspace; admission protects only the open that follows it.
+    const sourceId = reservedSourceId ?? (yield* observeStage('csv.select-source', this.host.acquireSource()));
+    if (!sourceId) return { status: 'cancelled' } satisfies OpenCsvResult;
+    if (sourceId instanceof Object) return sourceId;
+    let retained = false;
+    try {
+      const result = yield* this.openSource(sourceId, options);
+      retained = result.status === 'opened' || result.status === 'already-open';
+      return result;
+    } finally {
+      if (!retained) this.host.releaseSource(sourceId);
+    }
+  }, Effect.uninterruptible);
 
   /** The admission covers the Recent CSV Source write, so disposal waits for accepted opens. */
-  private openSource(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, WorkspaceRequestError> {
-    return Effect.gen({ self: this }, function* () {
-      if (!(yield* this.workingCsvs.admit())) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
-      const outcome = yield* this.workingCsvs.open(sourceId, options);
-      if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
-      if (outcome.status === 'existing') return { status: 'already-open', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
-      yield* this.recordRecentSource(sourceId);
-      return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
-    }).pipe(Effect.scoped);
-  }
+  private readonly openSource = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    sourceId: CsvSourceId,
+    options?: CsvDialectOptions,
+  ): Effect.fn.Return<OpenCsvResult, WorkspaceRequestError, Scope.Scope> {
+    if (!(yield* this.workingCsvs.admit())) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+    const outcome = yield* this.workingCsvs.open(sourceId, options);
+    if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
+    if (outcome.status === 'existing') return { status: 'already-open', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
+    yield* this.recordRecentSource(sourceId);
+    return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
+  }, Effect.scoped);
 
   private recordRecentSource(sourceId: CsvSourceId) {
     return observeCleanup('csv.record-recent', Effect.suspend(() => this.host.recordRecentSource(sourceId)));
   }
 
-  private reopenCsv(workingCsvId: WorkingCsvId, options?: CsvDialectOptions): Effect.Effect<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError> {
-    return Effect.gen({ self: this }, function* () {
-      if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
-      const initial = this.workingCsvs.getState(workingCsvId);
-      if (!initial) return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
-      if (this.workingCsvs.isClosing(workingCsvId)) return { status: 'failed', message: 'This CSV is closing.' } satisfies OpenCsvResult;
-      // A discard prompt may outlive disposal, so only the replacement runs under reopen admission.
-      let existing: WorkingCsvView = initial;
-      while (true) {
-        while (existing.editState.hasUnexportedChanges) {
-          const canContinue = yield* observeStage('csv.confirm-discard', this.host.confirmDiscardChanges(existing.source.name));
-          if (!canContinue) return { status: 'cancelled' } satisfies OpenCsvResult;
-          if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
-          const current = this.workingCsvs.getState(workingCsvId);
-          if (!current) return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
-          if (current.dataRevision === existing.dataRevision) {
-            existing = current;
-            break;
-          }
+  private readonly reopenCsv = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    workingCsvId: WorkingCsvId,
+    options?: CsvDialectOptions,
+  ): Effect.fn.Return<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError> {
+    if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+    const initial = this.workingCsvs.getState(workingCsvId);
+    if (!initial) return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
+    if (this.workingCsvs.isClosing(workingCsvId)) return { status: 'failed', message: 'This CSV is closing.' } satisfies OpenCsvResult;
+    // A discard prompt may outlive disposal, so only the replacement runs under reopen admission.
+    let existing: WorkingCsvView = initial;
+    while (true) {
+      while (existing.editState.hasUnexportedChanges) {
+        const canContinue = yield* observeStage('csv.confirm-discard', this.host.confirmDiscardChanges(existing.source.name));
+        if (!canContinue) return { status: 'cancelled' } satisfies OpenCsvResult;
+        if (this.disposal) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
+        const current = this.workingCsvs.getState(workingCsvId);
+        if (!current) return { status: 'failed', message: 'The Working CSV is no longer open.' } satisfies OpenCsvResult;
+        if (current.dataRevision === existing.dataRevision) {
           existing = current;
+          break;
         }
-        const outcome = yield* this.workingCsvs.replace(workingCsvId, existing.dataRevision, options);
-        if (outcome.status === 'revision-changed') {
-          existing = outcome.workingCsv;
-          continue;
-        }
-        if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
-        yield* this.recordRecentSource(outcome.workingCsv.source.sourceId);
-        return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
+        existing = current;
       }
-    }).pipe(Effect.uninterruptible);
-  }
+      const outcome = yield* this.workingCsvs.replace(workingCsvId, existing.dataRevision, options);
+      if (outcome.status === 'revision-changed') {
+        existing = outcome.workingCsv;
+        continue;
+      }
+      if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;
+      yield* this.recordRecentSource(outcome.workingCsv.source.sourceId);
+      return { status: 'opened', workingCsv: outcome.workingCsv } satisfies OpenCsvResult;
+    }
+  }, Effect.uninterruptible);
 
   /**
    * Starts a Comparison operation and returns immediately. Terminal outcomes arrive through
@@ -352,43 +357,50 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     );
   }
 
-  private closeCsv(request: CloseWorkingCsvRequest): Effect.Effect<CloseWorkingCsvOutcome> {
-    const { workingCsvId, confirmedImpact } = request;
-    return Effect.gen({ self: this }, function* () {
-      if (!this.workingCsvs.has(workingCsvId)) {
-        return { status: 'closed', closedWorkingCsvId: workingCsvId, closedComparisonIds: [] } satisfies CloseWorkingCsvOutcome;
-      }
-      if (!this.workingCsvs.beginClose(workingCsvId)) {
-        return {
-          status: 'failed',
-          failure: { code: 'cleanup-failed', message: 'The Working CSV is already closing.', retryable: true },
-        } satisfies CloseWorkingCsvOutcome;
-      }
-      return yield* Effect.gen({ self: this }, function* () {
-        yield* this.workingCsvs.waitForActiveWork(workingCsvId);
-        const impact = yield* this.closeImpact(workingCsvId);
-        if (requiresConfirmation(impact) && !(confirmedImpact && sameCloseImpact(impact, confirmedImpact))) {
-          return { status: 'confirmation-required', impact } satisfies CloseWorkingCsvOutcome;
-        }
-        const closedComparisonIds = impact.dependentComparisons.map((comparison) => comparison.comparisonId);
-        yield* observeStage('comparison.close', this.comparisons.closeDependents(workingCsvId));
-        yield* this.workingCsvs.closeWorkingCsv(workingCsvId);
-        return { status: 'closed', closedWorkingCsvId: workingCsvId, closedComparisonIds } satisfies CloseWorkingCsvOutcome;
-      }).pipe(
-        Effect.catchCause((cause) => recordOutcome('failed', cause).pipe(Effect.andThen(markCleanupFailed), Effect.as({
-          status: 'failed',
-          failure: {
-            code: 'cleanup-failed',
-            message: 'Unable to close the Working CSV and all dependent Comparisons.',
-            retryable: true,
-          },
-        } satisfies CloseWorkingCsvOutcome))),
-        Effect.ensuring(Effect.sync(() => {
-          if (this.workingCsvs.has(workingCsvId)) this.workingCsvs.endClose(workingCsvId);
-        })),
-      );
-    });
-  }
+  private readonly closeCsv = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    { workingCsvId, confirmedImpact }: CloseWorkingCsvRequest,
+  ): Effect.fn.Return<CloseWorkingCsvOutcome> {
+    if (!this.workingCsvs.has(workingCsvId)) {
+      return { status: 'closed', closedWorkingCsvId: workingCsvId, closedComparisonIds: [] } satisfies CloseWorkingCsvOutcome;
+    }
+    if (!this.workingCsvs.beginClose(workingCsvId)) {
+      return {
+        status: 'failed',
+        failure: { code: 'cleanup-failed', message: 'The Working CSV is already closing.', retryable: true },
+      } satisfies CloseWorkingCsvOutcome;
+    }
+    return yield* this.closeClaimed(workingCsvId, confirmedImpact);
+  });
+
+  /** Closes a Working CSV whose close this caller began, and ends that close whatever the outcome. */
+  private readonly closeClaimed = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    workingCsvId: WorkingCsvId,
+    confirmedImpact: CloseImpact | undefined,
+  ): Effect.fn.Return<CloseWorkingCsvOutcome, WorkspaceRequestError | DataEngineError> {
+    yield* this.workingCsvs.waitForActiveWork(workingCsvId);
+    const impact = yield* this.closeImpact(workingCsvId);
+    if (requiresConfirmation(impact) && !(confirmedImpact && sameCloseImpact(impact, confirmedImpact))) {
+      return { status: 'confirmation-required', impact } satisfies CloseWorkingCsvOutcome;
+    }
+    const closedComparisonIds = impact.dependentComparisons.map((comparison) => comparison.comparisonId);
+    yield* observeStage('comparison.close', this.comparisons.closeDependents(workingCsvId));
+    yield* this.workingCsvs.closeWorkingCsv(workingCsvId);
+    return { status: 'closed', closedWorkingCsvId: workingCsvId, closedComparisonIds } satisfies CloseWorkingCsvOutcome;
+  }, (effect, workingCsvId) => effect.pipe(
+    Effect.catchCause((cause) => recordOutcome('failed', cause).pipe(Effect.andThen(markCleanupFailed), Effect.as({
+      status: 'failed',
+      failure: {
+        code: 'cleanup-failed',
+        message: 'Unable to close the Working CSV and all dependent Comparisons.',
+        retryable: true,
+      },
+    } satisfies CloseWorkingCsvOutcome))),
+    Effect.ensuring(Effect.sync(() => {
+      if (this.workingCsvs.has(workingCsvId)) this.workingCsvs.endClose(workingCsvId);
+    })),
+  ));
 
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
     if (this.engineStopped) return Promise.reject(workspaceStoppedError());
@@ -411,58 +423,60 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     return this.disposal;
   }
 
-  private closeImpact(workingCsvId: WorkingCsvId): Effect.Effect<CloseImpact, WorkspaceRequestError> {
-    return Effect.gen({ self: this }, function* () {
-      if (!this.workingCsvs.has(workingCsvId)) {
-        return yield* Effect.fail(new WorkspaceRequestError({ message: 'Working CSV is no longer active.' }));
-      }
-      return {
-        hasUnexportedChanges: this.workingCsvs.hasUnexportedChanges(workingCsvId),
-        dependentComparisons: yield* this.describeDependentComparisons([workingCsvId]),
-      };
-    });
-  }
+  private readonly closeImpact = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    workingCsvId: WorkingCsvId,
+  ): Effect.fn.Return<CloseImpact, WorkspaceRequestError> {
+    if (!this.workingCsvs.has(workingCsvId)) {
+      return yield* Effect.fail(new WorkspaceRequestError({ message: 'Working CSV is no longer active.' }));
+    }
+    return {
+      hasUnexportedChanges: this.workingCsvs.hasUnexportedChanges(workingCsvId),
+      dependentComparisons: yield* this.describeDependentComparisons([workingCsvId]),
+    };
+  });
 
-  private windowCloseImpact(): Effect.Effect<WorkspaceCloseImpact> {
-    return Effect.gen({ self: this }, function* () {
-      const workingCsvs = this.workingCsvs.list().sort((left, right) => left.workingCsvId.localeCompare(right.workingCsvId));
-      return {
-        workingCsvsWithUnexportedChanges: workingCsvs
-          .filter((workingCsv) => workingCsv.editState.hasUnexportedChanges)
-          .map((workingCsv) => ({
-            workingCsvId: workingCsv.workingCsvId,
-            sourceName: workingCsv.source.name,
-          })),
-        dependentComparisons: yield* this.describeDependentComparisons(workingCsvs.map((workingCsv) => workingCsv.workingCsvId)),
-      };
-    });
-  }
+  private readonly windowCloseImpact = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+  ): Effect.fn.Return<WorkspaceCloseImpact> {
+    const workingCsvs = this.workingCsvs.list().sort((left, right) => left.workingCsvId.localeCompare(right.workingCsvId));
+    return {
+      workingCsvsWithUnexportedChanges: workingCsvs
+        .filter((workingCsv) => workingCsv.editState.hasUnexportedChanges)
+        .map((workingCsv) => ({
+          workingCsvId: workingCsv.workingCsvId,
+          sourceName: workingCsv.source.name,
+        })),
+      dependentComparisons: yield* this.describeDependentComparisons(workingCsvs.map((workingCsv) => workingCsv.workingCsvId)),
+    };
+  });
 
   /** Every Comparison depending on any of these Working CSVs, deduplicated and ordered. */
-  private describeDependentComparisons(workingCsvIds: WorkingCsvId[]): Effect.Effect<CloseImpact['dependentComparisons']> {
-    return Effect.gen({ self: this }, function* () {
-      const described = new Map<ComparisonId, CloseImpact['dependentComparisons'][number]>();
-      for (const workingCsvId of workingCsvIds) {
-        for (const comparisonId of this.comparisons.dependentComparisonIds(workingCsvId)) {
-          if (described.has(comparisonId)) continue;
-          const comparison = this.comparisons.getState(comparisonId);
-          if (!comparison) {
-            // A Comparison that closed between the index read and the state read is no longer
-            // impacted by this close. Failing here would reject confirmClose, whose caller
-            // has already prevented the window close, leaving the window unclosable.
-            yield* reportFailure('comparison.close-impact', Cause.fail('comparison-not-found')).pipe(Effect.annotateSpans({ comparisonId }));
-            continue;
-          }
-          described.set(comparisonId, {
-            comparisonId,
-            baselineName: comparison.baseline.source.name,
-            candidateName: comparison.candidate.source.name,
-          });
+  private readonly describeDependentComparisons = Effect.fnUntraced(function* (
+    this: CsvWorkspaceImplementation,
+    workingCsvIds: WorkingCsvId[],
+  ): Effect.fn.Return<CloseImpact['dependentComparisons']> {
+    const described = new Map<ComparisonId, CloseImpact['dependentComparisons'][number]>();
+    for (const workingCsvId of workingCsvIds) {
+      for (const comparisonId of this.comparisons.dependentComparisonIds(workingCsvId)) {
+        if (described.has(comparisonId)) continue;
+        const comparison = this.comparisons.getState(comparisonId);
+        if (!comparison) {
+          // A Comparison that closed between the index read and the state read is no longer
+          // impacted by this close. Failing here would reject confirmClose, whose caller
+          // has already prevented the window close, leaving the window unclosable.
+          yield* reportFailure('comparison.close-impact', Cause.fail('comparison-not-found')).pipe(Effect.annotateSpans({ comparisonId }));
+          continue;
         }
+        described.set(comparisonId, {
+          comparisonId,
+          baselineName: comparison.baseline.source.name,
+          candidateName: comparison.candidate.source.name,
+        });
       }
-      return [...described.values()].sort((left, right) => left.comparisonId.localeCompare(right.comparisonId));
-    });
-  }
+    }
+    return [...described.values()].sort((left, right) => left.comparisonId.localeCompare(right.comparisonId));
+  });
 
   /**
    * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
