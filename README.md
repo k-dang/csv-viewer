@@ -56,7 +56,7 @@ pnpm run dev:web
 ## Limitations
 
 - Cell values are edited as text, without numeric, date, or boolean validation.
-- Row insertion is disabled while sorting, filtering, or searching.
+- Appending a row is disabled while sorting, filtering, or searching. Inserting above or below requires exactly one selected row.
 - Reordering columns is not supported.
 - Spreadsheet features such as formulas, pivot tables, charts, joins, and SQL editing are not supported.
 
@@ -65,3 +65,15 @@ pnpm run dev:web
 Before submitting changes, run `pnpm test`, `pnpm test:browser`, and `pnpm build`.
 
 Install the browser test dependency once with `pnpm exec playwright install chromium`. On Linux, add `--with-deps`.
+
+### End-to-end tests
+
+| Command | Coverage |
+| --- | --- |
+| `pnpm test:browser` | Chromium runs the full web suite: editing, queries/stats, comparison, parsing, export, drag-and-drop, and lifecycle workflows. |
+| `pnpm test:browser:built` | User workflows and engine failure/recovery against the production web assets. Source-instrumented race/cancellation cases run in the dev suite. |
+| `pnpm test:desktop` | Builds and launches isolated Electron profiles; checks preload/IPC, native DuckDB, export source protection, Recent CSV Sources across restart, dropped-file identity, and reopen confirmation. |
+
+CI runs the web suites on Linux and desktop tests on Windows. Browser failures retain screenshots and traces; desktop failures attach the Electron window and its trace.
+
+Desktop tests substitute only the OS file chooser and message-box responses. Native dialog appearance and keyboard interaction still require manual verification. Each test uses temporary files and a disposable profile; it never touches the user's recent files or app session.

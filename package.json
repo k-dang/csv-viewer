@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:browser:built": "playwright test --config playwright.web-build.config.ts",
+    "test:desktop": "pnpm run build:desktop && playwright test --config playwright.desktop.config.ts",
     "typecheck": "pnpm -r --if-present run typecheck && tsc -p tsconfig.json --noEmit",
     "perf:latency": "node --experimental-strip-types scripts/perf/working-csv-latency.ts",
     "start": "pnpm --filter @csv-viewer/desktop start"

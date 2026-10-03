@@ -518,6 +518,7 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         workingCsvId: workingCsv.workingCsvId,
         offset: 1,
         filteredRowCount: 3,
+        totalRowCount: 3,
         rows: [
           {
             [csvInternalRowIdField]: '2',

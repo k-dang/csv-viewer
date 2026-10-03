@@ -61,6 +61,7 @@ export type CsvRowWindow = {
   offset: number;
   rows: CsvRow[];
   filteredRowCount: number;
+  totalRowCount: number;
 };
 
 export type CsvColumnValues = {

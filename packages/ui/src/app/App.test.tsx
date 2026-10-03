@@ -18,6 +18,7 @@ const tabHandlers = (workingCsv: WorkingCsvView) => ({
     offset: 0,
     rows: [],
     filteredRowCount: 0,
+    totalRowCount: 0,
   }),
 });
 

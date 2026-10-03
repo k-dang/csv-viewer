@@ -308,7 +308,7 @@ describe('RendererWorkspace lifecycle', () => {
     if (ending === 'close') await workspace.close();
     else if (ending === 'dispose') workspace.dispose();
     else emit({ type: 'fatal-error', message: 'Stopped' });
-    pending.resolve({ workingCsvId: 'a', offset: 0, filteredRowCount: 1, rows: [] });
+    pending.resolve({ workingCsvId: 'a', offset: 0, filteredRowCount: 1, totalRowCount: 1, rows: [] });
     expect(await rows).toBeNull();
   });
 
