@@ -340,6 +340,7 @@ export type CsvViewerOperationMap = {
   'csv.rename-column': CsvSchemaEditState;
   'csv.insert-column': CsvSchemaEditState;
   'csv.delete-column': CsvSchemaEditState;
+  'csv.reorder-columns': CsvSchemaEditState;
   'csv.get-edit-state': CsvEditState;
   'csv.undo': CsvSchemaEditState;
   'csv.redo': CsvSchemaEditState;

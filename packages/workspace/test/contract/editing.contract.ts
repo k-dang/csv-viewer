@@ -1683,6 +1683,109 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       ]);
     });
 
+    it('moves columns and keeps that order through export, insert, delete, and undo', async () => {
+      const workingCsv = await openPeople('reorder.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      const reordered = await workspace().call({
+        operation: 'csv.reorder-columns',
+        ...request,
+        columns: ['team', 'name'],
+      });
+      expect(reordered.columns.map((column) => column.name)).toEqual(['team', 'name']);
+      expect(reordered).toMatchObject({ hasUnexportedChanges: true, canUndo: true, canRedo: false });
+      const movedRows = await readRows(workingCsv.workingCsvId);
+      expectVisibleRows(movedRows.rows).toEqual([
+        { team: 'compiler', name: 'Ada' },
+        { team: 'navy', name: 'Grace' },
+        { team: 'kernel', name: 'Linus' },
+      ]);
+
+      const inserted = await workspace().call({
+        operation: 'csv.insert-column',
+        ...request,
+        column: 'name',
+        placement: 'before',
+      });
+      expect(inserted.columns.map((column) => column.name)).toEqual(['team', 'New column', 'name']);
+
+      const deleted = await workspace().call({ operation: 'csv.delete-column', ...request, column: 'team' });
+      expect(deleted.columns.map((column) => column.name)).toEqual(['New column', 'name']);
+
+      expect((await workspace().call({ operation: 'csv.undo', ...request })).columns.map((column) => column.name)).toEqual([
+        'team',
+        'New column',
+        'name',
+      ]);
+      expect((await workspace().call({ operation: 'csv.undo', ...request })).columns.map((column) => column.name)).toEqual([
+        'team',
+        'name',
+      ]);
+      const restored = await workspace().call({ operation: 'csv.undo', ...request });
+      expect(restored.columns.map((column) => column.name)).toEqual(['name', 'team']);
+      expect(restored).toMatchObject({ hasUnexportedChanges: false, canUndo: false, canRedo: true });
+
+      const redone = await workspace().call({ operation: 'csv.redo', ...request });
+      expect(redone.columns.map((column) => column.name)).toEqual(['team', 'name']);
+
+      const readExported = fixture.captureNextExport('reordered.csv');
+      await workspace().call({ operation: 'csv.export', ...request });
+      expect(await readExported()).toBe(
+        ['team,name', 'compiler,Ada', 'navy,Grace', 'kernel,Linus', ''].join('\n'),
+      );
+      const readView = fixture.captureNextExport('reordered-view.csv');
+      await expect(
+        workspace().call({
+          operation: 'csv.export-view',
+          ...request,
+          operationId: crypto.randomUUID(),
+        }),
+      ).resolves.toEqual({ status: 'exported', rowCount: 3 });
+      expect(await readView()).toBe(
+        ['team,name', 'compiler,Ada', 'navy,Grace', 'kernel,Linus', ''].join('\n'),
+      );
+    });
+
+    it('leaves history unchanged when the column order is already current or incomplete', async () => {
+      const workingCsv = await openPeople('reorder-noop.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+      const before = await fixture.editState(workingCsv.workingCsvId);
+
+      const same = await workspace().call({
+        operation: 'csv.reorder-columns',
+        ...request,
+        columns: ['name', 'team'],
+      });
+      expect(same.columns.map((column) => column.name)).toEqual(['name', 'team']);
+      expect(same).toMatchObject({ hasUnexportedChanges: false, canUndo: false, canRedo: false });
+
+      await expect(
+        workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team', 'team'] }),
+      ).rejects.toThrow('CSV column order must list every column once.');
+      await expect(
+        workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team'] }),
+      ).rejects.toThrow('CSV column order must list every column once.');
+
+      await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
+    });
+
+    it('restores column order after a later rename is undone', async () => {
+      const workingCsv = await openPeople('reorder-rename.csv');
+      const request = { workingCsvId: workingCsv.workingCsvId };
+
+      await workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team', 'name'] });
+      await workspace().call({ operation: 'csv.rename-column', ...request, column: 'team', name: 'squad' });
+
+      expect((await workspace().call({ operation: 'csv.undo', ...request })).columns.map((column) => column.name)).toEqual([
+        'team',
+        'name',
+      ]);
+      expect((await workspace().call({ operation: 'csv.undo', ...request })).columns.map((column) => column.name)).toEqual([
+        'name',
+        'team',
+      ]);
+    });
+
     it('omits a deleted column from export and writes its original cells after undo', async () => {
       const workingCsv = await openPeople('delete-export.csv');
       const request = { workingCsvId: workingCsv.workingCsvId };

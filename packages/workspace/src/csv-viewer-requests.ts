@@ -135,6 +135,12 @@ export const CsvDeleteColumnRequest = Schema.Struct({
 });
 export type CsvDeleteColumnRequest = typeof CsvDeleteColumnRequest.Type;
 
+export const CsvReorderColumnsRequest = Schema.Struct({
+  workingCsvId: Schema.String,
+  columns: Schema.Array(Schema.String),
+});
+export type CsvReorderColumnsRequest = typeof CsvReorderColumnsRequest.Type;
+
 export const CsvEditStateRequest = Schema.Struct({ workingCsvId: Schema.String });
 export type CsvEditStateRequest = typeof CsvEditStateRequest.Type;
 
@@ -239,6 +245,7 @@ export const CsvViewerRequest = Schema.Union([
   operationRequest('csv.rename-column', CsvRenameColumnRequest.fields),
   operationRequest('csv.insert-column', CsvInsertColumnRequest.fields),
   operationRequest('csv.delete-column', CsvDeleteColumnRequest.fields),
+  operationRequest('csv.reorder-columns', CsvReorderColumnsRequest.fields),
   operationRequest('csv.get-edit-state', CsvEditStateRequest.fields),
   operationRequest('csv.undo', CsvEditStateRequest.fields),
   operationRequest('csv.redo', CsvEditStateRequest.fields),

@@ -176,6 +176,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         return this.workingCsvs.insertColumn(request);
       case 'csv.delete-column':
         return this.workingCsvs.deleteColumn(request);
+      case 'csv.reorder-columns':
+        return this.workingCsvs.reorderColumns(request);
       case 'csv.get-edit-state':
         return this.workingCsvs.getEditState(request);
       case 'csv.undo':
