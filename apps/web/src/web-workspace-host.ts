@@ -92,7 +92,7 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
       const source = yield* this.requireSource(sourceId);
       const contents = yield* Effect.tryPromise({
         try: () => source.arrayBuffer(),
-        catch: () => new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.'),
+        catch: () => new CsvSourceUnavailableError({ code: 'unreadable', message: 'The CSV Source could not be read.' }),
       });
       return yield* driverEffect(() => this.database.registerFileBuffer(source.name, new Uint8Array(contents)));
     }), (reference) => driverEffect(() => this.database.dropFile(reference)));
@@ -135,10 +135,10 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
   private requireSource(sourceId: CsvSourceId) {
     return Effect.suspend(() => {
       const source = this.sources.get(sourceId);
-      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError(
-        'missing-source',
-        'Select the CSV Source again. It is no longer available in this browser session.',
-      ));
+      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError({
+        code: 'missing-source',
+        message: 'Select the CSV Source again. It is no longer available in this browser session.',
+      }));
     });
   }
 }

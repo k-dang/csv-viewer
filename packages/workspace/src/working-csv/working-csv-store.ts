@@ -58,6 +58,8 @@ import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-execut
 import { CsvSourceUnavailableError, type CsvWorkspaceHost } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
+type WorkingCsvOperationError = WorkspaceRequestError | DataEngineError;
+
 type WorkingCsvFailure = {
   code: 'open-failed' | 'replace-failed';
   message: string;
@@ -96,7 +98,7 @@ export class WorkingCsvStore {
   /** The most recently reserved mutation turn of each Working CSV. */
   private mutationTails = new Map<WorkingCsvId, Deferred.Deferred<void>>();
   /** The table release in flight for each closing Working CSV. */
-  private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, Error>>();
+  private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, DataEngineError>>();
   /** Export workers whose close failed. Disposal retries them before the database is released. */
   private readonly unreleasedExportWorkers = new Set<WorkspaceDatabaseConnection>();
   private admittedWork = 0;
@@ -138,7 +140,7 @@ export class WorkingCsvStore {
    * Opens a CSV Source as admitted work, so it cannot start once disposal begins. A caller that
    * must also cover later steps, such as the Recent CSV Source write, holds its own admission.
    */
-  open(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome, Error> {
+  open(sourceId: CsvSourceId, options: CsvDialectOptions = {}): Effect.Effect<OpenWorkingCsvOutcome, WorkspaceRequestError> {
     return Effect.gen({ self: this }, function* () {
       if (!(yield* this.admit())) {
         return { status: 'failed', failure: { code: 'open-failed', message: 'The CSV workspace is closing.', retryable: false } } satisfies OpenWorkingCsvOutcome;
@@ -219,11 +221,11 @@ export class WorkingCsvStore {
               tableName: state.tableName,
               columns: state.metadata.columns.map((column) => ({ ...column })),
             })),
-            Effect.mapError((error) => new DataEngineError(error)),
+            Effect.mapError((error) => new DataEngineError({ cause: error })),
           ),
           getOwnerConnection: () => this.database.ownerConnection(),
           connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
-            if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError(new Error('CSV workspace is disposing.')));
+            if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError({ cause: new Error('CSV workspace is disposing.') }));
             return yield* this.database.connectWorker();
           })),
         },
@@ -241,7 +243,7 @@ export class WorkingCsvStore {
     workingCsvId: WorkingCsvId,
     expectedDataRevision: number,
     options: CsvDialectOptions = {},
-  ): Effect.Effect<ReplaceWorkingCsvOutcome, Error> {
+  ): Effect.Effect<ReplaceWorkingCsvOutcome> {
     return Effect.gen({ self: this }, function* () {
       if (!(yield* this.admit())) return unavailable('The CSV workspace is closing.');
       return yield* this.mutate(workingCsvId, (existing) => Effect.gen({ self: this }, function* () {
@@ -289,7 +291,7 @@ export class WorkingCsvStore {
    * a caller that arrives while another is running, such as disposal during a user close, awaits
    * that release rather than dropping the same tables twice.
    */
-  closeWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, Error> {
+  closeWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError> {
     return Effect.suspend(() => {
       const pending = this.pendingCloses.get(workingCsvId);
       if (pending) return pending;
@@ -302,7 +304,7 @@ export class WorkingCsvStore {
     });
   }
 
-  private releaseWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, Error> {
+  private releaseWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError> {
     return observeStage('csv.release-working-csv', Effect.gen({ self: this }, function* () {
       while (true) {
         const state = this.workingCsvs.get(workingCsvId);
@@ -328,7 +330,7 @@ export class WorkingCsvStore {
    * if a table release failed. A failed retry is reported as cleanup failure. The runtime releases
    * the database afterward.
    */
-  disposeStore(): Effect.Effect<void, Error> {
+  disposeStore(): Effect.Effect<void, DataEngineError> {
     return Effect.gen({ self: this }, function* () {
       this.beginDisposal();
       const tableRelease = yield* Effect.exit(this.releaseAllTables());
@@ -349,7 +351,7 @@ export class WorkingCsvStore {
     this.lifecycle = 'disposed';
   }
 
-  private releaseAllTables(): Effect.Effect<void, Error> {
+  private releaseAllTables(): Effect.Effect<void, DataEngineError> {
     return Effect.gen({ self: this }, function* () {
       yield* observeStage('workspace.await-work', this.workSettled.await);
       for (const workingCsvId of this.workingCsvs.keys()) this.beginClose(workingCsvId);
@@ -377,7 +379,7 @@ export class WorkingCsvStore {
     return state ? state.history.hasUnexportedChanges : false;
   }
 
-  getEditState(request: CsvEditStateRequest): Effect.Effect<CsvEditState, Error> {
+  getEditState(request: CsvEditStateRequest): Effect.Effect<CsvEditState, WorkspaceRequestError> {
     return Effect.gen({ self: this }, function* () {
       yield* this.assertAcceptingWork();
       yield* this.assertNotClosing(request.workingCsvId);
@@ -385,7 +387,7 @@ export class WorkingCsvStore {
     });
   }
 
-  getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, Error> {
+  getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, WorkingCsvOperationError> {
     return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const { offset, limit } = request;
       if (limit > maxRowWindowLimit) {
@@ -414,7 +416,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  getColumnValues(request: CsvColumnValuesRequest): Effect.Effect<CsvColumnValues, Error> {
+  getColumnValues(request: CsvColumnValuesRequest): Effect.Effect<CsvColumnValues, WorkingCsvOperationError> {
     return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const query = yield* Effect.fromResult(buildColumnValuesQuery({
         tableName: state.tableName,
@@ -434,7 +436,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  getColumnValueCounts(request: CsvColumnValueCountsRequest): Effect.Effect<CsvColumnValueCounts, Error> {
+  getColumnValueCounts(request: CsvColumnValueCountsRequest): Effect.Effect<CsvColumnValueCounts, WorkingCsvOperationError> {
     return this.read(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const { metadata } = state;
 
@@ -461,7 +463,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  editCell(request: CsvCellEditRequest): Effect.Effect<CsvCellEditResult, Error> {
+  editCell(request: CsvCellEditRequest): Effect.Effect<CsvCellEditResult, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
       yield* Effect.fromResult(requireKnownColumn(request.column, knownColumns));
@@ -490,7 +492,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  deleteRows(request: CsvDeleteRowsRequest): Effect.Effect<CsvEditState, Error> {
+  deleteRows(request: CsvDeleteRowsRequest): Effect.Effect<CsvEditState, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const rowIds = normalizeRowIds(request.rowIds);
 
@@ -508,7 +510,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  insertRow(request: CsvInsertRowRequest): Effect.Effect<CsvEditState, Error> {
+  insertRow(request: CsvInsertRowRequest): Effect.Effect<CsvEditState, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const rowIds = normalizeRowIds(request.rowIds);
 
@@ -536,7 +538,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
+  renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const knownColumns = new Set(state.metadata.columns.map((column) => column.name));
       yield* Effect.fromResult(requireKnownColumn(request.column, knownColumns));
@@ -559,7 +561,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  insertColumn(request: CsvInsertColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
+  insertColumn(request: CsvInsertColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const columns = state.metadata.columns;
       const anchorIndex = yield* Effect.fromResult(requireColumnIndex(columns, request.column));
@@ -569,7 +571,7 @@ export class WorkingCsvStore {
     }));
   }
 
-  deleteColumn(request: CsvDeleteColumnRequest): Effect.Effect<CsvSchemaEditState, Error> {
+  deleteColumn(request: CsvDeleteColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.mutate(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const columns = state.metadata.columns;
       const index = yield* Effect.fromResult(requireColumnIndex(columns, request.column));
@@ -590,11 +592,11 @@ export class WorkingCsvStore {
     }));
   }
 
-  undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, Error> {
+  undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.stepHistory(workingCsvId, 'undo');
   }
 
-  redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, Error> {
+  redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.stepHistory(workingCsvId, 'redo');
   }
 
@@ -609,7 +611,7 @@ export class WorkingCsvStore {
     });
   }
 
-  private stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Effect.Effect<CsvSchemaEditState, Error> {
+  private stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.mutate(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
       const { command, commit } = yield* Effect.fromResult(state.history.step(direction));
       const next = yield* Effect.fromResult(columnsAfter(state.metadata.columns, command, direction));
@@ -630,7 +632,7 @@ export class WorkingCsvStore {
    * was serialized from. A failed worker release rejects the export before delivery, and the store
    * keeps that worker for disposal to retry.
    */
-  exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, Error> {
+  exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError> {
     return Effect.gen({ self: this }, function* () {
       let releaseFailure: DataEngineError | undefined;
       const prepared = yield* this.read(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
@@ -1046,7 +1048,7 @@ function workingCsvFailure(code: WorkingCsvFailure['code'], cause: unknown): Wor
   };
 }
 
-function normalizeOpenError(cause: WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError): CsvOpenError {
+function normalizeOpenError(cause: WorkspaceRequestError | CsvSourceUnavailableError): CsvOpenError {
   if (cause instanceof CsvOpenError) return cause;
 
   if (cause instanceof CsvSourceUnavailableError) {

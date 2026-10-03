@@ -37,7 +37,7 @@ import {
   validateKeySelection,
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
-import { ComparisonCleanupError } from './comparison-effects';
+import { cleanupEffect } from './comparison-effects';
 
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
@@ -443,7 +443,7 @@ export class CsvComparisonService {
   ): Effect.fn.Return<void, DataEngineError> {
     for (const comparisonId of this.dependentComparisonIds(workingCsvId)) {
       const result = yield* this.close(comparisonId);
-      if (result.status === 'failed') return yield* Effect.fail(new DataEngineError(result.failure));
+      if (result.status === 'failed') return yield* Effect.fail(new DataEngineError({ cause: result.failure }));
     }
   });
 
@@ -464,7 +464,7 @@ export class CsvComparisonService {
       const closed = yield* Effect.exit(this.close(comparisonId));
       if (Exit.isFailure(closed)) failures.push(closed.cause);
       else if (closed.value.status === 'failed') {
-        failures.push(Cause.fail(new DataEngineError(closed.value.failure)));
+        failures.push(Cause.fail(new DataEngineError({ cause: closed.value.failure })));
       }
     }
     const disposed = yield* Effect.exit(this.executor.dispose());
@@ -543,9 +543,7 @@ export class CsvComparisonService {
     // Retire partial snapshots unless publication transferred ownership to the tab.
     yield* Effect.addFinalizer(() => Effect.suspend(() =>
       entity.snapshot?.artifactId !== operation.operationId
-        ? this.retireSnapshot(operation.operationId).pipe(
-            Effect.mapError((cause) => new ComparisonCleanupError(cause)), Effect.orDie,
-          )
+        ? cleanupEffect(this.retireSnapshot(operation.operationId))
         : Effect.void,
     ));
     const summary = yield* observeStage('comparison.snapshot', executor.createSnapshot({
@@ -563,9 +561,7 @@ export class CsvComparisonService {
     if (previousArtifactId) {
       yield* Effect.addFinalizer(() => Effect.suspend(() =>
         entity.snapshot?.artifactId === operation.operationId
-          ? this.retireSnapshot(previousArtifactId).pipe(
-              Effect.mapError((cause) => new ComparisonCleanupError(cause)), Effect.orDie,
-            )
+          ? cleanupEffect(this.retireSnapshot(previousArtifactId))
           : Effect.void,
       ));
     }

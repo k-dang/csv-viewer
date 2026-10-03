@@ -9,7 +9,7 @@ export function failNextExportPreparation(database: WorkspaceDatabase, failure: 
     return connect().pipe(Effect.map((connection) => {
       const read = connection.readObjectsCancellable.bind(connection);
       connection.readObjectsCancellable = (sql, values) => failure === 'read'
-        ? Effect.fail(new DataEngineError(new Error('PRIVATE export read failure')))
+        ? Effect.fail(new DataEngineError({ cause: new Error('PRIVATE export read failure') }))
         : read(sql, values).pipe(Effect.map((rows) => {
           rows[0][Object.keys(rows[0])[0]] = new Date(NaN);
           return rows;
@@ -33,7 +33,7 @@ export function failNextExportWorkerRelease(database: WorkspaceDatabase, failure
       connection.close = () => Effect.suspend(() => {
         if (remaining === 0) return close().pipe(Effect.tap(() => Effect.sync(() => { closed = true; })));
         remaining -= 1;
-        return Effect.fail(new DataEngineError(new Error('PRIVATE export release failure')));
+        return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE export release failure') }));
       });
       return connection;
     }));
@@ -46,7 +46,7 @@ export function failNextMetadataRead(database: WorkspaceDatabase): void {
   database.readObjects = (sql, values) => {
     if (!sql.startsWith('DESCRIBE SELECT * FROM "csv_working_')) return read(sql, values);
     database.readObjects = read;
-    return Effect.fail(new DataEngineError(new Error('PRIVATE metadata failure')));
+    return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE metadata failure') }));
   };
 }
 
@@ -55,7 +55,7 @@ export function failNextCsvLoad(database: WorkspaceDatabase): void {
   database.run = (sql, values) => {
     if (!sql.startsWith('CREATE TABLE "csv_working_')) return run(sql, values);
     database.run = run;
-    return Effect.fail(new DataEngineError(new Error('PRIVATE CSV load failure')));
+    return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE CSV load failure') }));
   };
 }
 
@@ -72,7 +72,7 @@ export function failNextDatabaseRelease(database: OwnedWorkspaceDatabase): void 
   const close = database.closeOwnerConnection.bind(database);
   database.closeOwnerConnection = () => {
     database.closeOwnerConnection = close;
-    return close().pipe(Effect.andThen(Effect.fail(new DataEngineError(new Error('PRIVATE database release failure')))));
+    return close().pipe(Effect.andThen(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE database release failure') }))));
   };
 }
 
@@ -115,6 +115,6 @@ export async function failNextSnapshotDrop(database: WorkspaceDatabase): Promise
   connection.run = (sql, values) => {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) return run(sql, values);
     connection.run = run;
-    return Effect.fail(new DataEngineError(new Error('PRIVATE snapshot cleanup failure')));
+    return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE snapshot cleanup failure') }));
   };
 }

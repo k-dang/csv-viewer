@@ -141,7 +141,7 @@ class WasmContractHost implements CsvWorkspaceHost {
     return Effect.suspend(() => {
       const source = this.sourcesById.get(sourceId);
       if (!source || source.contents === null) {
-        return Effect.fail(new CsvSourceUnavailableError('missing-source', 'CSV Source is no longer available.'));
+        return Effect.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'CSV Source is no longer available.' }));
       }
       return Effect.succeed({ ...source, contents: source.contents });
     });

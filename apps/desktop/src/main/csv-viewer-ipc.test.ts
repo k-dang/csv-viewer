@@ -73,7 +73,7 @@ describe('CsvViewer Electron request bridge', () => {
     type Ipc = Parameters<typeof registerDroppedSourceHandler>[0];
     let handler: Parameters<Ipc['handle']>[1] | undefined;
     const ipc: Ipc = { handle: (_channel, registered) => { handler = registered; } };
-    registerDroppedSourceHandler(ipc, () => Effect.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.')));
+    registerDroppedSourceHandler(ipc, () => Effect.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source no longer exists.' })));
     if (!handler) throw new Error('Dropped-source handler was not registered.');
     const missingPath = path.resolve('PRIVATE-MISSING.csv');
     const missing = await handler(ipcEvent, missingPath);
@@ -91,7 +91,7 @@ describe('CsvViewer Electron request bridge', () => {
       ok: false, message: 'The CSV workspace could not complete the request.',
     });
 
-    registerDroppedSourceHandler(ipc, () => Effect.die(new CsvSourceUnavailableError('unreadable', 'PRIVATE unexpected source error.')));
+    registerDroppedSourceHandler(ipc, () => Effect.die(new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE unexpected source error.' })));
     await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
       ok: false, message: 'The CSV workspace could not complete the request.',
     });

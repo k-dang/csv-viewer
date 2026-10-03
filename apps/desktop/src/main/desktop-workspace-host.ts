@@ -102,7 +102,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
       );
       if (!fileStats.isFile()) {
         yield* this.forgetRecentPath(filePath);
-        return yield* Effect.fail(new CsvSourceUnavailableError('unreadable', 'Selected path is not a file.'));
+        return yield* Effect.fail(new CsvSourceUnavailableError({ code: 'unreadable', message: 'Selected path is not a file.' }));
       }
       return {
         sourceId,
@@ -217,7 +217,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   private requireSource(sourceId: CsvSourceId) {
     return Effect.suspend(() => {
       const source = this.sources.get(sourceId);
-      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError('missing-source', 'The CSV Source is not available.'));
+      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source is not available.' }));
     });
   }
 
@@ -312,22 +312,22 @@ function buildDefaultExportName(sourceName: string): string {
 
 function toSourceUnavailableError(cause: NodeJS.ErrnoException): CsvSourceUnavailableError {
   if (cause.code === 'ENOENT') {
-    return new CsvSourceUnavailableError('missing-source', 'The CSV Source no longer exists.');
+    return new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source no longer exists.' });
   }
   if (cause.code === 'EACCES' || cause.code === 'EPERM') {
-    return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the CSV Source.');
+    return new CsvSourceUnavailableError({ code: 'permission-denied', message: 'Permission was denied for the CSV Source.' });
   }
-  return new CsvSourceUnavailableError('unreadable', 'The CSV Source could not be read.');
+  return new CsvSourceUnavailableError({ code: 'unreadable', message: 'The CSV Source could not be read.' });
 }
 
 function toExportDestinationError(cause: NodeJS.ErrnoException): CsvSourceUnavailableError {
   if (cause.code === 'ENOENT') {
-    return new CsvSourceUnavailableError('missing-source', 'The export destination no longer exists.');
+    return new CsvSourceUnavailableError({ code: 'missing-source', message: 'The export destination no longer exists.' });
   }
   if (cause.code === 'EACCES' || cause.code === 'EPERM') {
-    return new CsvSourceUnavailableError('permission-denied', 'Permission was denied for the export destination.');
+    return new CsvSourceUnavailableError({ code: 'permission-denied', message: 'Permission was denied for the export destination.' });
   }
-  return new CsvSourceUnavailableError('unreadable', 'The export destination could not be accessed.');
+  return new CsvSourceUnavailableError({ code: 'unreadable', message: 'The export destination could not be accessed.' });
 }
 
 function isRecentSourceEntry(value: JsonValue): value is RecentSourceEntry {

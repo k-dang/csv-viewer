@@ -684,12 +684,12 @@ async function prepareComparison(fixture: WorkspaceContractFixture, rows = '1,PR
 function failingExecutor(mode: 'recoverable-failure' | 'defect' | 'cleanup-failed' | 'pending', entered: () => void = () => undefined): ComparisonExecutor {
   const driverError = new Error('SELECT PRIVATE-COLUMN FROM PRIVATE-SOURCE.csv: PRIVATE-CELL', { cause: new Error('C:/PRIVATE/location.csv') });
   const snapshot: Effect.Effect<ComparisonSummary, DataEngineError> = mode === 'pending' ? Effect.never
-    : mode === 'defect' ? Effect.die(driverError) : Effect.fail(new DataEngineError(driverError));
+    : mode === 'defect' ? Effect.die(driverError) : Effect.fail(new DataEngineError({ cause: driverError }));
   return {
     openAttempt: () => Effect.acquireRelease(Effect.succeed({
       validateKey: () => Effect.succeed({ blankRowCount: 0, duplicateGroupCount: 0, blankExamples: [], duplicateExamples: [] }),
       createSnapshot: () => Effect.sync(entered).pipe(Effect.andThen(snapshot)),
-    }), () => cleanupEffect(mode === 'cleanup-failed' ? Effect.fail(new DataEngineError(driverError)) : Effect.void)),
+    }), () => cleanupEffect(mode === 'cleanup-failed' ? Effect.fail(new DataEngineError({ cause: driverError })) : Effect.void)),
     activateSnapshot: () => undefined,
     readWindow: () => Effect.succeed({ totalRowCount: 0, rows: [] }),
     dropSnapshot: () => Effect.void,
@@ -702,9 +702,9 @@ function retryCleanupExecutor(): ComparisonExecutor {
   const secret = new Error('PRIVATE driver failure');
   let closeFails = true;
   const connection = stubConnection({
-    readObjectsCancellable: () => Effect.fail(new DataEngineError(secret)),
+    readObjectsCancellable: () => Effect.fail(new DataEngineError({ cause: secret })),
     close: () => Effect.suspend(() => {
-      if (closeFails) { closeFails = false; return Effect.fail(new DataEngineError(secret)); }
+      if (closeFails) { closeFails = false; return Effect.fail(new DataEngineError({ cause: secret })); }
       return Effect.void;
     }),
   });
