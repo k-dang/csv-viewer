@@ -1,5 +1,5 @@
-import { DataEngineError } from '../database';
-import { Cause, Deferred, Effect, Exit, Latch, Result, type Scope, type Types } from 'effect';
+import { DataEngineError, WorkspaceDatabase, type WorkspaceDatabaseConnection } from '../database';
+import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Result, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
 import { WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
@@ -26,8 +26,7 @@ import type {
   WorkingCsvId,
   WorkingCsvView,
 } from '../csv-viewer';
-import type { ComparisonExecutor } from '../comparison/comparison-executor';
-import type { WorkspaceDatabase, WorkspaceDatabaseConnection } from '../database';
+import { ComparisonExecutor } from '../comparison/comparison-executor';
 import { CsvEditHistory, rowCountDelta, type CsvEditDraft } from './csv-edit-history';
 import { serializeCsvExport } from './csv-export-serialization';
 import {
@@ -55,7 +54,7 @@ import {
 } from './csv-working-csv-table';
 import { csvDeletedField, csvHiddenColumnPrefix, csvSourceOrderField, hiddenCsvColumnName } from './csv-storage-schema';
 import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-executor';
-import { CsvSourceUnavailableError, type CsvWorkspaceHost } from '../workspace-host';
+import { CsvSourceUnavailableError, CsvWorkspaceHost } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 type WorkingCsvOperationError = WorkspaceRequestError | DataEngineError;
@@ -88,7 +87,54 @@ type WorkingCsvState = {
 
 type TableLease = { count: number; released: Deferred.Deferred<void> };
 
-export class WorkingCsvStore {
+/**
+ * The workspace's Working CSVs: their lifecycle, reads, edits, history, and export. Leases,
+ * the mutation queue, and admission coordinate the work, as the workspace README describes.
+ */
+export interface WorkingCsvs {
+  beginDisposal(): void;
+  admit(): Effect.Effect<boolean, never, Scope.Scope>;
+  open(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenWorkingCsvOutcome, WorkspaceRequestError>;
+  getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
+  has(workingCsvId: WorkingCsvId): boolean;
+  list(): WorkingCsvView[];
+  subscribeToDataChanges(listener: (workingCsvId: WorkingCsvId) => void): () => void;
+  isClosing(workingCsvId: WorkingCsvId): boolean;
+  beginClose(workingCsvId: WorkingCsvId): boolean;
+  endClose(workingCsvId: WorkingCsvId): void;
+  waitForActiveWork(workingCsvId: WorkingCsvId): Effect.Effect<void>;
+  replace(workingCsvId: WorkingCsvId, expectedDataRevision: number, options?: CsvDialectOptions): Effect.Effect<ReplaceWorkingCsvOutcome>;
+  closeWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError>;
+  disposeStore(): Effect.Effect<void, DataEngineError>;
+  releaseSourcesAfterEngineStop(): void;
+  hasUnexportedChanges(workingCsvId: WorkingCsvId): boolean;
+  getEditState(request: CsvEditStateRequest): Effect.Effect<CsvEditState, WorkspaceRequestError>;
+  getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, WorkingCsvOperationError>;
+  getColumnValues(request: CsvColumnValuesRequest): Effect.Effect<CsvColumnValues, WorkingCsvOperationError>;
+  getColumnValueCounts(request: CsvColumnValueCountsRequest): Effect.Effect<CsvColumnValueCounts, WorkingCsvOperationError>;
+  editCell(request: CsvCellEditRequest): Effect.Effect<CsvCellEditResult, WorkingCsvOperationError>;
+  deleteRows(request: CsvDeleteRowsRequest): Effect.Effect<CsvEditState, WorkingCsvOperationError>;
+  insertRow(request: CsvInsertRowRequest): Effect.Effect<CsvEditState, WorkingCsvOperationError>;
+  renameColumn(request: CsvRenameColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  insertColumn(request: CsvInsertColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  deleteColumn(request: CsvDeleteColumnRequest): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
+  exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
+}
+
+export const WorkingCsvs = Context.Service<WorkingCsvs>('csv-viewer/WorkingCsvs');
+
+/**
+ * Builds the Working CSV store on the host and database, with the DuckDB Comparison executor that
+ * shares its table leases, admission, and artifact registry.
+ */
+export const workingCsvsLayer = Layer.effectContext(Effect.gen(function* () {
+  const store = new WorkingCsvStore(yield* CsvWorkspaceHost, yield* WorkspaceDatabase);
+  return Context.make(WorkingCsvs, store).pipe(Context.add(ComparisonExecutor, store.createComparisonExecutor()));
+}));
+
+class WorkingCsvStore implements WorkingCsvs {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
   private workingCsvs = new Map<string, WorkingCsvState>();
   private dataChangeListeners = new Set<(workingCsvId: WorkingCsvId) => void>();
@@ -104,7 +150,6 @@ export class WorkingCsvStore {
   private admittedWork = 0;
   /** Open while no admitted open, reopen, or worker connection setup is running. */
   private readonly workSettled = Latch.makeUnsafe(true);
-  private comparisonExecutor: ComparisonExecutor | null = null;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
   constructor(
@@ -213,26 +258,23 @@ export class WorkingCsvStore {
   }
 
   createComparisonExecutor(): ComparisonExecutor {
-    if (!this.comparisonExecutor) {
-      this.comparisonExecutor = new DuckDbComparisonExecutor(
-        {
-          acquireSource: (workingCsvId) => this.lease(workingCsvId).pipe(
-            Effect.map((state) => ({
-              tableName: state.tableName,
-              columns: state.metadata.columns.map((column) => ({ ...column })),
-            })),
-            Effect.mapError((error) => new DataEngineError({ cause: error })),
-          ),
-          getOwnerConnection: () => this.database.ownerConnection(),
-          connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
-            if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError({ cause: new Error('CSV workspace is disposing.') }));
-            return yield* this.database.connectWorker();
+    return new DuckDbComparisonExecutor(
+      {
+        acquireSource: (workingCsvId) => this.lease(workingCsvId).pipe(
+          Effect.map((state) => ({
+            tableName: state.tableName,
+            columns: state.metadata.columns.map((column) => ({ ...column })),
           })),
-        },
-        this.artifactRegistry,
-      );
-    }
-    return this.comparisonExecutor;
+          Effect.mapError((error) => new DataEngineError({ cause: error })),
+        ),
+        getOwnerConnection: () => this.database.ownerConnection(),
+        connectWorker: () => Effect.scoped(Effect.gen({ self: this }, function* () {
+          if (!(yield* this.admit())) return yield* Effect.fail(new DataEngineError({ cause: new Error('CSV workspace is disposing.') }));
+          return yield* this.database.connectWorker();
+        })),
+      },
+      this.artifactRegistry,
+    );
   }
 
   /**

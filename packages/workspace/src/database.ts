@@ -1,6 +1,7 @@
-import { Data, Effect } from 'effect';
+import { Context, Data, Effect, Exit, Layer } from 'effect';
 import type { QueryValues } from './query/csv-query';
 import type { EngineRow } from './query/csv-result-normalization';
+import { observeStage } from './workspace-diagnostics';
 
 export const engineFailureMessage = 'The data engine could not complete the operation.';
 
@@ -36,11 +37,38 @@ export interface WorkspaceDatabase {
   readObjects(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError>;
 }
 
+export const WorkspaceDatabase = Context.Service<WorkspaceDatabase>('csv-viewer/Database');
+
 /** A runtime's database with the release steps the database Layer's finalizer runs in order. */
 export interface OwnedWorkspaceDatabase extends WorkspaceDatabase {
   closeOwnerConnection(): Effect.Effect<void, DataEngineError>;
   /** Stops the engine: the native instance, or the Wasm Worker. Runs even if the connection close failed. */
   closeEngine(): Effect.Effect<void, DataEngineError>;
+}
+
+/**
+ * Acquires the runtime's database for the Layer's scope. Closing that scope closes the owner
+ * connection, then the engine even if that failed; each failed step is its own stage.
+ * Finalizers cannot fail, so `release.failed` tells disposal whether the release failed.
+ */
+export function workspaceDatabaseLayer(open: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>) {
+  const release = { failed: false };
+  const layer = Layer.effect(WorkspaceDatabase, Effect.acquireRelease(
+    observeStage('workspace.acquire-database', open),
+    (acquired) => releaseDatabase(acquired).pipe(Effect.catchCause(() => Effect.sync(() => {
+      release.failed = true;
+    }))),
+    { interruptible: true },
+  ));
+  return { layer, release };
+}
+
+function releaseDatabase(database: OwnedWorkspaceDatabase) {
+  return observeStage('workspace.release-database', Effect.gen(function* () {
+    const connection = yield* Effect.exit(observeStage('workspace.close-database-connection', database.closeOwnerConnection()));
+    const engine = yield* Effect.exit(observeStage('workspace.close-database-engine', database.closeEngine()));
+    yield* Exit.asVoidAll([connection, engine]);
+  }));
 }
 
 /** An expected engine failure, classified at the runtime edge. The fixed message keeps driver details from users. */
