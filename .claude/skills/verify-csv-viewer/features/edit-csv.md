@@ -24,8 +24,8 @@ Editing changes the in-memory Working CSV. Cell values stay text. Insert, append
 - Right-click a column header to open the Column Menu at the pointer. Choose `Rename column`: the Column name field opens under the header with the old name selected. Type a new header, press Enter.
 - Right-click a column header, then choose `Insert column left`, `Insert column right`, or `Delete column`. A right-click on a cell keeps the browser's own menu.
 - Focus a column header — click it, or press Up from a cell on the first row — and press F2. The same Column name field opens. F2 while a cell, the search box, or any other control is focused leaves rename closed.
-- Choose `Export CSV`, or `File → Export CSV...` / `Ctrl+Shift+E`, then pick a destination in the OS dialog.
-- Close a tab with its close button, or `File → Close Tab` / `Ctrl+W`; a dirty tab asks to confirm first.
+- Choose `Export CSV`, or `File → Export CSV...`, then pick a destination in the OS dialog.
+- Close a tab with its close button, or `File → Close Tab`; a dirty tab asks to confirm first.
 
 ## Driving it with control-csv-viewer
 
@@ -71,4 +71,4 @@ Editing is shared, but export is only provable on web.
 - Insert needs exactly one selected row; the query does not matter. Append needs zero selected rows and no query. Delete needs a selection. `#metadata-title` does not clear the grid selection. A cell edit leaves Append enabled; click a row after that if you need Insert.
 - Disabled state is only readable from `click`'s JSON output. The AX snapshot does not carry it, so `edit-blocked-append` cannot be proven from a snapshot or screenshot.
 - Dirty UI is not persistence. The proof that Export CSV did not run is the unchanged fixture on disk.
-- `File → Export CSV...` and `File → Close Tab` reach the same handlers as the buttons, but CDP cannot trigger Electron menu accelerators. Cover that translation with the intent unit tests instead.
+- `File → Export CSV...` and `File → Close Tab` reach the same handlers as the buttons, but CDP cannot click native Electron menus. Cover that translation with the intent unit tests instead.

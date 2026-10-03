@@ -151,9 +151,6 @@ export function ShortcutsHelpDialog({ onClose }: ShortcutsHelpDialogProps) {
               </section>
             ))}
           </div>
-          <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
-            The desktop File menu has its own shortcuts. They are not repeated here.
-          </p>
         </div>
       </section>
     </div>
