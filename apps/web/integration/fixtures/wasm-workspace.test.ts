@@ -39,7 +39,7 @@ it('waits for the DuckDB-Wasm worker thread to exit before completing engine shu
 
 it('hands the next database an empty engine, dropping tables and registered files alike', async () => {
   const first = await Effect.runPromise(new SharedEngineWasmDatabase().open());
-  const leaked = await first.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n'));
+  const leaked = await Effect.runPromise(first.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n')));
   await Effect.runPromise(first.run('CREATE TABLE leftover(x INTEGER)'));
   await Effect.runPromise(first.closeOwnerConnection());
   await Effect.runPromise(first.closeEngine());
