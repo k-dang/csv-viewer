@@ -19,10 +19,9 @@ let store: WorkingCsvs;
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
   database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
-  store = Effect.runSync(Effect.service(WorkingCsvs).pipe(Effect.provide(workingCsvsLayer.pipe(Layer.provide(Layer.mergeAll(
-    Layer.succeed(CsvWorkspaceHost, fixture.host),
-    Layer.succeed(WorkspaceDatabase, database),
-  ))))));
+  const resources = Layer.mergeAll(Layer.succeed(CsvWorkspaceHost, fixture.host), Layer.succeed(WorkspaceDatabase, database));
+  // The Working CSV Layer has no finalizers, so the store stays usable after this build's scope closes.
+  store = Effect.runSync(Effect.service(WorkingCsvs).pipe(Effect.provide(workingCsvsLayer.pipe(Layer.provide(resources)))));
 });
 
 afterEach(async () => {

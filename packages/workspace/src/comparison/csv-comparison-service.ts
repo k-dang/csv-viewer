@@ -140,8 +140,7 @@ export const Comparisons = Context.Service<Comparisons>('csv-viewer/Comparisons'
 
 /** Builds Comparisons over these Working CSVs. Attempts belong to the calling scope. */
 export const makeComparisons = Effect.fnUntraced(function* (csvs: ComparisonCsvStore) {
-  const comparisons: Comparisons = new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
-  return comparisons;
+  return new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
 });
 
 export const comparisonsLayer = Layer.effect(Comparisons, WorkingCsvs.use(makeComparisons));

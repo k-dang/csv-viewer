@@ -257,7 +257,7 @@ class WorkingCsvStore implements WorkingCsvs {
     return observeStage('csv.await-leases', this.awaitLeases(workingCsvId));
   }
 
-  /** Only the Layer above calls this; Comparison work reaches it through the ComparisonExecutor service. */
+  /** Only `workingCsvsLayer` calls this; Comparison work reaches it through the ComparisonExecutor service. */
   createComparisonExecutor(): ComparisonExecutor {
     return new DuckDbComparisonExecutor(
       {

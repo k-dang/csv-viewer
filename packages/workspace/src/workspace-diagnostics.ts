@@ -26,7 +26,7 @@ function approvedField(key: string, value: unknown): boolean {
 
 /**
  * Classify only the outer typed reasons. Never inspect or serialize nested driver causes.
- * Matches `ComparisonCleanupError` by tag, so the database module can report its own stages.
+ * Matches `ComparisonCleanupError` by tag rather than class, so this module imports nothing from the database module that uses it.
  */
 export function diagnosticCause(cause: Cause.Cause<unknown>): string {
   if (cause.reasons.some(isCleanupFailure)) return 'cleanup-failed';
