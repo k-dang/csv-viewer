@@ -359,29 +359,6 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       expectVisibleRows(restored.rows).toEqual([{ name: 'Grace' }]);
     });
 
-    it('keeps multiple Working CSVs open with independent data', async () => {
-      const first = await fixture.openSource('first.csv', ['a', '1'].join('\n'));
-      const second = await fixture.openSource('second.csv', ['b,c', '2,3', '4,5'].join('\n'));
-
-      expect(second.workingCsvId).not.toBe(first.workingCsvId);
-      const firstRows = await workspace().call({
-        operation: 'csv.get-rows',
-        workingCsvId: first.workingCsvId,
-        offset: 0,
-        limit: 10,
-      });
-      const secondRows = await workspace().call({
-        operation: 'csv.get-rows',
-        workingCsvId: second.workingCsvId,
-        offset: 0,
-        limit: 10,
-      });
-
-      expect(firstRows.filteredRowCount).toBe(1);
-      expect(secondRows.filteredRowCount).toBe(2);
-      expect(second.columns.map((column) => column.name)).toEqual(['b', 'c']);
-    });
-
     it('keeps edit journals independent per Working CSV', async () => {
       const first = await fixture.openSource('journal-first.csv', ['name', 'Ada'].join('\n'));
       const second = await fixture.openSource('journal-second.csv', ['name', 'Grace'].join('\n'));

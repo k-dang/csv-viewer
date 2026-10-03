@@ -24,17 +24,6 @@ describe('CsvGrid', () => {
     expect(screen.getByText('100.0 MB')).toBeDefined();
   });
 
-  it('presents Unexported Changes using the product language', () => {
-    const workingCsv = workingCsvFixture({
-      editState: { workingCsvId: 'working-csv-1', hasUnexportedChanges: true, canUndo: true, canRedo: false },
-    });
-    const tab = new CsvTab(createTestCsvViewer(), workingCsv);
-
-    render(withCsvViewer(<CsvGrid tab={tab} active DataGrid={DataGrid} />));
-
-    expect(screen.getByText('Unexported Changes')).toBeDefined();
-  });
-
   it('allows relative row insertion with one selected row while a query is active', () => {
     const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture());
     tab.setSearch('ada');

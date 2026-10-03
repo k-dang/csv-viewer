@@ -346,7 +346,7 @@ describe('Comparisons interaction contract', () => {
     await service.dispose();
   });
 
-  it('publishes a replacement before retiring the prior snapshot', async () => {
+  it('keeps a refreshed result Outdated when a source changes while the prior snapshot is retired', async () => {
     const store = new FakeCsvStore();
     store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
     store.workingCsvs.set('b', workingCsv('b', 'b.csv'));

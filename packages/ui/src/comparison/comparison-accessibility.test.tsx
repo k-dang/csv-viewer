@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
@@ -67,14 +67,19 @@ describe('Comparison accessibility semantics', () => {
   });
 
   it('announces progress politely and exposes a keyboard-operable Cancel action', () => {
-    const markup = panelMarkup(
+    const cancel = vi.fn(async () => ({ status: 'requested' as const }));
+    const tab = new ComparisonTab(
+      createTestCsvViewer({ handlers: { 'comparison.cancel': cancel } }),
       comparison({ operation: { operationId: 'operation-1', intent: 'apply-key', phase: 'comparing' } }),
     );
+    render(<ComparisonPanel tab={tab} />);
 
-    expect(markup).toContain('aria-live="polite"');
-    expect(markup).toContain('Comparing complete CSVs');
-    expect(markup).toContain('<button');
-    expect(markup).toContain('Cancel</button>');
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+    const banner = cancelButton.closest('[aria-live]');
+    expect(banner?.getAttribute('aria-live')).toBe('polite');
+    expect(banner?.textContent).toContain('Comparing complete CSVs…');
+    cancelButton.click();
+    expect(cancel).toHaveBeenCalledWith({ operation: 'comparison.cancel', comparisonId: 'comparison-1', operationId: 'operation-1' });
   });
 
   it('marks invalid-key diagnostics as a programmatically focusable alert with bounded evidence', () => {
