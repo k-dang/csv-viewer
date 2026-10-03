@@ -68,10 +68,6 @@ Press `Ctrl+/` or click **Keyboard shortcuts** in the sidebar to show the shortc
 | `Ctrl+C` on a cell | Copy the cell. |
 | `Ctrl+Shift+A` | Copy the focused column. Doesn't work inside a text field. |
 | `Ctrl+/` | Show or hide the shortcut panel. |
-| `Ctrl+O` | Open a file. Desktop only. |
-| `Ctrl+R` | Reopen the active tab. Desktop only. |
-| `Ctrl+Shift+E` | Export the active tab. Desktop only. |
-| `Ctrl+W` | Close the active tab. Desktop only. |
 
 ## Desktop and web differences
 
