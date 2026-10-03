@@ -19,6 +19,8 @@ export default defineConfig({
       'e2e/**',
     ],
     setupFiles: ['./vitest.setup.ts'],
+    // Workspace diagnostics log every operation; show them only for failing tests.
+    silent: 'passed-only',
     // Matches the CI runner's core count; more workers stop paying for themselves past it.
     maxWorkers: 4,
   },

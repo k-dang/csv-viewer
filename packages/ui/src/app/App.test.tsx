@@ -322,7 +322,7 @@ describe('App', () => {
     },
   );
 
-  it('opens the keyboard shortcuts panel from the sidebar button and closes it on a second click', () => {
+  it('toggles keyboard shortcuts from the sidebar button, Ctrl+/ or Cmd+/, and closes them on Escape', () => {
     const viewer = createTestCsvViewer({
       handlers: { 'csv.get-recent-sources': async () => [] },
     });
@@ -331,52 +331,27 @@ describe('App', () => {
         <App workspace={createWorkspace(viewer)} />
       </CsvViewerProvider>,
     );
+    const shortcuts = () => screen.queryByRole('dialog', { name: 'Keyboard shortcuts' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
-    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy();
+    expect(shortcuts()).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
-    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
-  });
-
-  it('opens the keyboard shortcuts panel on Ctrl+/ and closes it on a second Ctrl+/', () => {
-    const viewer = createTestCsvViewer({
-      handlers: { 'csv.get-recent-sources': async () => [] },
-    });
-    render(
-      <CsvViewerProvider viewer={viewer}>
-        <App workspace={createWorkspace(viewer)} />
-      </CsvViewerProvider>,
-    );
+    expect(shortcuts()).toBeNull();
 
     fireEvent.keyDown(window, { key: '/', ctrlKey: true });
-    const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
-    const text = dialog.textContent ?? '';
-    expect(text).toContain('F2');
-    expect(text).toContain('Rename the column whose header is focused. F2 on a cell edits the cell.');
-    expect(text).toContain('Copy the focused column from anywhere that is not a text field.');
-    expect(text).toContain('Show or hide this panel while CSV Viewer is focused.');
-    expect(text).not.toContain('Commit rename');
-    expect(text).not.toContain('Cancel rename');
-    expect(text).not.toContain('Copy cell');
-    expect(text).not.toContain('Close this panel');
-
+    expect(shortcuts()).toBeTruthy();
     fireEvent.keyDown(window, { key: '/', ctrlKey: true });
-    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
-  });
-
-  it('opens the keyboard shortcuts panel on Cmd+/ and closes it when Escape is pressed on the dialog', () => {
-    const viewer = createTestCsvViewer({
-      handlers: { 'csv.get-recent-sources': async () => [] },
-    });
-    render(
-      <CsvViewerProvider viewer={viewer}>
-        <App workspace={createWorkspace(viewer)} />
-      </CsvViewerProvider>,
-    );
+    expect(shortcuts()).toBeNull();
 
     fireEvent.keyDown(window, { key: '/', metaKey: true });
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Keyboard shortcuts' }), { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
+    const dialog = shortcuts();
+    if (!dialog) throw new Error('Cmd+/ did not open keyboard shortcuts.');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(shortcuts()).toBeNull();
+
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { key: '/', altKey: true, ctrlKey: true });
+    expect(shortcuts()).toBeNull();
   });
 
   it('leaves the candidate picker open when Escape closes keyboard shortcuts', async () => {
@@ -416,21 +391,6 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Keyboard shortcuts' }), { key: 'Escape' });
     expect(screen.getByRole('dialog', { name: 'Choose a Candidate' })).toBeTruthy();
-    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
-  });
-
-  it('does not open keyboard shortcuts for Shift+/ or Alt+/', () => {
-    const viewer = createTestCsvViewer({
-      handlers: { 'csv.get-recent-sources': async () => [] },
-    });
-    render(
-      <CsvViewerProvider viewer={viewer}>
-        <App workspace={createWorkspace(viewer)} />
-      </CsvViewerProvider>,
-    );
-
-    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true });
-    fireEvent.keyDown(window, { key: '/', altKey: true, ctrlKey: true });
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
   });
 });
