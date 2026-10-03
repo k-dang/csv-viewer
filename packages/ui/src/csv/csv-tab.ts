@@ -10,6 +10,7 @@ import type {
   CsvSchemaEditState,
   CsvSortDescriptor,
   CsvViewer,
+  CsvViewExportEvent,
   WorkingCsvView,
 } from '@csv-viewer/workspace/csv-viewer';
 
@@ -38,6 +39,7 @@ export type CsvTabState = {
   editError: string | null;
   /** The runtime's own wording after a successful Export CSV. Cleared by the next change. */
   exportConfirmation: string | null;
+  exportOperation: { operationId: string; phase: 'preparing' | 'delivering' } | null;
   query: CsvTabQuery;
   /** True while sort, filters, or search shape the row window. Appending is blocked then. */
   hasActiveQuery: boolean;
@@ -95,7 +97,7 @@ export class CsvTab {
   replaceWorkingCsv(workingCsv: WorkingCsvView): void {
     this.queryVersion += 1;
     this.statsRequest += 1;
-    this.set({ ...freshState(workingCsv), revision: this.state.revision + 1 });
+    this.set({ ...freshState(workingCsv), exportOperation: this.state.exportOperation, revision: this.state.revision + 1 });
   }
 
   setSearch(search: string): void {
@@ -291,14 +293,51 @@ export class CsvTab {
 
   /** Export CSV changes no data, so the grid keeps its rows; only the edit state moves. */
   async export(): Promise<void> {
-    this.set({ editError: null, exportConfirmation: null });
+    if (this.state.exportOperation) return;
+    const operationId = crypto.randomUUID();
+    this.set({ editError: null, exportConfirmation: null, exportOperation: { operationId, phase: 'delivering' } });
     try {
       const result = await this.viewer.call({ operation: 'csv.export', workingCsvId: this.workingCsvId });
       if (this.disposed || result.status === 'cancelled') return;
       this.set({ editState: result.editState, exportConfirmation: this.viewer.capabilities.exportCsvSuccessMessage });
     } catch (error) {
       this.fail(error, 'Unable to export CSV.');
+    } finally {
+      if (!this.disposed && this.snapshot().exportOperation?.operationId === operationId) this.set({ exportOperation: null });
     }
+  }
+
+  receiveExport(event: CsvViewExportEvent): void {
+    if (this.state.exportOperation?.operationId === event.operationId) {
+      this.set({ exportOperation: { operationId: event.operationId, phase: event.phase } });
+    }
+  }
+
+  async exportView(): Promise<void> {
+    if (this.disposed || this.state.exportOperation) return;
+    const operationId = crypto.randomUUID();
+    const { query } = this.state;
+    this.set({ editError: null, exportConfirmation: null, exportOperation: { operationId, phase: 'preparing' } });
+    try {
+      const result = await this.viewer.call({ operation: 'csv.export-view', workingCsvId: this.workingCsvId,
+        operationId, sort: query.sort, filters: query.filters, search: query.search.trim() });
+      if (this.disposed) return;
+      if (result.status === 'empty') this.set({ exportConfirmation: 'No matching rows to export' });
+      else if (result.status === 'exported') this.set({ exportConfirmation:
+        `${this.viewer.capabilities.exportCsvSuccessMessage} · ${result.rowCount.toLocaleString()} rows` });
+    } catch (error) {
+      this.fail(error, 'Unable to export current view.');
+    } finally {
+      if (!this.disposed && this.snapshot().exportOperation?.operationId === operationId) this.set({ exportOperation: null });
+    }
+  }
+
+  async cancelExport(): Promise<void> {
+    const operation = this.state.exportOperation;
+    if (!operation || operation.phase !== 'preparing') return;
+    try {
+      await this.viewer.call({ operation: 'csv.cancel-view-export', workingCsvId: this.workingCsvId, operationId: operation.operationId });
+    } catch (error) { this.fail(error, 'Unable to cancel export.'); }
   }
 
   dispose(): void {
@@ -324,6 +363,7 @@ export class CsvTab {
         revision: this.state.revision + 1,
         selectedRowIds: [],
         exportConfirmation: null,
+        queryStatus: 'querying',
       });
       this.refreshStats();
       return true;
@@ -341,7 +381,7 @@ export class CsvTab {
   private setQuery(query: CsvTabQuery): void {
     this.queryVersion += 1;
     const hasActiveQuery = query.sort.length > 0 || query.filters.length > 0 || query.search.trim().length > 0;
-    this.set({ query, hasActiveQuery });
+    this.set({ query, hasActiveQuery, queryStatus: 'querying' });
     this.refreshStats();
   }
 
@@ -391,6 +431,7 @@ function freshState(workingCsv: WorkingCsvView): CsvTabState {
     editState: workingCsv.editState,
     editError: null,
     exportConfirmation: null,
+    exportOperation: null,
     query: emptyQuery,
     hasActiveQuery: false,
     queryStatus: 'idle',

@@ -2,6 +2,7 @@ import { defineDiagnosticsContract } from './diagnostics.contract';
 import { defineCsvViewerRequestContract } from './csv-viewer.contract';
 import { defineCsvWorkspaceComparisonContract } from './comparison.contract';
 import { defineCsvWorkspaceEditingContract } from './editing.contract';
+import { defineViewExportContract } from './view-export.contract';
 import { defineCsvWorkspaceLifecycleContract } from './lifecycle.contract';
 import { defineCsvWorkspaceWorkingCsvContract } from './working-csv.contract';
 import type { WorkspaceContractFactory } from './workspace-contract';
@@ -12,6 +13,7 @@ export function defineCsvWorkspaceContract(factory: WorkspaceContractFactory): v
   defineCsvViewerRequestContract(factory);
   defineCsvWorkspaceWorkingCsvContract(factory);
   defineCsvWorkspaceEditingContract(factory);
+  defineViewExportContract(factory);
   defineCsvWorkspaceComparisonContract(factory);
   defineCsvWorkspaceLifecycleContract(factory);
 }

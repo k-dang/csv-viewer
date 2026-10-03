@@ -79,6 +79,36 @@ test('opens and exports through IPC, refuses overwriting the source, and persist
   expect(JSON.parse(recent)).toEqual(expect.arrayContaining([expect.objectContaining({ path: source })]));
 });
 
+test('exports a filtered view and keeps the desktop export menu mapped to the complete CSV', async () => {
+  const source = path.join(directory, 'people.csv');
+  const viewDestination = path.join(directory, 'people-view.csv');
+  const fullDestination = path.join(directory, 'people-edited.csv');
+  await app.evaluate(({ dialog }, paths) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [paths.source] });
+    let choice = 0;
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: choice++ === 0 ? paths.viewDestination : paths.fullDestination });
+  }, { source, viewDestination, fullDestination });
+  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true }).click();
+  await expect(csvCells(page, 'name')).toHaveText(['Ada', 'Grace']);
+  await editCell(page, 'code', 0, '00042');
+  await page.getByRole('searchbox', { name: 'Global search' }).fill('Ada');
+  await expect(page.getByText('1 visible of 2 rows', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Export options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Export current view · 1 rows', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('Export complete · 1 rows');
+  expect(await readFile(viewDestination, 'utf8')).toBe('name,code\nAda,00042\n');
+  await expect(page.getByRole('img', { name: 'Unexported Changes', exact: true })).toBeVisible();
+  await app.evaluate(({ Menu, BrowserWindow }) => {
+    const item = Menu.getApplicationMenu()?.items.find((entry) => entry.label === 'File')?.submenu?.items.find((entry) => entry.label === 'Export CSV...');
+    if (!item) throw new Error('Export CSV menu item missing');
+    item.click(item, BrowserWindow.getAllWindows()[0], {});
+  });
+  await expect(page.getByRole('status')).toHaveText('Export complete');
+  expect(await readFile(fullDestination, 'utf8')).toBe('name,code\nAda,00042\nGrace,002\n');
+  expect(await readFile(source, 'utf8')).toBe(contents);
+  await expect(page.getByRole('img', { name: 'Unexported Changes', exact: true })).toHaveCount(0);
+});
+
 test('dropping the same desktop source focuses its edited tab and reopen respects discard confirmation', async () => {
   const source = path.join(directory, 'people.csv');
   const session = await page.context().newCDPSession(page);

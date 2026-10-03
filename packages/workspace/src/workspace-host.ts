@@ -23,6 +23,7 @@ export type CsvExportRequestForDelivery = {
   sourceId: CsvSourceId;
   suggestedName: string;
   contents: string;
+  kind?: 'view';
 };
 
 export type CsvExportDelivery = { status: 'delivered' } | { status: 'cancelled' };

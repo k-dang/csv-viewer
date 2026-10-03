@@ -1,4 +1,5 @@
 import type { CsvColumn } from '../csv-viewer';
+import { Effect } from 'effect';
 import { normalizeCellValue, type EngineRow } from '../query/csv-result-normalization';
 
 /**
@@ -46,3 +47,13 @@ function serializeField(value: string, delimiter: string): string {
 
   return value;
 }
+
+/** Yields between batches so view preparation can paint progress and answer cancellation. */
+export const serializeCsvViewExport = Effect.fnUntraced(function* (options: Parameters<typeof serializeCsvExport>[0]) {
+  const chunks: string[] = [];
+  for (let offset = 0; offset < options.rows.length; offset += 512) {
+    yield* Effect.sleep(0);
+    chunks.push(serializeCsvExport({ ...options, rows: options.rows.slice(offset, offset + 512), header: options.header && offset === 0 }));
+  }
+  return chunks.join('');
+});

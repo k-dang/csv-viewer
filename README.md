@@ -16,7 +16,7 @@ CSV Viewer opens, filters, edits, and compares CSV files on your device. It runs
 - Compare two files by a key and see which cells and rows differ.
 - Count the values in a column.
 - Copy a cell or a whole column.
-- Export your edits to a new file. CSV Viewer never overwrites the source file.
+- Export the whole working copy or just the current view to a new file. CSV Viewer never overwrites the source file.
 - Pick light or dark mode, one of four color palettes, and a collapsible sidebar.
 
 ## Open a file
@@ -29,7 +29,7 @@ If a file opens with the wrong columns, click **Parse options** beside **Open CS
 
 ## Edit and export
 
-Double-click a cell to edit it. CSV Viewer keeps every value as text, so codes with leading zeros keep their zeros. Edits change a working copy, and the tab shows **Unexported Changes** until you export.
+Double-click a cell to edit it. CSV Viewer keeps every value as text, so codes with leading zeros keep their zeros. Edits change a working copy, and the tab shows **Unexported Changes** until you export the whole working copy.
 
 - To insert a row, select one row and insert above or below it. The current query can hide the new row.
 - To append a row, clear the row selection and the query first.
@@ -38,6 +38,10 @@ Double-click a cell to edit it. CSV Viewer keeps every value as text, so codes w
 - To undo or redo a cell, row, or column change, click **Undo edit** or **Redo edit**. Undoing a column deletion restores the column's values and position.
 
 To save your edits, click **Export CSV**. The export contains the whole working copy with the file's delimiter and header settings. Search, filters, and sort don't affect it. On desktop, you pick a destination, and CSV Viewer refuses to overwrite the source file. On the web, the browser downloads the file. Closing a tab with unexported changes asks for confirmation.
+
+To extract matching rows, open **Export options** beside Export and choose **Export current view**. It includes every matching row in the current sort order, even beyond the loaded grid. All columns keep their working-copy order, regardless of row selection or dragged headers. The menu shows the matching count and disables the action while the count is unresolved or zero.
+
+An active cell editor commits first; a failed commit keeps its draft open. You can **Cancel** while the app prepares the output. Delivery suggests a `-view` filename and keeps the current delimiter and header settings. View export preserves **Unexported Changes** and undo/redo history, even when every row matches.
 
 ## Search, copy, and count values
 
@@ -89,7 +93,7 @@ On the web, a few more rules apply:
 
 - Values are plain text. CSV Viewer doesn't validate numbers, dates, or booleans.
 - You can't append a row while a sort, filter, or search is active.
-- You can't reorder columns.
+- Dragging headers changes their visual arrangement; exports keep working-copy column order.
 - CSV Viewer has no formulas, pivot tables, charts, joins, or SQL editor.
 
 ## Run from source

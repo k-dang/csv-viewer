@@ -15,6 +15,11 @@ import type {
   CsvDialectOptions,
   CsvEditState,
   CsvExportOutcome,
+  CsvViewExportRequest,
+  CsvViewExportOutcome,
+  CsvViewExportEvent,
+  CancelViewExportRequest,
+  CancelViewExportOutcome,
   CsvEditStateRequest,
   CsvInsertColumnRequest,
   CsvInsertRowRequest,
@@ -28,11 +33,12 @@ import type {
 } from '../csv-viewer';
 import { ComparisonExecutor } from '../comparison/comparison-executor';
 import { CsvEditHistory, rowCountDelta, type CsvEditDraft } from './csv-edit-history';
-import { serializeCsvExport } from './csv-export-serialization';
+import { serializeCsvExport, serializeCsvViewExport } from './csv-export-serialization';
 import {
   buildColumnValueCountsQuery,
   buildColumnValuesQuery,
   buildRowsQuery,
+  buildViewExportQuery,
   maxRowWindowLimit,
   requireKnownColumn,
 } from '../query/csv-query';
@@ -121,6 +127,9 @@ export interface WorkingCsvs {
   undo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
+  exportView(request: CsvViewExportRequest): Effect.Effect<CsvViewExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
+  cancelViewExport(request: CancelViewExportRequest): Effect.Effect<CancelViewExportOutcome>;
+  subscribeToViewExports(listener: (event: CsvViewExportEvent) => void): () => void;
 }
 
 export const WorkingCsvs = Context.Service<WorkingCsvs>('csv-viewer/WorkingCsvs');
@@ -147,6 +156,9 @@ class WorkingCsvStore implements WorkingCsvs {
   private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, DataEngineError>>();
   /** Export workers whose close failed. Disposal retries them before the database is released. */
   private readonly unreleasedExportWorkers = new Set<WorkspaceDatabaseConnection>();
+  private readonly busyExports = new Set<WorkingCsvId>();
+  private readonly viewExports = new Map<WorkingCsvId, { operationId: string; cancel: Deferred.Deferred<void>; preparing: boolean }>();
+  private readonly viewExportListeners = new Set<(event: CsvViewExportEvent) => void>();
   private admittedWork = 0;
   /** Open while no admitted open, reopen, or worker connection setup is running. */
   private readonly workSettled = Latch.makeUnsafe(true);
@@ -159,6 +171,7 @@ class WorkingCsvStore implements WorkingCsvs {
 
   beginDisposal(): void {
     if (this.lifecycle === 'active') this.lifecycle = 'disposing';
+    for (const workingCsvId of this.viewExports.keys()) this.cancelPreparation(workingCsvId);
   }
 
   /**
@@ -247,6 +260,7 @@ class WorkingCsvStore implements WorkingCsvs {
   beginClose(workingCsvId: WorkingCsvId): boolean {
     if (!this.workingCsvs.has(workingCsvId) || this.closingWorkingCsvs.has(workingCsvId)) return false;
     this.closingWorkingCsvs.add(workingCsvId);
+    this.cancelPreparation(workingCsvId);
     return true;
   }
 
@@ -289,6 +303,7 @@ class WorkingCsvStore implements WorkingCsvs {
     options: CsvDialectOptions = {},
   ): Effect.fn.Return<ReplaceWorkingCsvOutcome, never, Scope.Scope> {
     if (!(yield* this.admit())) return unavailable('The CSV workspace is closing.');
+    this.cancelPreparation(workingCsvId);
     return yield* this.mutate(workingCsvId, (existing) => Effect.gen({ self: this }, function* () {
       if (existing.metadata.dataRevision !== expectedDataRevision) {
         return { status: 'revision-changed', workingCsv: buildWorkingCsvView(existing) } satisfies ReplaceWorkingCsvOutcome;
@@ -714,7 +729,95 @@ class WorkingCsvStore implements WorkingCsvs {
     const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
     if (state.history === prepared.state.history) state.history.markExported(prepared.revisionId);
     return { status: 'exported', editState: buildEditState(state) } satisfies CsvExportOutcome;
-  });
+  }, (effect, workingCsvId) => this.withExportSlot(workingCsvId, effect));
+
+  /** Captures a queued read, then prepares cancellable bytes independently of subsequent edits. */
+  readonly exportView = Effect.fnUntraced(function* (
+    this: WorkingCsvStore,
+    request: CsvViewExportRequest,
+  ): Effect.fn.Return<CsvViewExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError> {
+    const operation = { operationId: request.operationId, cancel: Deferred.makeUnsafe<void>(), preparing: true };
+    this.viewExports.set(request.workingCsvId, operation);
+    let releaseFailure: DataEngineError | undefined;
+    const preparation = Effect.gen({ self: this }, function* () {
+      const snapshot = yield* this.inTurn(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
+        const { metadata } = state;
+        const query = yield* Effect.fromResult(buildViewExportQuery({
+          tableName: state.tableName, columns: metadata.columns,
+          sort: request.sort ?? [], filters: request.filters ?? [], search: request.search ?? '',
+        }));
+        const connection = yield* Effect.acquireRelease(this.database.connectWorker(), (worker) =>
+          this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => { releaseFailure = error; }))),
+        );
+        const rows = yield* connection.readObjectsCancellable(query.sql, query.values);
+        return {
+          sourceId: state.sourceId,
+          suggestedName: metadata.source.name.replace(/(\.[^.]+)$/, '-view$1'),
+          columns: metadata.columns.map((column) => ({ ...column })), rows,
+          delimiter: metadata.dialect.delimiter ?? state.defaultDelimiter, header: metadata.dialect.header !== false,
+        };
+        }).pipe(Effect.scoped));
+      const contents = yield* serializeCsvViewExport(snapshot);
+      return { sourceId: snapshot.sourceId, suggestedName: snapshot.suggestedName, rowCount: snapshot.rows.length, contents };
+    });
+    const result = yield* Effect.exit(Effect.raceFirst(preparation,
+      Deferred.await(operation.cancel).pipe(Effect.andThen(Effect.interrupt)),
+    ));
+    if (releaseFailure) {
+      const cleanup = Cause.fail(releaseFailure);
+      return yield* Effect.failCause(Exit.isFailure(result) && !Cause.hasInterruptsOnly(result.cause)
+        ? Cause.combine(result.cause, cleanup) : cleanup);
+    }
+    if (Exit.isFailure(result)) {
+      if (Cause.hasInterruptsOnly(result.cause)) return { status: 'cancelled' } satisfies CsvViewExportOutcome;
+      return yield* Effect.failCause(result.cause);
+    }
+    if (Deferred.isDoneUnsafe(operation.cancel)) return { status: 'cancelled' } satisfies CsvViewExportOutcome;
+    const prepared = result.value;
+    if (prepared.rowCount === 0) return { status: 'empty' } satisfies CsvViewExportOutcome;
+    operation.preparing = false;
+    yield* Effect.forEach([...this.viewExportListeners], (listener) => Effect.sync(() => listener({
+      workingCsvId: request.workingCsvId, operationId: request.operationId, phase: 'delivering',
+    })).pipe(Effect.catchCause((cause) => reportFailure('csv.notify-export', cause))), { discard: true });
+    const delivery = yield* observeStage('csv.deliver-view-export', this.host.deliverExport({ ...prepared, kind: 'view' }));
+    return delivery.status === 'cancelled'
+      ? { status: 'cancelled' } satisfies CsvViewExportOutcome
+      : { status: 'exported', rowCount: prepared.rowCount } satisfies CsvViewExportOutcome;
+  }, (effect, request) => this.withExportSlot(request.workingCsvId, effect.pipe(
+    Effect.ensuring(Effect.sync(() => { this.viewExports.delete(request.workingCsvId); })),
+  )));
+
+  cancelViewExport(request: CancelViewExportRequest): Effect.Effect<CancelViewExportOutcome> {
+    return Effect.sync(() => {
+      const operation = this.viewExports.get(request.workingCsvId);
+      if (!operation?.preparing) return { status: 'already-finished' };
+      if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
+      this.cancelPreparation(request.workingCsvId);
+      return { status: 'requested' };
+    });
+  }
+
+  subscribeToViewExports(listener: (event: CsvViewExportEvent) => void): () => void {
+    this.viewExportListeners.add(listener);
+    return () => { this.viewExportListeners.delete(listener); };
+  }
+
+  private cancelPreparation(workingCsvId: WorkingCsvId): void {
+    const operation = this.viewExports.get(workingCsvId);
+    if (operation?.preparing) Deferred.doneUnsafe(operation.cancel, Effect.void);
+  }
+
+  private withExportSlot<A, E>(workingCsvId: WorkingCsvId, operation: Effect.Effect<A, E>): Effect.Effect<A, E | WorkspaceRequestError> {
+    return Effect.acquireUseRelease(
+      Effect.suspend(() => {
+        if (this.busyExports.has(workingCsvId)) return Effect.fail(new WorkspaceRequestError({ message: 'An export is already in progress for this CSV.' }));
+        this.busyExports.add(workingCsvId);
+        return Effect.void;
+      }),
+      () => operation,
+      () => Effect.sync(() => { this.busyExports.delete(workingCsvId); }),
+    );
+  }
 
   /** A failed close is reported as cleanup failure and keeps the worker owned by the store, so disposal can retry it. */
   private releaseExportWorker(worker: WorkspaceDatabaseConnection): Effect.Effect<void, DataEngineError> {
@@ -802,7 +905,11 @@ class WorkingCsvStore implements WorkingCsvs {
    * queued behind a reopen runs against the replacement, under a second lease on its table.
    * Dependents are notified once the operation advances the data revision.
    */
-  private readonly mutate = Effect.fnUntraced(function* <A, E>(
+  private mutate<A, E>(workingCsvId: WorkingCsvId, operation: (state: WorkingCsvState) => Effect.Effect<A, E>): Effect.Effect<A, E | WorkspaceRequestError> {
+    return this.inTurn(workingCsvId, operation).pipe(Effect.uninterruptible);
+  }
+
+  private readonly inTurn = Effect.fnUntraced(function* <A, E>(
     this: WorkingCsvStore,
     workingCsvId: WorkingCsvId,
     operation: (state: WorkingCsvState) => Effect.Effect<A, E>,
@@ -817,7 +924,7 @@ class WorkingCsvStore implements WorkingCsvs {
       yield* this.notifyDataChange(workingCsvId);
     }
     return result;
-  }, Effect.scoped, Effect.uninterruptible);
+  }, Effect.scoped);
 
   /**
    * Reserves the Working CSV's next mutation turn immediately, then waits for the turns reserved
@@ -831,9 +938,9 @@ class WorkingCsvStore implements WorkingCsvs {
         this.mutationTails.set(workingCsvId, turn);
         return { previous, turn };
       }),
-      ({ turn }) => Effect.sync(() => {
+      ({ previous, turn }) => (previous ? Deferred.await(previous) : Effect.void).pipe(Effect.andThen(Effect.sync(() => {
         if (this.mutationTails.get(workingCsvId) === turn) this.mutationTails.delete(workingCsvId);
-      }).pipe(Effect.andThen(Deferred.succeed(turn, undefined))),
+      })), Effect.andThen(Deferred.succeed(turn, undefined))),
     ).pipe(Effect.flatMap(({ previous }) => observeStage('csv.queue-wait', previous ? Deferred.await(previous) : Effect.void)));
   }
 

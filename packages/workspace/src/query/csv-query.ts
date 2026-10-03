@@ -210,6 +210,23 @@ export function buildRowsQuery({
   });
 }
 
+/** Full query result for export, independent of the grid's loaded windows. */
+export function buildViewExportQuery({ tableName, columns, filters, search, sort }: {
+  tableName: string;
+  columns: CsvColumn[];
+  filters: readonly CsvFilterDescriptor[];
+  search: string;
+  sort: readonly CsvSortDescriptor[];
+}): QueryBuild<CsvStatement> {
+  return Result.gen(function* () {
+    const knownColumns = new Set(columns.map((column) => column.name));
+    const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
+    const order = yield* buildOrderSql(sort, knownColumns);
+    const projection = columns.map((column) => quoteIdentifier(column.name)).join(', ');
+    return { sql: `SELECT ${projection} FROM ${quoteIdentifier(tableName)}${scope.whereSql}${order}`, values: scope.values };
+  });
+}
+
 export function buildColumnValuesQuery({
   tableName,
   columns,
@@ -316,7 +333,7 @@ function buildOrderSql(sort: readonly CsvSortDescriptor[], knownColumns: Set<str
     Result.all(sort.map((descriptor) => buildSortClause(descriptor, knownColumns))),
     (orderClauses) =>
       orderClauses.length > 0
-        ? ` ORDER BY ${orderClauses.join(', ')}`
+        ? ` ORDER BY ${orderClauses.join(', ')}, ${quoteIdentifier(csvSourceOrderField)} ASC`
         : ` ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC`,
   );
 }

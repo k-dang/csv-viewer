@@ -141,6 +141,10 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
       const rows: EngineRow[] = [];
       for await (const batch of stream) {
         for (const row of batch) {
+          if (rows.length % 512 === 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            if (isCancelled()) return rows;
+          }
           // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
           rows.push(row.toJSON() as EngineRow);
         }

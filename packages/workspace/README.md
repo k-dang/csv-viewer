@@ -31,7 +31,7 @@ Declared failures are tagged errors, so an ordinary `Error` can't satisfy them:
 
 Working CSV and request dispatch name these failures in their error channels. Database and connection methods fail with `DataEngineError`. A failed Comparison release travels as a `ComparisonCleanupError` defect, and diagnostics report it as `cleanup-failed`.
 
-Pure query construction, history calculation, and export serialization stay ordinary functions. Expected validation problems return a `Result` or a typed Effect failure. Broken invariants are defects.
+Pure query construction, history calculation, and CSV serialization stay ordinary functions. View preparation composes the serializer in yielding batches. Expected validation problems return a `Result` or a typed Effect failure. Broken invariants are defects.
 
 Comparison keeps request failures as request failures:
 
@@ -75,14 +75,18 @@ Finalizers can't return typed failures, so disposal carries the release outcome 
 The store coordinates Working CSV work with a lease, a mutation queue, and admission.
 
 - **Lease.** One scoped Effect leases a Working CSV's current table. Reads, export serialization, mutations, reopen, and Comparison sources all take a lease. Each table keeps an explicit lease count. Closing a Working CSV waits until no lease holds its current table or its retired tables. The last release of a retired table drops the table. If that drop fails, the releasing operation reports `cleanup-failed`, and the table stays registered for close or disposal to retry.
-- **Mutation queue.** Cell edits, row and column edits, undo, redo, and reopen run one at a time per Working CSV, in call order. A mutation takes its lease and its queue position when the request starts, so a close waits for queued work. When its turn comes, the mutation reads the current Working CSV state, so work queued behind a reopen runs against the new table. Reads skip the queue and run concurrently.
+- **Mutation queue.** Cell edits, row and column edits, undo, redo, and reopen run one at a time per Working CSV, in call order. A mutation takes its lease and its queue position when the request starts, so a close waits for queued work. When its turn comes, the mutation reads the current Working CSV state, so work queued behind a reopen runs against the new table. View export also reserves a turn to capture consistent rows and metadata. Other reads skip the queue and run concurrently.
 - **Admission.** An open or reopen holds an admission until its scope closes. A Comparison worker connection holds one only while it connects. Comparison disposal closes open worker connections before the store releases tables. Disposal stops new admissions and waits for admitted work before it releases tables and the database.
 
 ## Cancellable queries wait for the driver
 
 Interrupting a cancellable query requests cancellation, then waits for the driver to settle. Other database operations stay uninterruptible until they settle. A failed worker release produces a `cleanup-failed` diagnostic, and the worker stays available for disposal to retry.
 
-Export holds its table lease and a scoped worker connection while it reads and serializes. It releases both before the host delivers the file. If the worker release fails, the export rejects before delivery, and the store keeps that worker until a release succeeds. Only a successful delivery marks the captured revision as exported.
+Complete export holds its table lease and a scoped worker connection while it reads and serializes. It releases both before the host delivers the file. Only successful complete delivery marks the captured revision as exported.
+
+View export holds its mutation turn, lease, and scoped worker through reading an immutable row/metadata snapshot. It releases them before serializing in cancellable batches and delivering the file. View export leaves history unchanged. Close, reopen, and disposal cancel preparation; prepared delivery keeps its captured contents and source identity independently of the source tab.
+
+If a worker release fails, either export rejects before delivery, and the store keeps that worker until a release succeeds.
 
 ## Open and reopen publish atomically
 

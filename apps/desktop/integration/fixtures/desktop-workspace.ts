@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DesktopWorkspaceHost } from '../../src/main/desktop-workspace-host';
+import { DesktopWorkspaceHost, type DesktopExportWriter } from '../../src/main/desktop-workspace-host';
 import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
 import type {
   ComparisonAttemptOutcomeView,
@@ -59,7 +59,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     return this.workspace;
   }
 
-  static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<CsvWorkspaceFixture> {
+  static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics, writeExport?: DesktopExportWriter): Promise<CsvWorkspaceFixture> {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'csv-workspace-'));
     const prompts: ScriptedPrompts = {
       sourceChoices: [],
@@ -86,6 +86,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
           },
         },
         path.join(directory, 'recent-sources.json'),
+        writeExport,
       );
       const database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
       const workspace = await createCsvViewer(Effect.succeed(database), host, { executor, diagnostics });
