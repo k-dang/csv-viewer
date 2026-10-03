@@ -62,11 +62,6 @@ export function App({ workspace }: { workspace: RendererWorkspace }) {
       if (isHelpToggle(event)) {
         event.preventDefault();
         setHelpOpen((open) => !open);
-        return;
-      }
-      if (event.key === 'Tab' && event.ctrlKey) {
-        event.preventDefault();
-        workspaceRef.current.cycle(event.shiftKey ? -1 : 1);
       }
     }
     function warnBeforeUnload(event: BeforeUnloadEvent) {

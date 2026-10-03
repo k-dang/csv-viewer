@@ -14,7 +14,6 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 - `open-close` closes a tab and returns to the empty window when none remain.
 - `open-second` opens a second CSV and keeps both tabs.
 - `open-already-open` focuses an existing desktop CSV Tab without replacing edits. Web creates a new source for each selection.
-- `open-cycle` switches tabs with Ctrl+Tab and Ctrl+Shift+Tab.
 - `open-dialog` selects a file through Open CSV or the desktop File menu.
 
 ## How to get to it (user POV)
@@ -23,7 +22,7 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 - Choose Open CSV in the `Workspace` navigation or empty card and select a file.
 - On desktop, choose a Recent CSV Source on the empty window, File > Open CSV..., or Ctrl+O.
 - Use Reopen to reload the active source. Desktop also supports File > Reopen CSV and Ctrl+R.
-- Select a tab or use Ctrl+Tab and Ctrl+Shift+Tab.
+- Select a tab in the sidebar.
 - Close with the tab close button. Desktop also supports File > Close Tab and Ctrl+W.
 
 ## Driving it with control-csv-viewer
@@ -51,7 +50,6 @@ Preconditions:
 - Dropping the same file again creates another tab. Names and sizes do not establish source identity.
 - Web accepts at most 100 MB per source and 200 MB total reserved source bytes.
 - Reopen reads the selected File held in memory. Reloading the page requires selecting sources again.
-- Ctrl+Tab may be intercepted by the browser.
 
 ## Gotchas
 
