@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanupEffect } from './comparison-effects';
 import { DataEngineError } from '../database';
@@ -9,7 +9,7 @@ import type {
   WorkingCsvView,
   SourceKeyDiagnostics,
 } from '../csv-viewer';
-import { CsvComparisonService } from './csv-comparison-service';
+import { Comparisons, makeComparisons } from './csv-comparison-service';
 import {
   ComparisonExecutor,
   type CreateComparisonSnapshotRequest,
@@ -183,14 +183,12 @@ afterEach(async () => {
   await Promise.all(runtimeDisposals.splice(0).map((dispose) => dispose()));
 });
 
-const TestComparisons = Context.Service<CsvComparisonService>('test/Comparisons');
-
 function createService(store: FakeCsvStore, executor: ComparisonExecutor) {
-  const runtime = ManagedRuntime.make(Layer.effect(TestComparisons, Effect.gen(function* () {
-    return new CsvComparisonService(store, yield* ComparisonExecutor, yield* Effect.scope);
-  })).pipe(Layer.provide(Layer.succeed(ComparisonExecutor, executor))));
+  const runtime = ManagedRuntime.make(Layer.effect(Comparisons, makeComparisons(store)).pipe(
+    Layer.provide(Layer.succeed(ComparisonExecutor, executor)),
+  ));
   runtimeDisposals.push(() => runtime.dispose());
-  const service = runtime.runSync(TestComparisons);
+  const service = runtime.runSync(Comparisons);
   return {
     candidatesFor: service.candidatesFor.bind(service),
     open: service.open.bind(service),
@@ -198,15 +196,15 @@ function createService(store: FakeCsvStore, executor: ComparisonExecutor) {
     swap: service.swap.bind(service),
     subscribe: service.subscribe.bind(service),
     dependentComparisonIds: service.dependentComparisonIds.bind(service),
-    begin: (request: Parameters<CsvComparisonService['begin']>[0]) => {
+    begin: (request: Parameters<Comparisons['begin']>[0]) => {
       const result = runtime.runSync(service.begin(request));
       return result.status === 'accepted'
         ? { ...result, completion: runtime.runPromise(result.completion) }
         : result;
     },
-    cancel: (request: Parameters<CsvComparisonService['cancel']>[0]) => runtime.runPromise(service.cancel(request)),
+    cancel: (request: Parameters<Comparisons['cancel']>[0]) => runtime.runPromise(service.cancel(request)),
     close: (id: string) => runtime.runPromise(service.close(id)),
-    getWindow: (request: Parameters<CsvComparisonService['getWindow']>[0]) => runtime.runPromise(service.getWindow(request)),
+    getWindow: (request: Parameters<Comparisons['getWindow']>[0]) => runtime.runPromise(service.getWindow(request)),
     dispose: async () => {
       await runtime.runPromise(service.dispose());
       await runtime.dispose();
@@ -242,7 +240,7 @@ function waitForReleaseAttemptCount(executor: ScriptedComparisonExecutor, expect
   return vi.waitUntil(() => executor.releaseAttemptCount >= expectedCount, settles);
 }
 
-describe('CsvComparisonService interaction contract', () => {
+describe('Comparisons interaction contract', () => {
   it('orders compatible candidates first and explains incompatible columns', () => {
     const store = new FakeCsvStore();
     store.workingCsvs.set('a', workingCsv('a', 'baseline.csv'));

@@ -1,5 +1,5 @@
 import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
-import { Cause, Deferred, Effect, Exit, Fiber, type Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, type Scope } from 'effect';
 import { DataEngineError } from '../database';
 import type { WorkspaceRequestError } from '../errors';
 import type {
@@ -27,7 +27,7 @@ import type {
 } from '../csv-viewer';
 import { orderComparisonValueColumns } from './comparison-presentation';
 import { isValidRowWindow } from '../query/csv-query';
-import type { ComparisonExecutor } from './comparison-executor';
+import { ComparisonExecutor } from './comparison-executor';
 import {
   compareColumns,
   hasInvalidKeys,
@@ -38,7 +38,9 @@ import {
 } from './comparison-key-rules';
 import { projectComparison } from './comparison-projection';
 import { cleanupEffect } from './comparison-effects';
+import { WorkingCsvs } from '../working-csv/working-csv-store';
 
+/** What Comparisons read from the Working CSVs they compare. */
 export interface ComparisonCsvStore {
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
   list(): WorkingCsvView[];
@@ -114,7 +116,36 @@ type ComparisonRecord = {
   activity: ComparisonActivity;
 };
 
-export class CsvComparisonService {
+/**
+ * The workspace's Aligned Comparisons: their pairs, attempts, snapshot windows, and events.
+ * Attempts run in the workspace scope; `dispose` settles them and releases their resources.
+ */
+export interface Comparisons {
+  beginDisposal(): void;
+  candidatesFor(baselineId: WorkingCsvId): ComparisonCandidate[];
+  open(request: OpenComparisonRequest): OpenComparisonResult;
+  getState(comparisonId: ComparisonId): ComparisonView | null;
+  begin(request: BeginComparisonRequest): Effect.Effect<BeginComparisonAttempt>;
+  cancel(request: CancelComparisonRequest): Effect.Effect<CancelComparisonResult>;
+  getWindow(request: ComparisonWindowRequest): Effect.Effect<ComparisonWindowOutcome, DataEngineError>;
+  swap(comparisonId: ComparisonId): ComparisonMutationOutcome;
+  close(comparisonId: ComparisonId): Effect.Effect<CloseComparisonResult>;
+  dependentComparisonIds(workingCsvId: WorkingCsvId): ComparisonId[];
+  closeDependents(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError>;
+  subscribe(listener: (event: ComparisonEvent) => void): () => void;
+  dispose(): Effect.Effect<void, DataEngineError>;
+}
+
+export const Comparisons = Context.Service<Comparisons>('csv-viewer/Comparisons');
+
+/** Builds Comparisons over these Working CSVs. Attempts belong to the calling scope. */
+export const makeComparisons = Effect.fnUntraced(function* (csvs: ComparisonCsvStore) {
+  return new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
+});
+
+export const comparisonsLayer = Layer.effect(Comparisons, WorkingCsvs.use(makeComparisons));
+
+class CsvComparisonService implements Comparisons {
   private readonly entities = new Map<ComparisonId, ComparisonRecord>();
   private readonly pairIndex = new Map<string, ComparisonId>();
   private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
