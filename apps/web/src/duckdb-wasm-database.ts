@@ -217,12 +217,12 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     return this.ownerConnection().pipe(Effect.flatMap((connection) => connection.readObjects(sql, values)));
   }
 
-  registerFileBuffer(name: string, contents: Uint8Array): Promise<string> {
-    return Effect.runPromise(this.calls.effect(() => this.registerBuffer(name, contents)));
+  registerFileBuffer(name: string, contents: Uint8Array): Effect.Effect<string, DataEngineError> {
+    return this.calls.effect(() => this.registerBuffer(name, contents));
   }
 
-  dropFile(reference: string): Promise<void> {
-    return Effect.runPromise(this.calls.effect(() => this.dropBuffer(reference)));
+  dropFile(reference: string): Effect.Effect<void, DataEngineError> {
+    return this.calls.effect(() => this.dropBuffer(reference));
   }
 
   private async registerBuffer(name: string, contents: Uint8Array): Promise<string> {

@@ -6,12 +6,14 @@ import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { DataEngineError } from '@csv-viewer/workspace/database';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
-import { Deferred, Effect } from 'effect';
+import { Deferred, Effect, Exit, Fiber } from 'effect';
+import { AsyncDuckDB } from '@duckdb/duckdb-wasm';
+import { WebWorkspaceHost } from './web-workspace-host';
 import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composition';
 
 // The CsvViewer contract itself runs against this same Wasm engine from the integration suite,
 // so these cases only cover what the web composition root adds:
-// the startup gate, the browser capability set, and browser-selection identity.
+// the startup gate, the browser capability set, browser-selection identity, and scoped source access.
 let viewer: CsvWorkspaceOwner | undefined;
 
 afterEach(async () => {
@@ -20,6 +22,48 @@ afterEach(async () => {
 });
 
 describe('web CsvViewer composition', () => {
+  it('releases a CSV Source registered while its acquisition is interrupted', async () => {
+    const database = await Effect.runPromise(createNodeDuckDbWasmDatabase().open());
+    const file = new File(['name\nAda\n'], 'people.csv');
+    const host = new WebWorkspaceHost(database, async () => file);
+    const sourceId = host.registerSource(file);
+    if (sourceId instanceof Object) throw new Error('CSV Source was not reserved.');
+    const registered = Promise.withResolvers<string>();
+    const releaseRegistration = Promise.withResolvers<void>();
+    const register = AsyncDuckDB.prototype.registerFileBuffer;
+    const registration = vi.spyOn(AsyncDuckDB.prototype, 'registerFileBuffer').mockImplementation(async function (this: AsyncDuckDB, reference, contents) {
+      try {
+        await register.call(this, reference, contents);
+      } catch (cause) {
+        registered.reject(cause);
+        throw cause;
+      }
+      registered.resolve(reference);
+      await releaseRegistration.promise;
+    });
+    const work = Effect.runFork(Effect.scoped(host.acquireEngineSource(sourceId).pipe(Effect.andThen(Effect.never))));
+
+    try {
+      const reference = await registered.promise;
+      const read = `SELECT * FROM read_csv('${reference}', all_varchar = true)`;
+      await expect(Effect.runPromise(database.readObjects(read))).resolves.toEqual([{ name: 'Ada' }]);
+
+      const interruption = Effect.runPromise(Fiber.interrupt(work));
+      releaseRegistration.resolve();
+      await interruption;
+
+      expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(work)))).toBe(true);
+      await expect(Effect.runPromise(database.readObjects(read))).rejects.toThrow();
+      await expect(Effect.runPromise(database.readObjects('SELECT 42 AS answer'))).resolves.toEqual([{ answer: 42 }]);
+    } finally {
+      releaseRegistration.resolve();
+      await Effect.runPromise(Fiber.interrupt(work));
+      registration.mockRestore();
+      await Effect.runPromise(database.closeOwnerConnection());
+      await Effect.runPromise(database.closeEngine());
+    }
+  });
+
   it('disposes the in-memory workspace once when the page ends', async () => {
     const page = new EventTarget();
     const dispose = vi.fn(async () => undefined);

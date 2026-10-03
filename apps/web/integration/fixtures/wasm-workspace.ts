@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { driverEffect } from '../../../../packages/workspace/src/database';
+import { DataEngineError } from '../../../../packages/workspace/src/database';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { AsyncDuckDB, VoidLogger } from '@duckdb/duckdb-wasm';
@@ -84,8 +84,8 @@ class WasmContractHost implements CsvWorkspaceHost {
     return scopedEngineSource(Effect.gen({ self: this }, function* () {
       const source = yield* this.requireSource(sourceId);
       const extension = source.name.split('.').pop() ?? 'csv';
-      return yield* driverEffect(() => this.database.registerFileBuffer(`contract-${crypto.randomUUID()}.${extension}`, encoder.encode(source.contents)));
-    }), (reference) => driverEffect(() => this.database.dropFile(reference)));
+      return yield* this.database.registerFileBuffer(`contract-${crypto.randomUUID()}.${extension}`, encoder.encode(source.contents));
+    }), (reference) => this.database.dropFile(reference));
   }
 
   deliverExport(request: CsvExportRequestForDelivery) {
@@ -259,10 +259,10 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   failNextTableDrop(): void { failNextTableDrop(this.database); }
   failNextEngineSourceRelease(): void {
     const original = this.database.dropFile.bind(this.database);
-    this.database.dropFile = async () => {
+    this.database.dropFile = () => Effect.suspend(() => {
       this.database.dropFile = original;
-      throw new Error('PRIVATE engine source reference at C:\\PRIVATE.csv');
-    };
+      return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE engine source reference at C:\\PRIVATE.csv') }));
+    });
   }
   failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
