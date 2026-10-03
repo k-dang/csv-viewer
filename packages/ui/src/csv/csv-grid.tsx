@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
@@ -77,6 +77,7 @@ export type CsvGridProps = {
  * caches and selection in step with the Tab.
  */
 export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: CsvGridProps) {
+  const gridFrameId = useId();
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const {
     workingCsv,
@@ -348,10 +349,10 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         </div>
       </div>
       <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
+        <div id={gridFrameId} className="csv-grid-frame min-h-0 w-full min-w-0" aria-label="CSV row grid">
           {focusedColumn ? (
-            // Tints the focused column without rebuilding columnDefs on every focus change.
-            <style>{`.csv-grid-frame [col-id="${CSS.escape(focusedColumn)}"] { background-color: color-mix(in oklch, var(--primary) 7%, transparent); }`}</style>
+            // Scope the tint to this grid; inactive CSV Tabs keep their grids and styles mounted.
+            <style>{`#${CSS.escape(gridFrameId)} [col-id="${CSS.escape(focusedColumn)}"] { background-color: color-mix(in oklch, var(--primary) 7%, transparent); }`}</style>
           ) : null}
           <CsvColumnMenu tab={tab} active={active}>
             <DataGrid
