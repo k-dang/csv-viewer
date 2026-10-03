@@ -39,16 +39,6 @@ const shortcutSections: readonly ShortcutSection[] = [
     heading: 'Workspace',
     entries: [
       {
-        chords: [['Ctrl', 'Tab']],
-        label: 'Next tab',
-        detail: 'Ctrl+Tab cycles every tab, including from a text field. Cmd+Tab is not a shortcut.',
-      },
-      {
-        chords: [['Ctrl', 'Shift', 'Tab']],
-        label: 'Previous tab',
-        detail: 'Ctrl+Shift+Tab cycles every tab backward. Cmd+Shift+Tab is not a shortcut.',
-      },
-      {
         chords: [
           ['Ctrl', '/'],
           ['⌘', '/'],

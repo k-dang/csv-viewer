@@ -132,13 +132,6 @@ export class RendererWorkspace {
     if (!this.stopped && this.state.tabs.some((tab) => tab.id === tabId)) this.set({ activeTabId: tabId });
   }
 
-  cycle(direction: 1 | -1): void {
-    if (this.stopped || this.state.tabs.length < 2) return;
-    const index = this.state.tabs.findIndex((tab) => tab.id === this.state.activeTabId);
-    if (index < 0) return;
-    this.select(this.state.tabs[(index + direction + this.state.tabs.length) % this.state.tabs.length].id);
-  }
-
   /** Read CSV Tabs at unload time; their Unexported Changes are never mirrored here. */
   hasUnexportedChanges(): boolean {
     return this.state.tabs.some((tab) => tab.kind === 'csv' && tab.tab.snapshot().editState.hasUnexportedChanges);

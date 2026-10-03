@@ -215,13 +215,9 @@ describe('RendererWorkspace lifecycle', () => {
     expect(workspace.snapshot().activeTabId).toBe('csv:b');
   });
 
-  it('cycles with wraparound and chooses the next, then previous neighbor on close', async () => {
+  it('chooses the next, then previous neighbor on close', async () => {
     const { workspace } = setup();
     for (const id of ['a', 'b', 'c']) await workspace.openRecent(id);
-    workspace.cycle(1);
-    expect(workspace.snapshot().activeTabId).toBe('csv:a');
-    workspace.cycle(-1);
-    expect(workspace.snapshot().activeTabId).toBe('csv:c');
     workspace.select('csv:b');
     await workspace.close();
     expect(workspace.snapshot().activeTabId).toBe('csv:c');
