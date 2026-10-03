@@ -540,7 +540,7 @@ describe('Comparisons interaction contract', () => {
     await service.dispose();
   });
 
-  it('disposes the executor even when snapshot cleanup fails', async () => {
+  it.each(['failure', 'defect'] as const)('preserves the original cleanup %s and still disposes the executor', async (mode) => {
     const store = new FakeCsvStore();
     store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
     store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
@@ -554,9 +554,11 @@ describe('Comparisons interaction contract', () => {
       key: ['id'],
     });
     await waitForIdle(service, opened.comparison.comparisonId);
-    executor.dropFailuresRemaining = 1;
+    const failure = new DataEngineError({ cause: new Error('original driver failure') });
+    const defect = new Error('original cleanup defect');
+    vi.spyOn(executor, 'dropSnapshot').mockImplementationOnce(() => mode === 'failure' ? Effect.fail(failure) : Effect.die(defect));
 
-    await expect(service.dispose()).rejects.toThrow('The data engine could not complete the operation.');
+    await expect(service.dispose()).rejects.toBe(mode === 'failure' ? failure : defect);
 
     expect(executor.disposeCalled).toBe(true);
   });

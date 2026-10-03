@@ -1,6 +1,6 @@
 import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, type Scope } from 'effect';
-import { DataEngineError } from '../database';
+import type { DataEngineError } from '../database';
 import type { WorkspaceRequestError } from '../errors';
 import type {
   BeginComparisonRequest,
@@ -69,6 +69,7 @@ type Operation = {
 };
 
 type AttemptResult = NonNullable<ComparisonView['lastAttempt']>;
+type ClosedComparison = Extract<CloseComparisonResult, { status: 'closed' }>;
 
 type ComparisonActivity =
   | { kind: 'idle'; lastAttempt: ComparisonView['lastAttempt'] }
@@ -127,7 +128,7 @@ export interface Comparisons {
   getState(comparisonId: ComparisonId): ComparisonView | null;
   begin(request: BeginComparisonRequest): Effect.Effect<BeginComparisonAttempt>;
   cancel(request: CancelComparisonRequest): Effect.Effect<CancelComparisonResult>;
-  getWindow(request: ComparisonWindowRequest): Effect.Effect<ComparisonWindowOutcome, DataEngineError>;
+  getWindow(request: ComparisonWindowRequest): Effect.Effect<ComparisonWindowOutcome, DataEngineError | WorkspaceRequestError>;
   swap(comparisonId: ComparisonId): ComparisonMutationOutcome;
   close(comparisonId: ComparisonId): Effect.Effect<CloseComparisonResult>;
   dependentComparisonIds(workingCsvId: WorkingCsvId): ComparisonId[];
@@ -135,7 +136,7 @@ export interface Comparisons {
   subscribe(listener: (event: ComparisonEvent) => void): () => void;
   dispose(): Effect.Effect<void, DataEngineError>;
   /** Settles admitted work and forgets state after engine death, without initiating database cleanup. */
-  stopAfterEngineStop(): Effect.Effect<void>;
+  stopAfterEngineStop(): Effect.Effect<void, DataEngineError>;
 }
 
 export const Comparisons = Context.Service<Comparisons>('csv-viewer/Comparisons');
@@ -154,7 +155,7 @@ class CsvComparisonService implements Comparisons {
   private readonly pairIndex = new Map<string, ComparisonId>();
   private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
-  private readonly closing = new Map<ComparisonId, Effect.Effect<CloseComparisonResult>>();
+  private readonly closing = new Map<ComparisonId, Effect.Effect<ClosedComparison, DataEngineError>>();
   private readonly pendingRetirements = new Set<string>();
   readonly unsubscribeFromDataChanges: () => void;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
@@ -321,7 +322,7 @@ class CsvComparisonService implements Comparisons {
   readonly getWindow = Effect.fnUntraced(function* (
     this: CsvComparisonService,
     request: ComparisonWindowRequest,
-  ): Effect.fn.Return<ComparisonWindowOutcome, DataEngineError> {
+  ): Effect.fn.Return<ComparisonWindowOutcome, DataEngineError | WorkspaceRequestError> {
     if (this.lifecycle !== 'active') {
       return rejected('source-not-found', 'The CSV workspace is closing.');
     }
@@ -419,11 +420,19 @@ class CsvComparisonService implements Comparisons {
     return { status: 'changed', comparison: this.project(entity) };
   }
 
+  /** Converts cleanup failure into the public close result, keeping Causes inside the service. */
+  close(comparisonId: ComparisonId): Effect.Effect<CloseComparisonResult> {
+    return this.closeInternal(comparisonId).pipe(Effect.catchCause(() => Effect.succeed({
+      status: 'failed',
+      failure: { code: 'cleanup-failed', message: 'Unable to clean up the Comparison snapshot.', retryable: true },
+    } satisfies CloseComparisonResult)));
+  }
+
   // Shared close must finish cleanup even when one caller stops waiting.
-  readonly close = Effect.fnUntraced(function* (
+  private readonly closeInternal = Effect.fnUntraced(function* (
     this: CsvComparisonService,
     comparisonId: ComparisonId,
-  ): Effect.fn.Return<CloseComparisonResult> {
+  ): Effect.fn.Return<ClosedComparison, DataEngineError> {
     const pending = this.closing.get(comparisonId);
     if (pending) return yield* pending;
     const entity = this.entities.get(comparisonId);
@@ -433,12 +442,14 @@ class CsvComparisonService implements Comparisons {
     ));
     this.closing.set(comparisonId, completion);
     return yield* completion;
-  }, Effect.uninterruptible, Effect.tap((result) => result.status === 'failed' ? markCleanupFailed : Effect.void));
+  }, Effect.uninterruptible, Effect.onExit((exit) => Exit.isFailure(exit)
+    ? recordOutcome('failed', exit.cause).pipe(Effect.andThen(markCleanupFailed))
+    : Effect.void));
 
   private readonly closeEntity = Effect.fnUntraced(function* (
     this: CsvComparisonService,
     entity: ComparisonRecord,
-  ): Effect.fn.Return<CloseComparisonResult> {
+  ): Effect.fn.Return<ClosedComparison, DataEngineError> {
     const { comparisonId } = entity;
     if (entity.activity.kind === 'running') {
       const { operation, fiber, completion } = entity.activity;
@@ -447,18 +458,7 @@ class CsvComparisonService implements Comparisons {
       yield* completion;
     }
     if (entity.snapshot) {
-      const result = yield* Effect.exit(this.executor.dropSnapshot(entity.snapshot.artifactId));
-      if (Exit.isFailure(result)) {
-        yield* recordOutcome('failed', result.cause);
-        return {
-          status: 'failed',
-          failure: {
-            code: 'cleanup-failed',
-            message: 'Unable to clean up the Comparison snapshot.',
-            retryable: true,
-          },
-        };
-      }
+      yield* this.executor.dropSnapshot(entity.snapshot.artifactId);
     }
     this.entities.delete(comparisonId);
     this.pairIndex.delete(pairKey(entity.baselineId, entity.candidateId));
@@ -477,8 +477,7 @@ class CsvComparisonService implements Comparisons {
     workingCsvId: WorkingCsvId,
   ): Effect.fn.Return<void, DataEngineError> {
     for (const comparisonId of this.dependentComparisonIds(workingCsvId)) {
-      const result = yield* this.close(comparisonId);
-      if (result.status === 'failed') return yield* Effect.fail(new DataEngineError({ cause: result.failure }));
+      yield* this.closeInternal(comparisonId);
     }
   });
 
@@ -496,11 +495,8 @@ class CsvComparisonService implements Comparisons {
     this.unsubscribeFromDataChanges();
     const failures: Cause.Cause<DataEngineError>[] = [];
     for (const comparisonId of [...this.entities.keys()]) {
-      const closed = yield* Effect.exit(this.close(comparisonId));
+      const closed = yield* Effect.exit(this.closeInternal(comparisonId));
       if (Exit.isFailure(closed)) failures.push(closed.cause);
-      else if (closed.value.status === 'failed') {
-        failures.push(Cause.fail(new DataEngineError({ cause: closed.value.failure })));
-      }
     }
     const disposed = yield* Effect.exit(this.executor.dispose());
     if (Exit.isFailure(disposed)) failures.push(disposed.cause);
@@ -512,10 +508,10 @@ class CsvComparisonService implements Comparisons {
   /** Keep source projections alive until every attempt and admitted close has settled. */
   readonly stopAfterEngineStop = Effect.fnUntraced(function* (
     this: CsvComparisonService,
-  ): Effect.fn.Return<void> {
+  ): Effect.fn.Return<void, DataEngineError> {
     this.beginDisposal();
     this.unsubscribeFromDataChanges();
-    const settled: Exit.Exit<unknown, never>[] = [];
+    const settled: Exit.Exit<unknown, DataEngineError>[] = [];
     for (const entity of this.entities.values()) {
       if (entity.activity.kind !== 'running') continue;
       const { operation, fiber, completion } = entity.activity;
@@ -556,7 +552,7 @@ class CsvComparisonService implements Comparisons {
         diagnostics: operation.invalidKeyDiagnostics,
       });
     }
-    if (Exit.isFailure(result)) return this.finishFailed(entity, operation);
+    if (Exit.isFailure(result)) return this.finishFailed(entity, operation, result.cause);
     return this.settle(entity, operation, result.value);
   }
 
@@ -680,11 +676,15 @@ class CsvComparisonService implements Comparisons {
     });
   }
 
-  private finishFailed(entity: ComparisonRecord, operation: Operation): ComparisonAttemptOutcome {
+  private finishFailed(entity: ComparisonRecord, operation: Operation, cause: Cause.Cause<DataEngineError | WorkspaceRequestError>): ComparisonAttemptOutcome {
+    const [reason] = cause.reasons;
+    const sourceUnavailable = cause.reasons.length === 1 && reason._tag === 'Fail' && reason.error._tag === 'WorkspaceRequestError';
     return this.settle(entity, operation, {
       attemptId: operation.operationId,
       status: 'failed',
-      failure: { code: 'query-failed', message: 'The comparison query failed. Try again.', retryable: true },
+      failure: sourceUnavailable
+        ? { code: 'source-unavailable', message: 'A source Working CSV is no longer available.', retryable: false }
+        : { code: 'query-failed', message: 'The comparison query failed. Try again.', retryable: true },
     });
   }
 

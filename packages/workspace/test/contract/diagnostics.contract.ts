@@ -4,7 +4,7 @@ import { DuckDbComparisonExecutor } from '../../src/comparison/duckdb-comparison
 import { DataEngineError } from '../../src/database';
 import { cleanupEffect } from '../../src/comparison/comparison-effects';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
-import type { ComparisonSummary } from '../../src/csv-viewer';
+import type { CloseWorkingCsvOutcome, ComparisonSummary } from '../../src/csv-viewer';
 import type { WorkspaceContractFixture } from './workspace-contract';
 import type { WorkspaceContractFactory } from './workspace-contract';
 import { diagnosticCapture } from '../diagnostic-capture';
@@ -12,6 +12,40 @@ import { stubConnection } from '../stub-connection';
 
 export function defineDiagnosticsContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} diagnostics`, () => {
+    it('reports a source closing during Comparison acquisition as unavailable instead of a query failure', async () => {
+      let beginClose = () => {};
+      let closing: Promise<CloseWorkingCsvOutcome> | undefined;
+      const capture = diagnosticCapture((record) => {
+        if (record.message === 'comparison.acquire-worker' && record.annotations.outcome === 'started') beginClose();
+      });
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const { comparisonId, baselineId } = await prepareComparison(fixture);
+        const hold = fixture.holdNextRowRead();
+        const reading = fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId: baselineId, offset: 0, limit: 10 });
+        await hold.entered;
+        beginClose = () => {
+          beginClose = () => {};
+          closing = fixture.viewer.call({ operation: 'csv.close', workingCsvId: baselineId });
+        };
+        try {
+          const started = await fixture.viewer.call({ operation: 'comparison.begin', comparisonId, kind: 'apply-key', key: ['id'] });
+          if (started.status !== 'accepted') throw new Error('Comparison not accepted');
+          expect(await fixture.awaitComparisonOutcome(started.operationId)).toMatchObject({
+            status: 'failed', failure: { code: 'source-unavailable', retryable: false },
+          });
+        } finally {
+          hold.release();
+          await Promise.allSettled([reading, closing]);
+        }
+        expect(await closing).toMatchObject({ status: 'confirmation-required' });
+        const retried = await fixture.viewer.call({ operation: 'comparison.begin', comparisonId, kind: 'apply-key', key: ['id'] });
+        if (retried.status !== 'accepted') throw new Error('Comparison retry not accepted');
+        expect((await fixture.awaitComparisonOutcome(retried.operationId)).status).toBe('applied');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+      } finally { await fixture.dispose(); }
+    });
+
     it.each(['read', 'serialization'] as const)('releases the export worker after a %s failure without marking edits exported', async (failure) => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);
@@ -605,7 +639,9 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose().catch(() => undefined); }
     });
 
-    it.each([false, true])('drains admitted CSV reads after Comparison cleanup fails (CSV cleanup failure: %s)', async (failCsvCleanup) => {
+    it.each([
+      ['failure', false], ['failure', true], ['defect', false], ['defect', true],
+    ] as const)('drains admitted CSV reads after Comparison cleanup %s (CSV cleanup failure: %s)', async (comparisonFailure, failCsvCleanup) => {
       const releaseStarted = Promise.withResolvers<void>();
       const capture = diagnosticCapture((record) => {
         if (record.annotations.outcome === 'started'
@@ -619,7 +655,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         const started = await fixture.viewer.call({ operation: 'comparison.begin', comparisonId, kind: 'apply-key', key: ['id'] });
         if (started.status !== 'accepted') throw new Error('Not accepted');
         expect((await fixture.awaitComparisonOutcome(started.operationId)).status).toBe('applied');
-        await fixture.failNextSnapshotDrop();
+        await fixture.failNextSnapshotDrop(comparisonFailure);
         if (failCsvCleanup) fixture.failNextTableDrop();
         const hold = fixture.holdNextRowRead();
         const reading = fixture.viewer.call({ operation: 'csv.get-rows', workingCsvId: baselineId, offset: 0, limit: 10 });
@@ -634,7 +670,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
           await Promise.allSettled([reading, disposal]);
         }
         await expect(reading).resolves.toMatchObject({ filteredRowCount: 1, rows: [{ id: '1', value: 'PRIVATE-CELL' }] });
-        expect(await rejection).toMatchObject({ message: failCsvCleanup
+        expect(await rejection).toMatchObject({ message: failCsvCleanup || comparisonFailure === 'defect'
           ? 'The CSV workspace could not complete the request.'
           : 'The data engine could not complete the operation.' });
         await expect(fixture.disposeWorkspace()).rejects.toBe(await rejection);
@@ -646,8 +682,8 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
           .toEqual(['succeeded']);
         const outcome = records.find((record) => record.message === 'workspace.dispose');
         expect(outcome?.annotations.cleanup).toBe('cleanup-failed');
-        expect(outcome?.annotations.recoverableFailure).toBe(true);
-        expect(outcome?.annotations.defect).toBe(failCsvCleanup);
+        expect(outcome?.annotations.recoverableFailure).toBe(comparisonFailure === 'failure');
+        expect(outcome?.annotations.defect).toBe(failCsvCleanup || comparisonFailure === 'defect');
         expect(capture.logs.join('')).not.toContain('PRIVATE');
       } finally { await fixture.dispose().catch(() => undefined); }
     });

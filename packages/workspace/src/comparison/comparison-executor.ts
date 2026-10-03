@@ -39,14 +39,14 @@ export interface ComparisonAttemptExecutor {
     workingCsvId: WorkingCsvId,
     key: string[],
   ): Effect.Effect<SourceKeyDiagnostics, DataEngineError | WorkspaceRequestError>;
-  createSnapshot(request: CreateComparisonSnapshotRequest): Effect.Effect<ComparisonSummary, DataEngineError>;
+  createSnapshot(request: CreateComparisonSnapshotRequest): Effect.Effect<ComparisonSummary, DataEngineError | WorkspaceRequestError>;
 }
 
 export interface ComparisonExecutor {
   /** Acquires the dedicated connection in the calling attempt's scope. */
-  openAttempt(): Effect.Effect<ComparisonAttemptExecutor, DataEngineError, Scope.Scope>;
+  openAttempt(): Effect.Effect<ComparisonAttemptExecutor, DataEngineError | WorkspaceRequestError, Scope.Scope>;
   activateSnapshot(artifactId: ComparisonOperationId): void;
-  readWindow(request: ReadComparisonSnapshotWindowRequest): Effect.Effect<StoredComparisonWindow, DataEngineError>;
+  readWindow(request: ReadComparisonSnapshotWindowRequest): Effect.Effect<StoredComparisonWindow, DataEngineError | WorkspaceRequestError>;
   dropSnapshot(artifactId: ComparisonOperationId): Effect.Effect<void, DataEngineError>;
   dispose(): Effect.Effect<void, DataEngineError>;
 }
