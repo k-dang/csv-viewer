@@ -26,7 +26,7 @@ export function makeWorkspaceLayer(
     : database.layer;
   const csvs = workingCsvsLayer.pipe(Layer.provideMerge(Layer.mergeAll(checkedDatabase, Layer.succeed(CsvWorkspaceHost, host))));
   // A test executor stands in for the Working CSVs' DuckDB executor.
-  const execution = executor ? Layer.succeed(ComparisonExecutor, executor) : Layer.empty;
-  const comparisons = comparisonsLayer.pipe(Layer.provide(execution), Layer.provideMerge(csvs));
+  const executed = executor ? comparisonsLayer.pipe(Layer.provide(Layer.succeed(ComparisonExecutor, executor))) : comparisonsLayer;
+  const comparisons = executed.pipe(Layer.provideMerge(csvs));
   return { layer: comparisons.pipe(Layer.provideMerge(diagnosticsLayer(diagnostics))), databaseRelease: database.release };
 }

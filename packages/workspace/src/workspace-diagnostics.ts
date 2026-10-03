@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Exit, Logger, Option, Predicate, References, Schema, Tracer } from 'effect';
+import type { ComparisonCleanupError } from './comparison/comparison-effects';
 
 export interface WorkspaceDiagnostics {
   readonly logger?: Logger.Logger<unknown, void>;
@@ -26,7 +27,7 @@ function approvedField(key: string, value: unknown): boolean {
 
 /**
  * Classify only the outer typed reasons. Never inspect or serialize nested driver causes.
- * Matches `ComparisonCleanupError` by tag rather than class, so this module imports nothing from the database module that uses it.
+ * Matches `ComparisonCleanupError` by its type-checked tag to avoid an import cycle with `database.ts`.
  */
 export function diagnosticCause(cause: Cause.Cause<unknown>): string {
   if (cause.reasons.some(isCleanupFailure)) return 'cleanup-failed';
@@ -49,11 +50,11 @@ export function observeStage<A, E, R>(stage: string, effect: Effect.Effect<A, E,
 }
 
 function isCleanupFailure(reason: Cause.Reason<unknown>): boolean {
-  return reason._tag === 'Die' && Predicate.isTagged(reason.defect, 'ComparisonCleanupError');
+  return Cause.isDieReason(reason) && Predicate.isTagged(reason.defect, 'ComparisonCleanupError' satisfies ComparisonCleanupError['_tag']);
 }
 
 export function recordOutcome(outcome: string, cause?: Cause.Cause<unknown>, cleanup?: 'succeeded' | 'cleanup-failed') {
-  const fields = cause ? { outcome, cleanup, failureCategory: diagnosticCause(cause), recoverableFailure: Cause.hasFails(cause), defect: cause.reasons.some((reason) => reason._tag === 'Die' && !isCleanupFailure(reason)), interrupted: Cause.hasInterrupts(cause) } : { outcome, cleanup, failureCategory: cleanup === 'cleanup-failed' ? 'cleanup-failed' : undefined };
+  const fields = cause ? { outcome, cleanup, failureCategory: diagnosticCause(cause), recoverableFailure: Cause.hasFails(cause), defect: cause.reasons.some((reason) => Cause.isDieReason(reason) && !isCleanupFailure(reason)), interrupted: Cause.hasInterrupts(cause) } : { outcome, cleanup, failureCategory: cleanup === 'cleanup-failed' ? 'cleanup-failed' : undefined };
   return Effect.annotateCurrentSpan(fields);
 }
 
