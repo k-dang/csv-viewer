@@ -8,6 +8,53 @@ async function compare(page: Page): Promise<void> {
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
 
+test('preserves cleanup defects when closing a source and permits a successful retry', async ({ page }, testInfo) => {
+  const diagnostics: string[] = [];
+  page.on('console', (message) => {
+    if (message.text().includes('message=csv.close')) diagnostics.push(message.text());
+  });
+  // Fail one snapshot deletion at the engine boundary; the real close and retry still run.
+  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const anchor = 'run(sql, values) {';
+    expect(source).toContain(anchor);
+    await route.fulfill({ response, body: `let failSnapshotDrop = true;\n${source}`.replace(anchor, `${anchor}
+      if (failSnapshotDrop && sql.startsWith('DROP TABLE IF EXISTS "csv_comparison_')) {
+        failSnapshotDrop = false;
+        return Effect.die(new Error('PRIVATE snapshot release defect'));
+      }
+    `) });
+  });
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,value\n1,Ada\n');
+  await openCsv(page, 'candidate.csv', 'id,value\n1,Grace\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  await expect(page.getByText('Changed 1', { exact: true })).toBeVisible();
+  const close = page.getByRole('button', { name: 'Close baseline.csv', exact: true });
+  const confirmed = page.waitForEvent('dialog').then((dialog) => dialog.accept());
+  await close.click();
+  await confirmed;
+  await expect(page.getByRole('alert')).toContainText('Unable to close the Working CSV and all dependent Comparisons.');
+  await expect(page.getByRole('tab')).toHaveCount(3);
+  await expect(page.locator('body')).not.toContainText('PRIVATE');
+  const failedCloseScreenshot = testInfo.outputPath('failed-close.png');
+  await page.screenshot({ path: failedCloseScreenshot });
+  await testInfo.attach('failed-close', { path: failedCloseScreenshot, contentType: 'image/png' });
+  await testInfo.attach('close diagnostics', { body: diagnostics.join('\n'), contentType: 'text/plain' });
+  expect(diagnostics.some((line) => line.includes('outcome=failed') && line.includes('defect=true'))).toBe(true);
+  expect(diagnostics.join('')).not.toContain('PRIVATE');
+
+  const retried = page.waitForEvent('dialog').then((dialog) => dialog.accept());
+  await close.click();
+  await retried;
+  await expect(page.getByRole('tab')).toHaveCount(1);
+  await expect(page.getByRole('tab', { name: 'candidate.csv', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('gridcell', { name: 'Grace', exact: true })).toBeVisible();
+});
+
 test('shows aligned differences, swaps sides, and refreshes an outdated result after editing', async ({ page }) => {
   await page.goto('/');
   await openCsv(page, 'baseline.csv', 'id,value\n1,Old\n2,Same\n3,Only baseline\n');

@@ -152,7 +152,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     };
   }
 
-  failNextSnapshotDrop(): Promise<void> { return failNextSnapshotDrop(this.database); }
+  failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void> { return failNextSnapshotDrop(this.database, mode); }
 
   holdNextRowRead() { return holdNextRowRead(this.database); }
   holdNextExportRead() { return holdNextExportRead(this.database); }

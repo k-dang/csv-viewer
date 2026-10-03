@@ -46,8 +46,8 @@ export interface WorkspaceContractFixture {
   failNextRecentSources(): void;
   /** Inject an unexpected source-description failure during CSV open. */
   failNextDescribeSource(): void;
-  /** Fail one Comparison snapshot deletion; a later cleanup attempt uses the real driver. */
-  failNextSnapshotDrop(): Promise<void>;
+  /** Fail one Comparison snapshot deletion as a declared failure or defect; later cleanup uses the real driver. */
+  failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void>;
   holdNextRowRead(): { entered: Promise<void>; release: () => void };
   /** Hold the next export's row read until released. */
   holdNextExportRead(): { entered: Promise<void>; release: () => void };
