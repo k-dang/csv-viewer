@@ -110,8 +110,8 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(recents[0].sizeBytes).toBeGreaterThan(0);
   });
 
-  it('reports malformed Recent CSV Sources without logging their contents', async () => {
-    await writeFile(fixture.file('recent-sources.json'), 'PRIVATE malformed data');
+  it.each(['PRIVATE malformed data', '{"PRIVATE":"not an array"}'])('reports malformed Recent CSV Sources without logging their contents: %s', async (contents) => {
+    await writeFile(fixture.file('recent-sources.json'), contents);
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       await expect(fixture.viewer.call({ operation: 'csv.get-recent-sources' })).resolves.toEqual([]);
@@ -120,6 +120,16 @@ describe('DesktopWorkspaceHost behavior', () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it('keeps valid Recent CSV Sources when other entries have invalid fields', async () => {
+    await fixture.openSource('valid.csv', 'name\nAda\n');
+    const stored = await readStoredRecents(fixture);
+    await writeFile(fixture.file('recent-sources.json'), `[null, {}, {"path":7}, ${stored.slice(1, -1)}, {"path":"PRIVATE","name":"bad.csv","sizeBytes":"7","lastOpenedAt":"today"}]`);
+
+    const recents = await fixture.viewer.call({ operation: 'csv.get-recent-sources' });
+
+    expect(recents.map((recent) => recent.name)).toEqual(['valid.csv']);
   });
 
   it('reports a Recent CSV Sources write failure with a safe category', async () => {

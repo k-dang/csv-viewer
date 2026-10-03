@@ -134,13 +134,17 @@ export interface Comparisons {
   closeDependents(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError>;
   subscribe(listener: (event: ComparisonEvent) => void): () => void;
   dispose(): Effect.Effect<void, DataEngineError>;
+  /** Settles admitted work and forgets state after engine death, without initiating database cleanup. */
+  stopAfterEngineStop(): Effect.Effect<void>;
 }
 
 export const Comparisons = Context.Service<Comparisons>('csv-viewer/Comparisons');
 
 /** Builds Comparisons over these Working CSVs. Attempts belong to the calling scope. */
 export const makeComparisons = Effect.fnUntraced(function* (csvs: ComparisonCsvStore) {
-  return new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
+  const service = new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
+  yield* Effect.addFinalizer(() => Effect.sync(service.unsubscribeFromDataChanges));
+  return service;
 });
 
 export const comparisonsLayer = Layer.effect(Comparisons, WorkingCsvs.use(makeComparisons));
@@ -152,7 +156,7 @@ class CsvComparisonService implements Comparisons {
   private readonly listeners = new Set<(event: ComparisonEvent) => void>();
   private readonly closing = new Map<ComparisonId, Effect.Effect<CloseComparisonResult>>();
   private readonly pendingRetirements = new Set<string>();
-  private readonly unsubscribeFromDataChanges: () => void;
+  readonly unsubscribeFromDataChanges: () => void;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
   constructor(
@@ -282,8 +286,8 @@ class CsvComparisonService implements Comparisons {
           const outcome = this.finishAttempt(entity, operation, result);
           const cause = Exit.isFailure(result) ? result.cause : undefined;
           yield* recordOutcome(outcome.status, cause, cleanup.failed || (cause && diagnosticCause(cause) === 'cleanup-failed') ? 'cleanup-failed' : 'succeeded');
-          yield* Deferred.succeed(completed, outcome);
-        })),
+          return outcome;
+        }).pipe(Effect.onExit((exit) => Deferred.done(completed, exit)))),
         (effect) => observeStage('comparison.compute', effect),
         Effect.provideService(OperationCleanup, cleanup),
         Effect.annotateSpans({ comparisonId: entity.comparisonId, operationId: operation.operationId, baselineId: entity.baselineId, candidateId: entity.candidateId }),
@@ -505,6 +509,30 @@ class CsvComparisonService implements Comparisons {
     this.lifecycle = 'disposed';
   }, Effect.uninterruptible);
 
+  /** Keep source projections alive until every attempt and admitted close has settled. */
+  readonly stopAfterEngineStop = Effect.fnUntraced(function* (
+    this: CsvComparisonService,
+  ): Effect.fn.Return<void> {
+    this.beginDisposal();
+    this.unsubscribeFromDataChanges();
+    const settled: Exit.Exit<unknown, never>[] = [];
+    for (const entity of this.entities.values()) {
+      if (entity.activity.kind !== 'running') continue;
+      const { operation, fiber, completion } = entity.activity;
+      operation.cancelRequested = true;
+      yield* Fiber.interrupt(fiber);
+      settled.push(yield* Effect.exit(completion));
+    }
+    for (const close of [...this.closing.values()]) settled.push(yield* Effect.exit(close));
+    this.entities.clear();
+    this.pairIndex.clear();
+    this.dependencyIndex.clear();
+    this.pendingRetirements.clear();
+    this.listeners.clear();
+    this.lifecycle = 'disposed';
+    yield* Exit.asVoidAll(settled);
+  }, Effect.uninterruptible);
+
   // onExit settles after the attempt scope closes, even when its fiber was interrupted.
   private finishAttempt(
     entity: ComparisonRecord,
@@ -691,7 +719,7 @@ class CsvComparisonService implements Comparisons {
       if (entity.activity.kind === 'running') {
         const { operation } = entity.activity;
         if (!operation.changedSides.includes(side)) operation.changedSides.push(side);
-        // Data changes arrive from the unmigrated store callback. Request interruption only;
+        // Data changes arrive through a synchronous callback. Request interruption only;
         // the workspace-owned fiber still runs its finalizers and terminal projection.
         entity.activity.fiber.interruptUnsafe();
       }

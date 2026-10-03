@@ -35,6 +35,36 @@ async function openCsv(page: Page) {
   await expect(page.getByRole('gridcell', { name: 'Ada', exact: true })).toBeVisible();
 }
 
+test('can open another CSV after source preparation defects without exhausting capacity', async ({ page }, testInfo) => {
+  await page.route('**/src/web-workspace-host.ts', async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    expect(source).toContain('registerSource(file) {');
+    expect(source).toContain('describeSource(sourceId) {');
+    // Reserve only one file's bytes and inject one platform defect during the first open.
+    await route.fulfill({ response, body: `let failSourceDescription = true;\n${source}`
+      .replace('registerSource(file) {', 'registerSource(file) { this.limits = { sourceBytes: file.size, workspaceBytes: file.size };')
+      .replace('describeSource(sourceId) {', `describeSource(sourceId) {
+        if (failSourceDescription) { failSourceDescription = false; throw new Error('PRIVATE source preparation defect'); }
+      `),
+    });
+  });
+  await page.goto('/');
+  const [picker] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true }).click(),
+  ]);
+  await picker.setFiles({ name: 'people.csv', mimeType: 'text/csv', buffer: Buffer.from('name,age\nAda,37\nGrace,41\n') });
+  await expect(page.getByRole('alert')).toContainText('The CSV workspace could not complete the request.');
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('PRIVATE');
+  await captureState(page, testInfo, 'failed-open');
+
+  await openCsv(page);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await captureState(page, testInfo, 'open-recovered');
+});
+
 test('shows checking and unsupported states when the real engine cannot load', async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);
   const requested = Promise.withResolvers<void>();
@@ -69,6 +99,18 @@ test('shows checking and unsupported states when the real engine cannot load', a
 
 test('a real Worker failure shows the sanitized terminal screen and reload recovers', async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);
+  // In the dev build, register a faulty consumer before the renderer's real subscription.
+  // The built-bundle suite exercises the same Worker failure without source instrumentation.
+  await page.route('**/src/main.tsx', async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
+    expect(source).toContain(anchor);
+    await route.fulfill({ response, body: source.replace(anchor, `
+      started.viewer.onEvent(() => { throw new Error('PRIVATE subscriber defect'); });
+      ${anchor}
+    `) });
+  });
   const workerReady = page.waitForEvent('worker');
   await page.goto('/');
   const worker = await workerReady;
@@ -83,7 +125,7 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   await expect(page.getByRole('tab')).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('PRIVATE injected Worker failure');
   await expect.poll(() => diagnostics.filter((line) => line.includes('message=workspace.engine-stopped ') && line.includes('outcome=failed')).length).toBe(1);
-  expect(diagnostics.join('\n')).not.toContain('PRIVATE injected Worker failure');
+  expect(diagnostics.join('\n')).not.toContain('PRIVATE');
   await captureState(page, testInfo, 'fatal');
 
   await page.getByRole('button', { name: 'Reload CSV Viewer', exact: true }).click();

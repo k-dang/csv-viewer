@@ -1,4 +1,4 @@
-import { Effect, Semaphore } from 'effect';
+import { Effect, Option, Schema, Semaphore } from 'effect';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
@@ -257,19 +257,12 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   private readRecentEntries() {
     return filesystemEffect(() => readFile(this.recentSourcesPath, 'utf8')).pipe(
       Effect.map((contents) => {
-        let parsed: JsonValue;
-        try {
-          parsed = JSON.parse(contents);
-        } catch (cause) {
-          if (!(cause instanceof SyntaxError)) throw cause;
+        const parsed = decodeRecentSourceList(contents);
+        if (Option.isNone(parsed)) {
           warnRecentSourceFailure('read', 'invalid-format');
           return [];
         }
-        if (!Array.isArray(parsed)) {
-          warnRecentSourceFailure('read', 'invalid-format');
-          return [];
-        }
-        return parsed.filter(isRecentSourceEntry).slice(0, maxRecentSources);
+        return parsed.value.filter(isRecentSourceEntry).slice(0, maxRecentSources);
       }),
       Effect.catch((cause) => Effect.sync(() => {
         if (cause.code !== 'ENOENT') warnRecentSourceFailure('read', recentSourceFailureCategory(cause));
@@ -279,14 +272,16 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   }
 }
 
-type RecentSourceEntry = {
-  path: string;
-  name: string;
-  sizeBytes: number;
-  lastOpenedAt: string;
-};
-
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+const RecentSourceEntry = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  sizeBytes: Schema.Number,
+  lastOpenedAt: Schema.String,
+});
+type RecentSourceEntry = typeof RecentSourceEntry.Type;
+const isRecentSourceEntry = Schema.is(RecentSourceEntry);
+// Decode the list first so an invalid entry does not discard its valid neighbours.
+const decodeRecentSourceList = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.Unknown)));
 
 function recentSourceFailureCategory(cause: NodeJS.ErrnoException): 'permission-denied' | 'io-failure' {
   return cause.code === 'EACCES' || cause.code === 'EPERM' ? 'permission-denied' : 'io-failure';
@@ -324,20 +319,6 @@ function toExportDestinationError(cause: NodeJS.ErrnoException): CsvSourceUnavai
     return new CsvSourceUnavailableError({ code: 'permission-denied', message: 'Permission was denied for the export destination.' });
   }
   return new CsvSourceUnavailableError({ code: 'unreadable', message: 'The export destination could not be accessed.' });
-}
-
-function isRecentSourceEntry(value: JsonValue): value is RecentSourceEntry {
-  if (!(value instanceof Object) || Array.isArray(value)) return false;
-  const pathValue = Object.getOwnPropertyDescriptor(value, 'path')?.value;
-  const name = Object.getOwnPropertyDescriptor(value, 'name')?.value;
-  const sizeBytes = Object.getOwnPropertyDescriptor(value, 'sizeBytes')?.value;
-  const lastOpenedAt = Object.getOwnPropertyDescriptor(value, 'lastOpenedAt')?.value;
-  return (
-    Object.prototype.toString.call(pathValue) === '[object String]' &&
-    Object.prototype.toString.call(name) === '[object String]' &&
-    Object.prototype.toString.call(sizeBytes) === '[object Number]' &&
-    Object.prototype.toString.call(lastOpenedAt) === '[object String]'
-  );
 }
 
 /** Only Node filesystem errors are expected at this platform boundary; other exceptions are defects. */
