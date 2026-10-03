@@ -11,7 +11,7 @@ import { Deferred, Effect } from 'effect';
 import {
   driverEffect,
   stoppedEngineMessage,
-  type DataEngineError,
+  DataEngineError,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -202,7 +202,10 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   ownerConnection(): Effect.Effect<DuckDbWasmConnection, DataEngineError> {
-    return this.calls.effect(async () => this.opened().connection);
+    return Effect.try({
+      try: () => this.opened().connection,
+      catch: (cause) => new DataEngineError({ cause }),
+    });
   }
 
   connectWorker(): Effect.Effect<WorkspaceDatabaseConnection, DataEngineError> {

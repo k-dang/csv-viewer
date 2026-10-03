@@ -2,7 +2,7 @@ import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { Effect } from 'effect';
 import {
   driverEffect,
-  type DataEngineError,
+  DataEngineError,
   type OwnedWorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
@@ -44,7 +44,10 @@ class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
   }
 
   close(): Effect.Effect<void, DataEngineError> {
-    return driverEffect(async () => this.connection.closeSync());
+    return Effect.try({
+      try: () => this.connection.closeSync(),
+      catch: (cause) => new DataEngineError({ cause }),
+    });
   }
 }
 
@@ -92,6 +95,9 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   closeEngine(): Effect.Effect<void, DataEngineError> {
-    return driverEffect(async () => this.instance.closeSync());
+    return Effect.try({
+      try: () => this.instance.closeSync(),
+      catch: (cause) => new DataEngineError({ cause }),
+    });
   }
 }
