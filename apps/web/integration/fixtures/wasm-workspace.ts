@@ -259,10 +259,10 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   failNextTableDrop(): void { failNextTableDrop(this.database); }
   failNextEngineSourceRelease(): void {
     const original = this.database.dropFile.bind(this.database);
-    this.database.dropFile = () => {
+    this.database.dropFile = () => Effect.suspend(() => {
       this.database.dropFile = original;
       return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE engine source reference at C:\\PRIVATE.csv') }));
-    };
+    });
   }
   failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
   failNextDescribeSource(): void {
