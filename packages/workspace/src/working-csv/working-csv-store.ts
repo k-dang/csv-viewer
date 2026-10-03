@@ -683,7 +683,7 @@ class WorkingCsvStore implements WorkingCsvs {
       const { metadata } = state;
       const connection = yield* Effect.acquireRelease(
         this.database.connectWorker(),
-        // Finalizers cannot fail; report a release failure after the scope closes.
+        // Finalizers cannot return typed failures; report one after the scope closes.
         (worker) => this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => {
           releaseFailure = error;
         }))),

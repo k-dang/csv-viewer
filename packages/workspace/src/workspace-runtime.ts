@@ -11,7 +11,7 @@ import { CsvWorkspaceHost } from './workspace-host';
  * then the Working CSV and Comparison services built on both. Disposal settles Comparison work and
  * releases Working CSV resources before closing the layer scope, which releases the database. The
  * scope also owns background Comparison attempts, not their resources.
- * Finalizers cannot fail, so `databaseRelease` tells disposal whether the database released.
+ * Finalizers cannot return typed failures, so `databaseRelease` carries the contained release outcome.
  */
 export function makeWorkspaceLayer(
   openDatabase: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>,

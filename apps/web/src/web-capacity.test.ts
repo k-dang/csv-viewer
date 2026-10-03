@@ -105,6 +105,22 @@ describe('web CsvViewer capacity', () => {
     expect(await viewer.call({ operation: 'csv.open' })).toMatchObject({ status: 'opened' });
   });
 
+  it('releases a selected file reservation when opening defects', async () => {
+    const database = createNodeDuckDbWasmDatabase();
+    const selections = [csvFile(8), csvFile(8)];
+    const started = await startWebCsvViewer(database, async () => selections.shift() ?? null, {
+      limits: { sourceBytes: 8, workspaceBytes: 8 },
+    });
+    if (started.status !== 'ready') throw new Error('Web startup check failed.');
+    viewer = started.viewer;
+    vi.spyOn(database, 'ownerConnection').mockImplementationOnce(() => {
+      throw new Error('PRIVATE source preparation defect.');
+    });
+
+    await expect(viewer.call({ operation: 'csv.open' })).rejects.toThrow('The CSV workspace could not complete the request.');
+    await expect(viewer.call({ operation: 'csv.open' })).resolves.toMatchObject({ status: 'opened' });
+  });
+
   it('includes an in-flight open in the workspace total before reading another file', async () => {
     const first = csvFile(8);
     const bytes = await first.arrayBuffer();

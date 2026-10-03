@@ -105,7 +105,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     const workspace = new CsvWorkspaceImplementation(workspaceId, built.value, scope, databaseRelease, startup?.stopped);
     if (startup) {
       const watcher = Effect.runForkWith(built.value)(Deferred.await(startup.stopped).pipe(
-        Effect.andThen(observeStage('workspace.engine-stopped', Effect.sync(() => workspace.emitEngineStopped()).pipe(
+        Effect.andThen(observeStage('workspace.engine-stopped', workspace.emitEngineStopped().pipe(
           Effect.andThen(recordOutcome('failed')),
         ))),
         Effect.annotateSpans({ workspaceId }),
@@ -261,8 +261,10 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   /** Notifies current subscribers; onEvent replays the same event to later subscribers. */
-  private emitEngineStopped(): void {
-    for (const listener of this.listeners) listener(engineStoppedEvent);
+  private emitEngineStopped(): Effect.Effect<void> {
+    return Effect.suspend(() => Effect.forEach([...this.listeners], (listener) => Effect.sync(() => listener(engineStoppedEvent)).pipe(
+      Effect.catchCause((cause) => reportFailure('workspace.notify-engine-stop', cause)),
+    ), { discard: true }));
   }
 
   private get engineStopped(): boolean {
@@ -282,13 +284,14 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     if (!sourceId) return { status: 'cancelled' } satisfies OpenCsvResult;
     if (sourceId instanceof Object) return sourceId;
     let retained = false;
-    try {
-      const result = yield* this.openSource(sourceId, options);
-      retained = result.status === 'opened' || result.status === 'already-open';
-      return result;
-    } finally {
-      if (!retained) this.host.releaseSource(sourceId);
-    }
+    return yield* this.openSource(sourceId, options).pipe(
+      Effect.tap((result) => Effect.sync(() => {
+        retained = result.status === 'opened' || result.status === 'already-open';
+      })),
+      Effect.ensuring(Effect.sync(() => {
+        if (!retained) this.host.releaseSource(sourceId);
+      })),
+    );
   }, Effect.uninterruptible);
 
   /** The admission covers the Recent CSV Source write, so disposal waits for accepted opens. */
@@ -481,12 +484,17 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   /**
    * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
    * the runtime scope to release the database. A stopped engine took its tables with it, so its
-   * browser-held sources are released without querying those tables. Finalizers cannot fail, so the
-   * database release outcome is read from `databaseRelease` rather than from closing the scope.
+   * Comparisons settle before browser-held sources are released without querying those tables.
+   * Finalizers cannot return typed failures, so the database release outcome is read from
+   * `databaseRelease` rather than from closing the scope.
    */
   private disposeWorkspace(): Promise<void> {
     return this.runEffect(Effect.gen({ self: this }, function* () {
-      const released = this.engineStopped ? yield* Effect.exit(Effect.sync(() => this.workingCsvs.releaseSourcesAfterEngineStop())) : Exit.asVoidAll([
+      const released = this.engineStopped ? yield* Effect.exit(
+        observeStage('comparison.stop', this.comparisons.stopAfterEngineStop()).pipe(
+          Effect.ensuring(Effect.sync(() => this.workingCsvs.releaseSourcesAfterEngineStop())),
+        ),
+      ) : Exit.asVoidAll([
         yield* Effect.exit(observeStage('comparison.dispose', this.comparisons.dispose())),
         yield* Effect.exit(observeStage('workspace.release-csvs', this.workingCsvs.disposeStore())),
       ]);

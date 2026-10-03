@@ -241,6 +241,40 @@ function waitForReleaseAttemptCount(executor: ScriptedComparisonExecutor, expect
 }
 
 describe('Comparisons interaction contract', () => {
+  it('unsubscribes from CSV data changes when its Layer scope closes', async () => {
+    const store = new FakeCsvStore();
+    const unsubscribe = vi.fn();
+    vi.spyOn(store, 'subscribeToDataChanges').mockReturnValue(unsubscribe);
+    const runtime = ManagedRuntime.make(Layer.effect(Comparisons, makeComparisons(store)).pipe(
+      Layer.provide(Layer.succeed(ComparisonExecutor, new ScriptedComparisonExecutor())),
+    ));
+    await runtime.runPromise(Comparisons);
+
+    await runtime.dispose();
+
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('rejects completion when terminal projection defects instead of leaving it pending', async () => {
+    const store = new FakeCsvStore();
+    store.workingCsvs.set('a', workingCsv('a', 'baseline.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'candidate.csv'));
+    const executor = new ScriptedComparisonExecutor();
+    executor.deferReleases = true;
+    const service = createService(store, executor);
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('Comparison was rejected.');
+    const comparisonId = opened.comparison.comparisonId;
+    const begun = service.begin({ comparisonId, kind: 'apply-key', key: ['id'] });
+    if (begun.status !== 'accepted') throw new Error('Comparison was not accepted.');
+    const completion = expect(begun.completion).rejects.toThrow('Comparison source invariant violated.');
+    await waitForReleaseAttemptCount(executor, 1);
+    store.workingCsvs.delete('a');
+    executor.releaseWorkers();
+
+    await completion;
+  });
+
   it('orders compatible candidates first and explains incompatible columns', () => {
     const store = new FakeCsvStore();
     store.workingCsvs.set('a', workingCsv('a', 'baseline.csv'));

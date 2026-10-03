@@ -49,7 +49,7 @@ export interface OwnedWorkspaceDatabase extends WorkspaceDatabase {
 /**
  * Acquires the runtime's database for the Layer's scope. Closing that scope closes the owner
  * connection, then the engine even if that failed; each failed step is its own stage.
- * Finalizers cannot fail, so `release.failed` tells disposal whether the release failed.
+ * Finalizers cannot return typed failures, so `release.failed` carries the contained release outcome.
  */
 export function workspaceDatabaseLayer(open: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>) {
   const release = { failed: false };

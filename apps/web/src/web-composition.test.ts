@@ -4,6 +4,8 @@ import { ControllableWorker } from '../integration/fixtures/controllable-worker'
 import { diagnosticCapture } from '../../../packages/workspace/test/diagnostic-capture';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
+import type { ComparisonExecutor } from '../../../packages/workspace/src/comparison/comparison-executor';
 import { DataEngineError } from '@csv-viewer/workspace/database';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
 import { Deferred, Effect, Exit, Fiber } from 'effect';
@@ -171,6 +173,7 @@ describe('web CsvViewer composition', () => {
     if (started.status !== 'ready') throw new Error('Web startup check failed.');
     viewer = started.viewer;
     const events: CsvViewerEvent[] = [];
+    viewer.onEvent(() => { throw new Error('PRIVATE subscriber defect.'); });
     viewer.onEvent((event) => events.push(event));
 
     database.failWorker();
@@ -179,6 +182,8 @@ describe('web CsvViewer composition', () => {
     );
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(capture.outcome('workspace.engine-stopped')).toBe('failed');
+    expect(capture.outcome('workspace.notify-engine-stop')).toBe('defect');
+    expect(capture.logs.join('')).not.toContain('PRIVATE');
 
     expect(events).toEqual([
       {
@@ -214,6 +219,59 @@ describe('web CsvViewer composition', () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(await started.acquireDroppedSource(file)).toEqual(expect.any(String));
+  }, 20_000);
+
+  it('settles an admitted Comparison close before clearing sources after an engine stop', async () => {
+    const database = createNodeDuckDbWasmDatabase();
+    const file = new File(['id\n1\n'], 'data.csv');
+    const host = new WebWorkspaceHost(database, async () => file);
+    const validating = Promise.withResolvers<void>();
+    const releasing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const capture = diagnosticCapture();
+    const executor: ComparisonExecutor = {
+      openAttempt: () => Effect.acquireRelease(Effect.succeed({
+        validateKey: () => Effect.sync(() => validating.resolve()).pipe(Effect.andThen(Effect.never)),
+        createSnapshot: () => Effect.die(new Error('The cancelled attempt must not create a snapshot.')),
+      }), () => Effect.promise(() => {
+        releasing.resolve();
+        return release.promise;
+      })),
+      activateSnapshot: () => undefined,
+      readWindow: () => Effect.die(new Error('No snapshot is available.')),
+      dropSnapshot: () => Effect.die(new Error('A stopped engine must not drop snapshots.')),
+      dispose: () => Effect.die(new Error('A stopped engine must not run executor cleanup.')),
+    };
+    viewer = await createCsvViewer(database.open(), host, {
+      executor, diagnostics: capture.configuration,
+      startup: {
+        stopped: database.stopped, check: database.verifyInMemoryCsvQuery(), cleanup: database.closeStartup(),
+        observeLateCleanupFailure: (report) => database.onLateStartupCleanupFailure(report),
+      },
+    });
+    const left = await viewer.call({ operation: 'csv.open' });
+    const right = await viewer.call({ operation: 'csv.open' });
+    if (left.status !== 'opened' || right.status !== 'opened') throw new Error('Both CSV Sources must open.');
+    const comparison = await viewer.call({
+      operation: 'comparison.open', baselineId: left.workingCsv.workingCsvId, candidateId: right.workingCsv.workingCsvId,
+    });
+    if (comparison.status === 'rejected') throw new Error('Comparison was rejected.');
+    const comparisonId = comparison.comparison.comparisonId;
+    await viewer.call({ operation: 'comparison.begin', comparisonId, kind: 'apply-key', key: ['id'] });
+    await validating.promise;
+    const close = viewer.call({ operation: 'comparison.close', comparisonId });
+    try {
+      await releasing.promise;
+      Deferred.doneUnsafe(database.stopped, Effect.void);
+      const disposal = viewer.dispose();
+      release.resolve();
+      await disposal;
+      await expect(close).resolves.toEqual({ status: 'closed', comparisonId });
+      expect(capture.completed().find((record) => record.message === 'comparison.compute')?.annotations)
+        .toMatchObject({ outcome: 'cancelled' });
+    } finally {
+      release.resolve();
+    }
   }, 20_000);
 
   it('releases an acquired database when a pending startup check outlives a fatal stop', async () => {
