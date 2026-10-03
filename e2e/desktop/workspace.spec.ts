@@ -101,7 +101,6 @@ test('exports a filtered view and keeps the desktop export menu mapped to the co
   await app.evaluate(({ Menu, BrowserWindow }) => {
     const item = Menu.getApplicationMenu()?.items.find((entry) => entry.label === 'File')?.submenu?.items.find((entry) => entry.label === 'Export CSV...');
     if (!item) throw new Error('Export CSV menu item missing');
-    if (item.accelerator !== 'CmdOrCtrl+Shift+E') throw new Error('Export accelerator changed');
     item.click(item, BrowserWindow.getAllWindows()[0], {});
   });
   await expect(page.getByRole('status')).toHaveText('Export complete');

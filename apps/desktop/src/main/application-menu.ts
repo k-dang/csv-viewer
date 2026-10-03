@@ -22,22 +22,18 @@ export function buildApplicationMenuTemplate({
     submenu: [
       {
         label: 'Open CSV...',
-        accelerator: 'CmdOrCtrl+O',
         click: () => onIntent('open-csv'),
       },
       {
         label: 'Reopen CSV',
-        accelerator: 'CmdOrCtrl+R',
         click: () => onIntent('reopen-csv'),
       },
       {
         label: 'Export CSV...',
-        accelerator: 'CmdOrCtrl+Shift+E',
         click: () => onIntent('export-csv'),
       },
       {
         label: 'Close Tab',
-        accelerator: 'CmdOrCtrl+W',
         click: () => onIntent('close-tab'),
       },
       { type: 'separator' },
@@ -45,13 +41,13 @@ export function buildApplicationMenuTemplate({
     ],
   };
 
+  // Reload discards the renderer's open tabs without an unload guard, so only development builds expose it.
   const developmentItems: MenuItemConstructorOptions[] = [];
-  if (isDevelopment) developmentItems.push({ role: 'toggleDevTools' }, { type: 'separator' });
+  if (isDevelopment) developmentItems.push({ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' });
 
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
-      { role: 'reload' },
       ...developmentItems,
       { role: 'resetZoom' },
       { role: 'zoomIn' },

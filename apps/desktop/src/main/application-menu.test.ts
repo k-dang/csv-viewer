@@ -45,6 +45,23 @@ describe('buildApplicationMenuTemplate', () => {
   });
 
   it.each([
+    [false, []],
+    [true, ['reload']],
+  ] as const)('exposes renderer reload only in development (isDevelopment: %s)', (isDevelopment, expected) => {
+    const template = buildApplicationMenuTemplate({
+      platform: 'win32',
+      appName: 'CSV Viewer',
+      isDevelopment,
+      onIntent: vi.fn(),
+      onAbout: vi.fn(),
+    });
+    const viewMenu = template.find((item) => item.label === 'View');
+    const roles = Array.isArray(viewMenu?.submenu) ? viewMenu.submenu.map((item) => item.role) : [];
+
+    expect(roles.filter((role) => role === 'reload')).toEqual(expected);
+  });
+
+  it.each([
     ['Open CSV...', 'open-csv'],
     ['Reopen CSV', 'reopen-csv'],
     ['Export CSV...', 'export-csv'],

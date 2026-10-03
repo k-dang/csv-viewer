@@ -20,10 +20,10 @@ Open CSV creates and focuses a CSV Tab while preserving existing tabs and edits.
 
 - Drop one or more CSV, TSV, or TXT files anywhere in the window.
 - Choose Open CSV in the `Workspace` navigation or empty card and select a file.
-- On desktop, choose a Recent CSV Source on the empty window, File > Open CSV..., or Ctrl+O.
-- Use Reopen to reload the active source. Desktop also supports File > Reopen CSV and Ctrl+R.
+- On desktop, choose a Recent CSV Source on the empty window, or File > Open CSV...
+- Use Reopen to reload the active source. Desktop also supports File > Reopen CSV.
 - Select a tab in the sidebar.
-- Close with the tab close button. Desktop also supports File > Close Tab and Ctrl+W.
+- Close with the tab close button. Desktop also supports File > Close Tab.
 
 ## Driving it with control-csv-viewer
 
