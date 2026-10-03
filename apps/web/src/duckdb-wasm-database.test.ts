@@ -1,10 +1,11 @@
-import { AsyncDuckDBConnection, AsyncPreparedStatement } from '@duckdb/duckdb-wasm';
+import { AsyncDuckDB, AsyncDuckDBConnection, AsyncPreparedStatement } from '@duckdb/duckdb-wasm';
 import { stoppedEngineMessage } from '@csv-viewer/workspace/database';
 import { Deferred, Effect, Exit, Fiber } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createNodeDuckDbWasmDatabase, nodeWasmOptions } from '../integration/fixtures/wasm-workspace';
+import { WasmWorkspaceFixture, createNodeDuckDbWasmDatabase, nodeWasmOptions } from '../integration/fixtures/wasm-workspace';
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { describeDatabaseInterruption, driverMethod } from '../../../packages/workspace/test/contract/database-interruption.contract';
+import { quoteLiteral } from '../../../packages/workspace/src/query/csv-query';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 
 describeDatabaseInterruption('DuckDbWasmWorkspaceDatabase interruption', {
@@ -275,5 +276,38 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       name: 'DataEngineError',
       cause: { message: 'Worker termination failed.' },
     });
+  });
+
+  it('retries a failed source drop after the next CSV opens', async () => {
+    const fixture = await WasmWorkspaceFixture.create();
+    const originalDrop = AsyncDuckDB.prototype.dropFile;
+    let failedReference: string | null = null;
+    const engineReady = Promise.withResolvers<AsyncDuckDB>();
+    const drop = vi.spyOn(AsyncDuckDB.prototype, 'dropFile').mockImplementation(function (this: AsyncDuckDB, reference) {
+      if (failedReference === null) {
+        engineReady.resolve(this);
+        failedReference = reference;
+        return Promise.reject(new Error('PRIVATE transient source drop failure'));
+      }
+      return originalDrop.call(this, reference);
+    });
+
+    try {
+      await fixture.openSource('first.csv', 'name\nAda\n');
+      if (!failedReference) throw new Error('The first CSV did not attempt to release its engine source.');
+      const inspector = await (await engineReady.promise).connect();
+      try {
+        const read = `SELECT * FROM read_csv(${quoteLiteral(failedReference)}, all_varchar = true)`;
+        await expect(inspector.query(read)).resolves.toBeDefined();
+        await fixture.openSource('second.csv', 'name\nGrace\n');
+        expect(drop.mock.calls.filter(([reference]) => reference === failedReference)).toHaveLength(2);
+        await expect(inspector.query(read)).rejects.toThrow();
+      } finally {
+        await inspector.close();
+      }
+    } finally {
+      drop.mockRestore();
+      await fixture.dispose();
+    }
   });
 });
