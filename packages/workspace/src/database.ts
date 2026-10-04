@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Exit, Layer } from 'effect';
+import { Context, Data, Effect, Layer, Scope } from 'effect';
 import type { QueryValues } from './query/csv-query';
 import type { EngineRow } from './query/csv-result-normalization';
 import { observeStage } from './workspace-diagnostics';
@@ -39,35 +39,42 @@ export interface WorkspaceDatabase {
 
 export const WorkspaceDatabase = Context.Service<WorkspaceDatabase>('csv-viewer/Database');
 
-/** A runtime's database with the release steps the database Layer's finalizer runs in order. */
-export interface OwnedWorkspaceDatabase extends WorkspaceDatabase {
-  closeOwnerConnection(): Effect.Effect<void, DataEngineError>;
-  /** Stops the engine: the native instance, or the Wasm Worker. Runs even if the connection close failed. */
-  closeEngine(): Effect.Effect<void, DataEngineError>;
+/**
+ * Acquires a runtime's database in the given scope. Each adapter registers its release steps with
+ * `releaseOnClose` before it can hold the matching resource, so an acquisition that fails or is
+ * interrupted partway releases exactly what it acquired.
+ */
+export type OpenWorkspaceDatabase = Effect.Effect<WorkspaceDatabase, DataEngineError, Scope.Scope>;
+
+/** A failed database release. Closing the Layer scope dies with it, and diagnostics report it as `cleanup-failed`. */
+export class DatabaseReleaseError extends Data.TaggedError('DatabaseReleaseError')<{ cause: unknown }> {
+  override readonly message = 'The workspace database could not be released.';
 }
 
 /**
- * Acquires the runtime's database for the Layer's scope. Closing that scope closes the owner
- * connection, then the engine even if that failed; each failed step is its own stage.
- * Finalizers cannot return typed failures, so `release.failed` carries the contained release outcome.
+ * Registers one database release step. Steps run in reverse registration order, so the owner
+ * connection closes before the engine stops, and every step runs even when an earlier one failed.
  */
-export function workspaceDatabaseLayer(open: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>) {
-  const release = { failed: false };
-  const layer = Layer.effect(WorkspaceDatabase, Effect.acquireRelease(
-    observeStage('workspace.acquire-database', open),
-    (acquired) => releaseDatabase(acquired).pipe(Effect.catchCause(() => Effect.sync(() => {
-      release.failed = true;
-    }))),
-    { interruptible: true },
+export function releaseOnClose(
+  step: 'connection' | 'engine',
+  release: Effect.Effect<void, DataEngineError>,
+): Effect.Effect<void, never, Scope.Scope> {
+  return Effect.addFinalizer(() => observeStage(`workspace.close-database-${step}`, release).pipe(
+    Effect.orDie,
   ));
-  return { layer, release };
 }
 
-function releaseDatabase(database: OwnedWorkspaceDatabase) {
-  return observeStage('workspace.release-database', Effect.gen(function* () {
-    const connection = yield* Effect.exit(observeStage('workspace.close-database-connection', database.closeOwnerConnection()));
-    const engine = yield* Effect.exit(observeStage('workspace.close-database-engine', database.closeEngine()));
-    yield* Exit.asVoidAll([connection, engine]);
+/**
+ * Acquires the runtime's database for the Layer's scope. Closing that scope runs the release steps
+ * the acquisition registered, as one stage.
+ */
+export function workspaceDatabaseLayer(open: OpenWorkspaceDatabase) {
+  return Layer.effect(WorkspaceDatabase, Effect.gen(function* () {
+    const acquisition = yield* Scope.make();
+    yield* Effect.addFinalizer((exit) => observeStage('workspace.release-database', Scope.close(acquisition, exit).pipe(
+      Effect.catchCause((cause) => Effect.die(new DatabaseReleaseError({ cause }))),
+    )));
+    return yield* observeStage('workspace.acquire-database', Scope.provide(open, acquisition));
   }));
 }
 

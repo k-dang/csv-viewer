@@ -11,8 +11,7 @@ Requests use the workspace runtime's services but not its scope. Disposal theref
 Workspace services compose Effects directly. Promises appear only at runtime edges:
 
 - Hosts keep the Promises for filesystem access, browser file reads, and prompts inside themselves.
-- Calls to the shared `driverEffect` helper adapt driver Promises.
-- The database adapter keeps raw driver Promises inside itself and classifies their failures once.
+- Database adapters call the driver through the shared `driverEffect` helper, which classifies its failures once. Acquisition and release are scoped Effects.
 - The web database exposes buffer registration and release as Effects. The host composes them into scoped CSV Source access.
 
 The database adapter keeps any buffer whose drop failed and retries the drop before the next registration. Engine termination releases the remaining buffers. The shared engine-source helper accepts Effects and manages only source lifetime and cleanup diagnostics.
@@ -29,7 +28,7 @@ Declared failures are tagged errors, so an ordinary `Error` can't satisfy them:
 - `CsvSourceUnavailableError`
 - `DataEngineError`
 
-Working CSV and request dispatch name these failures in their error channels. Database and connection methods fail with `DataEngineError`. A failed Comparison release travels as a `ComparisonCleanupError` defect, and diagnostics report it as `cleanup-failed`.
+Working CSV and request dispatch name these failures in their error channels. Database and connection methods fail with `DataEngineError`. A failed Comparison release travels as a `ComparisonCleanupError` defect, and a failed database release as a `DatabaseReleaseError` defect. Diagnostics report both as `cleanup-failed`.
 
 Pure query construction, history calculation, and CSV serialization stay ordinary functions. View preparation composes the serializer in yielding batches. Expected validation problems return a `Result` or a typed Effect failure. Broken invariants are defects.
 
@@ -52,9 +51,9 @@ Each capability module owns its service tag, interface, and Layer:
 - `working-csv-store.ts` builds the Working CSVs. It also builds the DuckDB Comparison executor, which shares their leases, admission, and artifacts.
 - `csv-comparison-service.ts` builds Comparisons on top of those and owns the finalizer for their data-change subscription.
 
-The runtime supplies its host. Tests can supply their own Comparison executor. `workspace-runtime.ts` composes the Layers and adds only the web startup check after database acquisition. Implementation classes stay private to their modules.
+The runtime supplies its host. Tests can supply their own Comparison executor. `workspace-runtime.ts` composes the Layers. Implementation classes stay private to their modules.
 
-The database acquires its engine and owner connection eagerly. The workspace exists only after acquisition succeeds. If acquisition fails, it releases whatever it already acquired. The database finalizer closes the owner connection first, then the engine.
+The database acquires its engine and owner connection eagerly, in a scope. Each runtime's database registers its release steps with `releaseOnClose` before it can hold the matching resource, so a failed or interrupted acquisition releases exactly what it acquired, through the same `workspace.release-database` stage as disposal. The workspace exists only after acquisition succeeds. Release steps run in reverse order: the owner connection closes first, then the engine.
 
 Disposal runs in this order:
 
@@ -68,7 +67,7 @@ Each Working CSV close waits for that Working CSV's leases. Disposal attempts ev
 
 After an engine stop, disposal interrupts and settles Comparison attempts and admitted closes while their source projections still exist. It then forgets source state without starting database cleanup. Attempt completion records the settlement's full `Exit`, so a projection defect rejects waiters instead of leaving them pending.
 
-Finalizers can't return typed failures, so disposal carries the release outcome explicitly. A failed release rejects disposal, and every later call returns the same rejection.
+A failed release step fails the scope close, which rejects disposal, and every later call returns the same rejection.
 
 ## Three primitives coordinate Working CSV work
 

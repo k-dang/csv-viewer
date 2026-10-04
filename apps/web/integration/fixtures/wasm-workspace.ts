@@ -1,8 +1,9 @@
 import { Effect } from 'effect';
+import { vi } from 'vitest';
 import { DataEngineError } from '../../../../packages/workspace/src/database';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { AsyncDuckDB, VoidLogger } from '@duckdb/duckdb-wasm';
+import { AsyncDuckDB, AsyncDuckDBConnection, VoidLogger } from '@duckdb/duckdb-wasm';
 import WebWorker from 'web-worker';
 import type {
   ComparisonAttemptOutcomeView,
@@ -34,7 +35,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -212,8 +213,8 @@ export class SharedEngineWasmDatabase extends DuckDbWasmWorkspaceDatabase {
     super(nodeWasmOptions);
   }
 
-  protected createEngine(): Promise<AsyncDuckDB> {
-    return acquireSharedEngine();
+  protected createEngine(): Effect.Effect<AsyncDuckDB> {
+    return Effect.promise(acquireSharedEngine);
   }
 
   protected async releaseEngine(database: AsyncDuckDB): Promise<void> {
@@ -264,7 +265,14 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
       return Effect.fail(new DataEngineError({ cause: new Error('PRIVATE engine source reference at C:\\PRIVATE.csv') }));
     });
   }
-  failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
+  /** The next connection close, which at disposal is the owner connection's, closes and then reports failure. */
+  failNextDatabaseRelease(): void {
+    const close = AsyncDuckDBConnection.prototype.close;
+    vi.spyOn(AsyncDuckDBConnection.prototype, 'close').mockImplementationOnce(async function (this: AsyncDuckDBConnection) {
+      await close.call(this);
+      throw new Error('PRIVATE database release failure');
+    });
+  }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {

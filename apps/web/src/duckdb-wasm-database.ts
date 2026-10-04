@@ -7,14 +7,16 @@ import {
 import { toError } from '@csv-viewer/workspace/errors';
 import { quoteLiteral, type QueryValues } from '@csv-viewer/workspace/csv-query';
 import type { EngineRow } from '@csv-viewer/workspace/csv-result-normalization';
-import { Deferred, Effect } from 'effect';
+import { Deferred, Effect, type Scope } from 'effect';
 import {
   driverEffect,
+  releaseOnClose,
   stoppedEngineMessage,
   DataEngineError,
-  type OwnedWorkspaceDatabase,
+  type WorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
+import { observeCleanup, observeStage } from '@csv-viewer/workspace/workspace-diagnostics';
 
 type DuckDbWasmWorker = NonNullable<ConstructorParameters<typeof AsyncDuckDB>[1]>;
 const sourceDirectory = '/csv-viewer-sources';
@@ -43,16 +45,10 @@ class EngineCalls {
 
   track<A>(call: () => Promise<A>): Promise<A> {
     if (this.stopError) return Promise.reject(this.stopError);
-    return new Promise<A>((resolve, reject) => {
-      this.pending.add(reject);
-      let started: Promise<A>;
-      try {
-        started = call();
-      } catch (error) {
-        started = Promise.reject(error);
-      }
-      started.then(resolve, reject).finally(() => this.pending.delete(reject));
-    });
+    const { promise, resolve, reject } = Promise.withResolvers<A>();
+    this.pending.add(reject);
+    (async () => call())().then(resolve, reject).finally(() => this.pending.delete(reject));
+    return promise;
   }
 
   stop(error: Error): void {
@@ -157,19 +153,16 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
 }
 
 /**
- * One single-threaded, in-memory DuckDB-Wasm Worker and its owner connection. The workspace
- * runtime acquires it with `open` and releases it with the two close steps. A Worker error stops
- * the engine for the rest of the page.
+ * One single-threaded, in-memory DuckDB-Wasm Worker and its owner connection, held from `open`
+ * until its scope closes. A Worker error stops the engine for the rest of the page.
  */
-export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
+export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   /** Completes once on a Worker error or a cancelled startup; web composition hands it to the workspace. */
   readonly stopped = Deferred.makeUnsafe<void>();
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
   private worker: DuckDbWasmWorker | null = null;
   private fatalCleanup: Promise<Error | null> | null = null;
-  private startupReleaseFailed = false;
-  private reportLateStartupCleanupFailure: () => void = () => undefined;
   private readonly failedFileDrops = new Set<string>();
   private readonly calls = new EngineCalls();
   private readonly handleWorkerError = (event: ErrorEvent) => {
@@ -182,27 +175,49 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
   }
 
   /**
-   * Releases what a failed or interrupted `open` left behind. The Layer finalizer never runs for an
-   * acquisition that did not return, so this also fails if `open` failed to release on its own.
+   * Starts the engine, then proves its in-memory CSV path as `web.startup-check`. Both release
+   * steps are registered first and do nothing until their resource exists, so closing the scope
+   * closes the owner connection, then stops the engine, whether startup finished, failed, or was
+   * interrupted. Interrupting startup stops the engine.
    */
-  closeStartup(): Effect.Effect<void, DataEngineError> {
-    return driverEffect(async () => {
-      await this.stopEngine();
-      if (this.startupReleaseFailed) throw new Error('The web engine could not be released.');
+  open(): Effect.Effect<this, DataEngineError, Scope.Scope> {
+    return Effect.gen({ self: this }, function* () {
+      yield* releaseOnClose('engine', this.closeEngine());
+      yield* releaseOnClose('connection', this.closeOwnerConnection());
+      yield* this.start();
+      yield* observeStage('web.startup-check', this.verifyInMemoryCsvQuery());
+      return this;
     });
   }
 
-  /** Reports a failed Worker termination even when its creation resolves after startup exits. */
-  onLateStartupCleanupFailure(report: () => void): void {
-    this.reportLateStartupCleanupFailure = report;
-  }
-
-  /**
-   * Starts the Worker and opens the owner connection under the network-isolation settings. The
-   * workspace Layer runs the in-memory CSV check and owns release. Interruption stops the engine.
-   */
-  open(): Effect.Effect<this, DataEngineError> {
-    return this.stopEngineOnInterrupt(() => this.start()).pipe(Effect.as(this));
+  /** Starts the Worker and opens the owner connection under the network-isolation settings. */
+  protected start(): Effect.Effect<void, DataEngineError> {
+    return Effect.gen({ self: this }, function* () {
+      const database = yield* this.createEngine();
+      this.database = database;
+      yield* this.startup(() => database.open({
+        path: ':memory:',
+        maximumThreads: 1,
+        allowUnsignedExtensions: false,
+        query: { castBigIntToDouble: false },
+        filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
+        opfs: { fileHandling: 'manual' },
+      }));
+      yield* this.startup(async () => {
+        const connection = new DuckDbWasmConnection(await database.connect(), this.calls);
+        this.connection = connection;
+        for (const setting of [
+          `SET allowed_directories = ['${sourceDirectory}']`,
+          'SET enable_external_access = false',
+          'SET allow_community_extensions = false',
+          'SET autoinstall_known_extensions = false',
+          'SET autoload_known_extensions = false',
+          'SET lock_configuration = true',
+        ]) {
+          await connection.runStatement(setting);
+        }
+      });
+    });
   }
 
   ownerConnection(): Effect.Effect<DuckDbWasmConnection, DataEngineError> {
@@ -265,19 +280,18 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     }
   }
 
-  /** After a fatal stop there is no connection left to close, so release succeeds at once. */
-  closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
+  /** The owner connection's release step. After a fatal stop there is no connection left to close. */
+  protected closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
     return Effect.suspend(() => this.connection ? this.calls.effect(() => this.releaseOwnerConnection()) : Effect.void);
   }
 
-  /** Stops the Worker. After a fatal stop, reports the outcome of the termination that stop began. */
-  closeEngine(): Effect.Effect<void, DataEngineError> {
+  /** The engine's release step. After a fatal stop, reports the outcome of the termination that stop began. */
+  protected closeEngine(): Effect.Effect<void, DataEngineError> {
     return driverEffect(() => this.stopEngine());
   }
 
-  /** The Layer runs this probe after acquisition and reports its outcome as `web.startup-check`. */
-  verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
-    return this.stopEngineOnInterrupt(async () => {
+  protected verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
+    return this.startup(async () => {
       // Encoded per call: registering hands the buffer to the Worker, which may detach it.
       const probe = new TextEncoder().encode('ready\ntrue\n');
       const reference = await this.registerBuffer('startup-check.csv', probe);
@@ -295,33 +309,22 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     });
   }
 
-  /** Builds and compiles the engine. Overridden where one engine is shared by several databases. */
-  protected async createEngine(): Promise<AsyncDuckDB> {
-    const worker = await this.options.createWorker(this.options.mainWorker);
-    if (this.calls.stoppedError) {
-      try {
-        worker.terminate();
-      } catch {
-        this.reportLateStartupCleanupFailure();
-      }
-      this.throwIfFatal();
-    }
-    this.worker = worker;
-    worker.addEventListener('error', this.handleWorkerError);
-    const database = new AsyncDuckDB(new VoidLogger(), worker);
-    // Keep the engine reachable while it instantiates. A Worker error clears DuckDB-Wasm's
-    // pending request without rejecting it, so the fatal path must be able to terminate this
-    // otherwise stranded engine.
-    this.database = database;
-    try {
-      await database.instantiate(this.options.mainModule);
+  /**
+   * Builds and compiles the engine. The engine is reachable while it instantiates: a Worker error
+   * clears DuckDB-Wasm's pending request without rejecting it, so the fatal stop and the engine
+   * release step must be able to terminate it. Overridden where one engine is shared by several
+   * databases; an override need not set `database`, which `start` assigns.
+   */
+  protected createEngine(): Effect.Effect<AsyncDuckDB, DataEngineError> {
+    return Effect.gen({ self: this }, function* () {
+      const worker = yield* this.createWorker();
+      this.worker = worker;
+      worker.addEventListener('error', this.handleWorkerError);
+      const database = new AsyncDuckDB(new VoidLogger(), worker);
+      this.database = database;
+      yield* this.startup(() => database.instantiate(this.options.mainModule));
       return database;
-    } catch (error) {
-      if (this.database === database) this.database = null;
-      this.stopObservingWorker();
-      await database.terminate().catch(() => { this.startupReleaseFailed = true; });
-      throw error;
-    }
+    });
   }
 
   /** Disposes the engine. Overridden where the caller owns it and resets it instead. */
@@ -330,45 +333,35 @@ export class DuckDbWasmWorkspaceDatabase implements OwnedWorkspaceDatabase {
     await database.terminate();
   }
 
-  private async start(): Promise<void> {
-    this.throwIfFatal();
-    const database = await this.createEngine();
-    this.throwIfFatal();
-    this.database = database;
-    try {
-      await database.open({
-        path: ':memory:',
-        maximumThreads: 1,
-        allowUnsignedExtensions: false,
-        query: { castBigIntToDouble: false },
-        filesystem: { allowFullHTTPReads: false, forceFullHTTPReads: false },
-        opfs: { fileHandling: 'manual' },
-      });
-      const connection = new DuckDbWasmConnection(await database.connect(), this.calls);
-      this.connection = connection;
-      for (const setting of [
-        `SET allowed_directories = ['${sourceDirectory}']`,
-        'SET enable_external_access = false',
-        'SET allow_community_extensions = false',
-        'SET autoinstall_known_extensions = false',
-        'SET autoload_known_extensions = false',
-        'SET lock_configuration = true',
-      ]) {
-        await connection.runStatement(setting);
-      }
-      this.throwIfFatal();
-    } catch (error) {
-      await this.releaseOwnerConnection().catch(() => { this.startupReleaseFailed = true; });
-      await this.stopEngine().catch(() => { this.startupReleaseFailed = true; });
-      throw error;
-    }
+  /**
+   * Waits for the Worker without holding up interruption. Unlike `driverEffect`, interruption does
+   * not wait for creation to settle, because a pending Worker creation cannot be cancelled. It stops
+   * the engine instead, and a Worker that arrives afterwards is terminated as its own cleanup stage.
+   */
+  private createWorker(): Effect.Effect<DuckDbWasmWorker, DataEngineError> {
+    return Effect.callback<DuckDbWasmWorker, DataEngineError>((resume) => {
+      const creating = (async () => this.options.createWorker(this.options.mainWorker))();
+      creating.then(
+        (worker) => resume(Effect.succeed(worker)),
+        (cause) => resume(Effect.fail(new DataEngineError({ cause }))),
+      );
+      return Effect.suspend(() => {
+        this.cancelStartup();
+        const late = Effect.promise(() => creating.catch(() => null)).pipe(
+          Effect.flatMap((worker) => worker ? Effect.try(() => worker.terminate()) : Effect.void),
+        );
+        return Effect.forkDetach(observeCleanup('web.startup-late-cleanup', late));
+      }).pipe(Effect.asVoid);
+    });
   }
 
-  /** Interrupting startup stops the engine, which settles the tracked startup work at once. */
-  private stopEngineOnInterrupt<A>(operation: () => Promise<A>): Effect.Effect<A, DataEngineError> {
-    return driverEffect(() => this.calls.track(operation), async () => {
-      this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
-    });
+  /** A startup call. Interrupting it stops the engine, which settles the call at once. */
+  private startup<A>(operation: () => Promise<A>): Effect.Effect<A, DataEngineError> {
+    return driverEffect(() => this.calls.track(operation), async () => this.cancelStartup());
+  }
+
+  private cancelStartup(): void {
+    this.failFatally(new Error('CSV Viewer Web startup was cancelled.'));
   }
 
   private async releaseOwnerConnection(): Promise<void> {

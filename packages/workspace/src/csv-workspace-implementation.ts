@@ -1,8 +1,8 @@
-import { OperationCleanup, diagnosticsLayer, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure, type WorkspaceDiagnostics } from './workspace-diagnostics';
+import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure } from './workspace-diagnostics';
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { makeWorkspaceLayer } from './workspace-runtime';
-import { stoppedEngineMessage, type DataEngineError, type OwnedWorkspaceDatabase } from './database';
+import { stoppedEngineMessage, type DataEngineError, type OpenWorkspaceDatabase } from './database';
 import { Comparisons } from './comparison/csv-comparison-service';
 import { WorkingCsvs } from './working-csv/working-csv-store';
 import { CsvWorkspaceHost, type CsvSourceUnavailableError } from './workspace-host';
@@ -33,7 +33,7 @@ type ExportRequest = Extract<CsvViewerRequest, { operation: 'csv.export' | 'csv.
 function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
   return request.operation === 'csv.export' || request.operation === 'csv.export-view' || request.operation === 'csv.cancel-view-export';
 }
-type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>['layer']>;
+type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>>;
 
 /** The opaque identifiers a request carries. Diagnostics drop anything that is not a UUID. */
 const RequestIdentifiers = Schema.Struct({
@@ -69,7 +69,6 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     private readonly workspaceId: string,
     private readonly context: Context.Context<WorkspaceServices>,
     private readonly scope: Scope.Closeable,
-    private readonly databaseRelease: { readonly failed: boolean },
     private readonly stopped: Deferred.Deferred<void> | undefined,
   ) {
     this.host = Context.get(context, CsvWorkspaceHost);
@@ -77,28 +76,24 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     this.comparisons = Context.get(context, Comparisons);
   }
 
-  /** Builds the workspace runtime into its own scope. A failed build closes that scope and rejects. */
+  /**
+   * Builds the workspace runtime into its own scope. A failed build closes that scope, which
+   * releases whatever the database acquisition registered, and rejects with the build failure.
+   */
   static async create(
-    openDatabase: Effect.Effect<OwnedWorkspaceDatabase, DataEngineError>,
+    openDatabase: OpenWorkspaceDatabase,
     host: CsvWorkspaceHost,
     { executor, diagnostics, startup }: CreateCsvViewerOptions,
   ): Promise<CsvWorkspaceImplementation> {
     const workspaceId = crypto.randomUUID();
     const scope = Scope.makeUnsafe();
-    startup?.observeLateCleanupFailure(lateStartupCleanupReporter(workspaceId, diagnostics));
-    const { layer, databaseRelease } = makeWorkspaceLayer(openDatabase, host, executor, diagnostics, startup?.check);
-    const building = Layer.buildWithScope(layer, scope).pipe(Effect.annotateSpans({ workspaceId }));
+    const building = Layer.buildWithScope(makeWorkspaceLayer(openDatabase, host, executor, diagnostics), scope).pipe(Effect.annotateSpans({ workspaceId }));
     const build = startup
       ? Effect.raceFirst(building, Deferred.await(startup.stopped).pipe(Effect.andThen(Effect.fail(workspaceStoppedError()))))
       : building;
     const built = await Effect.runPromiseExit(build, { signal: startup?.signal });
-    const closeFailedStartup = (exit: Exit.Exit<unknown, unknown>) => startup
-      ? runStartupStage(workspaceId, diagnostics, observeCleanup('web.startup-cleanup', Effect.gen(function* () {
-          yield* Scope.close(scope, exit);
-          yield* startup.cleanup;
-          if (databaseRelease.failed) yield* Effect.fail(new Error('The database could not be released.'));
-        })))
-      : Effect.runPromise(Scope.close(scope, exit));
+    // The release stage reports a failed release; startup rejects with why the build failed.
+    const closeFailedStartup = (exit: Exit.Exit<unknown, unknown>) => Effect.runPromise(Effect.exit(Scope.close(scope, exit)));
     if (Exit.isFailure(built)) {
       await closeFailedStartup(built);
       throw Cause.squash(built.cause);
@@ -107,7 +102,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
       await closeFailedStartup(Exit.void);
       throw workspaceStoppedError();
     }
-    const workspace = new CsvWorkspaceImplementation(workspaceId, built.value, scope, databaseRelease, startup?.stopped);
+    const workspace = new CsvWorkspaceImplementation(workspaceId, built.value, scope, startup?.stopped);
     if (startup) {
       const watcher = Effect.runForkWith(built.value)(Deferred.await(startup.stopped).pipe(
         Effect.andThen(observeStage('workspace.engine-stopped', workspace.emitEngineStopped().pipe(
@@ -504,8 +499,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
    * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
    * the runtime scope to release the database. A stopped engine took its tables with it, so its
    * Comparisons settle before browser-held sources are released without querying those tables.
-   * Finalizers cannot return typed failures, so the database release outcome is read from
-   * `databaseRelease` rather than from closing the scope.
+   * A failed database release fails the scope close, which rejects disposal.
    */
   private disposeWorkspace(): Promise<void> {
     return this.runEffect(Effect.gen({ self: this }, function* () {
@@ -517,10 +511,10 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         yield* Effect.exit(observeStage('comparison.dispose', this.comparisons.dispose())),
         yield* Effect.exit(observeStage('workspace.release-csvs', this.workingCsvs.disposeStore())),
       ]);
-      yield* Scope.close(this.scope, Exit.void);
-      if (!this.databaseRelease.failed) return yield* released;
+      const closed = yield* Effect.exit(Scope.close(this.scope, Exit.void));
+      if (Exit.isSuccess(closed)) return yield* released;
       yield* markCleanupFailed;
-      yield* Exit.asVoidAll([released, Exit.fail(new Error('The workspace database could not be released.'))]);
+      yield* Exit.asVoidAll([released, closed]);
     }), 'workspace.dispose');
   }
 }
@@ -528,18 +522,6 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
 /** The public rejection after a fatal stop never includes the Worker's error text. */
 function workspaceStoppedError(): Error {
   return new Error(stoppedEngineMessage);
-}
-
-/** Startup stages run outside the built runtime, so they provide their own diagnostics. */
-function runStartupStage(workspaceId: string, diagnostics: WorkspaceDiagnostics | undefined, stage: Effect.Effect<void>) {
-  return Effect.runPromise(stage.pipe(Effect.annotateSpans({ workspaceId }), Effect.provide(diagnosticsLayer(diagnostics))));
-}
-
-/** Built outside `create` so the page-lifetime engine retains only these two values, not the workspace. */
-function lateStartupCleanupReporter(workspaceId: string, diagnostics: WorkspaceDiagnostics | undefined): () => void {
-  return () => {
-    void runStartupStage(workspaceId, diagnostics, observeCleanup('web.startup-late-cleanup', Effect.fail(new Error('Late Worker termination failed.'))));
-  };
 }
 
 function requiresConfirmation(impact: CloseImpact): boolean {

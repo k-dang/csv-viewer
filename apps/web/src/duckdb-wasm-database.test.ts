@@ -1,33 +1,35 @@
 import { AsyncDuckDB, AsyncDuckDBConnection, AsyncPreparedStatement } from '@duckdb/duckdb-wasm';
 import { stoppedEngineMessage } from '@csv-viewer/workspace/database';
-import { Deferred, Effect, Exit, Fiber } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WasmWorkspaceFixture, createNodeDuckDbWasmDatabase, nodeWasmOptions } from '../integration/fixtures/wasm-workspace';
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { describeDatabaseInterruption, driverMethod } from '../../../packages/workspace/test/contract/database-interruption.contract';
 import { quoteLiteral } from '../../../packages/workspace/src/query/csv-query';
+import { openInScope } from '../../../packages/workspace/test/scoped-database';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 
 describeDatabaseInterruption('DuckDbWasmWorkspaceDatabase interruption', {
-  open: () => Effect.runPromise(createNodeDuckDbWasmDatabase().open()),
+  open: () => createNodeDuckDbWasmDatabase().open(),
   cancellableStart: driverMethod(AsyncDuckDBConnection.prototype, 'send'),
   cancellableExecution: driverMethod(AsyncDuckDBConnection.prototype, 'send'),
   read: driverMethod(AsyncDuckDBConnection.prototype, 'query'),
 });
 
 let database: DuckDbWasmWorkspaceDatabase | undefined;
+let closeDatabase: (() => Promise<void>) | undefined;
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  if (database) {
-    await Effect.runPromise(database.closeOwnerConnection());
-    await Effect.runPromise(database.closeEngine());
-  }
+  await closeDatabase?.();
   database = undefined;
+  closeDatabase = undefined;
 });
 
-function openNodeDatabase(): Promise<DuckDbWasmWorkspaceDatabase> {
-  return Effect.runPromise(createNodeDuckDbWasmDatabase().open());
+async function openNodeDatabase(): Promise<DuckDbWasmWorkspaceDatabase> {
+  const scoped = await openInScope(createNodeDuckDbWasmDatabase().open());
+  closeDatabase = scoped.close;
+  return scoped.database;
 }
 
 /** Opens a real engine and returns a way to fail its Worker the way the browser reports a crash. */
@@ -37,9 +39,12 @@ async function openCrashableDatabase() {
     ...nodeWasmOptions,
     createWorker: async (reference) => (worker = await nodeWasmOptions.createWorker(reference)),
   });
-  database = await Effect.runPromise(opened.open());
+  const scoped = await openInScope(opened.open());
+  database = scoped.database;
+  closeDatabase = scoped.close;
   return {
     database: opened,
+    close: scoped.close,
     crash: () => {
       if (!worker) throw new Error('The engine did not create its Worker.');
       // SAFETY: web-worker's Node EventTarget dispatches plain objects, as it does for its own errors.
@@ -206,14 +211,12 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       closing.resolve();
       return new Promise<void>(() => undefined);
     });
-    const release = Effect.runFork(Effect.flip(engine.database.closeOwnerConnection()));
+    const release = engine.close();
     await closing.promise;
 
     engine.crash();
 
-    await expect(Effect.runPromise(Fiber.join(release))).resolves.toMatchObject({
-      cause: { message: stoppedEngineMessage },
-    });
+    await expect(release).rejects.toMatchObject({ cause: { message: stoppedEngineMessage } });
   });
 
   it.each(['pending request', 'pending creation'])('cancels startup during %s and terminates the Worker once', async (phase) => {
@@ -223,10 +226,11 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js',
       createWorker: () => phase === 'pending creation' ? creation.promise : Promise.resolve(worker),
     });
-    const opening = Effect.runFork(database.open());
+    const opening = Effect.runFork(Effect.scoped(database.open()));
     if (phase === 'pending request') await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     await Effect.runPromise(Fiber.interrupt(opening));
-    await expect(Effect.runPromise(database.closeEngine())).resolves.toBeUndefined();
+    const exit = await Effect.runPromise(Fiber.await(opening));
+    expect(Exit.hasInterrupts(exit) && !Cause.hasDies(exit.cause)).toBe(true);
     if (phase === 'pending creation') creation.resolve(worker);
     await vi.waitFor(() => expect(worker.terminate).toHaveBeenCalledOnce());
     await expect(Effect.runPromise(database.ownerConnection())).rejects.toMatchObject({
@@ -242,7 +246,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainWorker: 'duckdb.worker.js',
       createWorker: () => Promise.resolve(worker),
     });
-    Effect.runFork(database.open());
+    Effect.runFork(Effect.scoped(database.open()));
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
 
     worker.emitError(new Error('Worker crashed.'));
@@ -256,7 +260,7 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     });
   });
 
-  it('holds a failed Worker termination after a crash for the engine release', async () => {
+  it('reports a failed Worker termination after a crash from the engine release', async () => {
     const worker = new ControllableWorker();
     worker.terminate.mockImplementation(() => {
       throw new Error('Worker termination failed.');
@@ -266,13 +270,13 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       mainWorker: 'duckdb.worker.js',
       createWorker: () => Promise.resolve(worker),
     });
-    Effect.runFork(crashed.open());
+    const opening = Effect.runFork(Effect.scoped(crashed.open()));
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
 
     worker.emitError(new Error('Worker crashed.'));
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    await expect(Effect.runPromise(crashed.closeEngine())).rejects.toMatchObject({
+    const exit = await Effect.runPromise(Fiber.await(opening));
+    expect(Exit.isFailure(exit) && exit.cause.reasons.find(Cause.isDieReason)?.defect).toMatchObject({
       name: 'DataEngineError',
       cause: { message: 'Worker termination failed.' },
     });

@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { DataEngineError, type OwnedWorkspaceDatabase, type WorkspaceDatabase } from '../../src/database';
+import { DataEngineError, type WorkspaceDatabase } from '../../src/database';
 
 export function failNextExportPreparation(database: WorkspaceDatabase, failure: 'read' | 'serialization'): () => boolean {
   let released = false;
@@ -65,14 +65,6 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_working_')) return run(sql, values);
     database.run = run;
     return Effect.die(new Error('PRIVATE table cleanup failure'));
-  };
-}
-
-export function failNextDatabaseRelease(database: OwnedWorkspaceDatabase): void {
-  const close = database.closeOwnerConnection.bind(database);
-  database.closeOwnerConnection = () => {
-    database.closeOwnerConnection = close;
-    return close().pipe(Effect.andThen(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE database release failure') }))));
   };
 }
 

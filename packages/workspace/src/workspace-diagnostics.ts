@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Exit, Logger, Option, Predicate, References, Schema, Tracer } from 'effect';
 import type { ComparisonCleanupError } from './comparison/comparison-effects';
+import type { DatabaseReleaseError } from './database';
 
 export interface WorkspaceDiagnostics {
   readonly logger?: Logger.Logger<unknown, void>;
@@ -27,7 +28,7 @@ function approvedField(key: string, value: unknown): boolean {
 
 /**
  * Classify only the outer typed reasons. Never inspect or serialize nested driver causes.
- * Matches `ComparisonCleanupError` by its type-checked tag to avoid an import cycle with `database.ts`.
+ * Matches cleanup errors by their type-checked tags to avoid an import cycle with `database.ts`.
  */
 export function diagnosticCause(cause: Cause.Cause<unknown>): string {
   if (cause.reasons.some(isCleanupFailure)) return 'cleanup-failed';
@@ -50,7 +51,10 @@ export function observeStage<A, E, R>(stage: string, effect: Effect.Effect<A, E,
 }
 
 function isCleanupFailure(reason: Cause.Reason<unknown>): boolean {
-  return Cause.isDieReason(reason) && Predicate.isTagged(reason.defect, 'ComparisonCleanupError' satisfies ComparisonCleanupError['_tag']);
+  return Cause.isDieReason(reason) && (
+    Predicate.isTagged(reason.defect, 'ComparisonCleanupError' satisfies ComparisonCleanupError['_tag'])
+    || Predicate.isTagged(reason.defect, 'DatabaseReleaseError' satisfies DatabaseReleaseError['_tag'])
+  );
 }
 
 export function recordOutcome(outcome: string, cause?: Cause.Cause<unknown>, cleanup?: 'succeeded' | 'cleanup-failed') {

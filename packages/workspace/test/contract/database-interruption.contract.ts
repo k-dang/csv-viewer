@@ -1,6 +1,7 @@
-import { Effect, Exit, Fiber } from 'effect';
+import { Effect, Exit, Fiber, type Scope } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { OwnedWorkspaceDatabase } from '../../src/database';
+import type { DataEngineError, WorkspaceDatabase } from '../../src/database';
+import { openInScope } from '../scoped-database';
 
 type DriverPrototype<Method extends string> = Record<Method, (...args: never[]) => Promise<object>>;
 
@@ -35,7 +36,7 @@ export function driverMethod<Method extends string>(prototype: DriverPrototype<M
 }
 
 export interface DatabaseInterruptionFixture {
-  open(): Promise<OwnedWorkspaceDatabase>;
+  open(): Effect.Effect<WorkspaceDatabase, DataEngineError, Scope.Scope>;
   /** The driver call that starts a cancellable query. */
   readonly cancellableStart: DriverMethod;
   /** The driver call a cancellable query waits on while the engine executes it. */
@@ -48,16 +49,16 @@ const longQuery = 'SELECT sum(a.range * b.range) AS total FROM range(1000000) a,
 
 export function describeDatabaseInterruption(name: string, fixture: DatabaseInterruptionFixture): void {
   describe(name, () => {
-    let database: OwnedWorkspaceDatabase;
+    let database: WorkspaceDatabase;
+    let close: () => Promise<void>;
 
     beforeEach(async () => {
-      database = await fixture.open();
+      ({ database, close } = await openInScope(fixture.open()));
     });
 
     afterEach(async () => {
       vi.restoreAllMocks();
-      await Effect.runPromise(database.closeOwnerConnection());
-      await Effect.runPromise(database.closeEngine());
+      await close();
     });
 
     async function expectInterruptionWaitsFor(driver: ReturnType<DriverMethod['hold']>, work: Fiber.Fiber<unknown, unknown>) {
