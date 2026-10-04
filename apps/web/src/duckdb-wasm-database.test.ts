@@ -266,6 +266,19 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
     expect(createWorker).toHaveBeenCalledOnce();
   });
 
+  it('rejects an open that overlaps an active one without creating another Worker', async () => {
+    const worker = new ControllableWorker();
+    const createWorker = vi.fn(() => Promise.resolve(worker));
+    database = new DuckDbWasmWorkspaceDatabase({ mainModule: 'duckdb.wasm', mainWorker: 'duckdb.worker.js', createWorker });
+    const first = Effect.runFork(Effect.scoped(database.open()));
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+
+    await expect(Effect.runPromise(Effect.scoped(database.open()))).rejects.toMatchObject({ name: 'DataEngineError' });
+    expect(createWorker).toHaveBeenCalledOnce();
+    await Effect.runPromise(Fiber.interrupt(first));
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
   it('reports a failed Worker termination after a crash from the engine release', async () => {
     const worker = new ControllableWorker();
     worker.terminate.mockImplementation(() => {

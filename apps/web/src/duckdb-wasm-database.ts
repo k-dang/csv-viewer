@@ -162,6 +162,7 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
   private database: AsyncDuckDB | null = null;
   private connection: DuckDbWasmConnection | null = null;
   private worker: DuckDbWasmWorker | null = null;
+  private reserved = false;
   private fatalCleanup: Promise<Error | null> | null = null;
   private readonly failedFileDrops = new Set<string>();
   private readonly calls = new EngineCalls();
@@ -178,10 +179,22 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
    * Starts the engine, then proves its in-memory CSV path as `web.startup-check`. Both release
    * steps are registered first and do nothing until their resource exists, so closing the scope
    * closes the owner connection, then stops the engine, whether startup finished, failed, or was
-   * interrupted. Interrupting startup stops the engine.
+   * interrupted. Interrupting startup stops the engine. One scope at a time may hold the instance,
+   * because the release steps read the engine and connection it stores; the reservation is
+   * released after those steps run.
    */
   open(): Effect.Effect<this, DataEngineError, Scope.Scope> {
     return Effect.gen({ self: this }, function* () {
+      yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => {
+            if (this.reserved) throw new Error('The data engine is already open in another scope.');
+            this.reserved = true;
+          },
+          catch: (cause) => new DataEngineError({ cause }),
+        }),
+        () => Effect.sync(() => { this.reserved = false; }),
+      );
       yield* releaseOnClose('engine', this.closeEngine());
       yield* releaseOnClose('connection', this.closeOwnerConnection());
       // A stopped engine stays stopped: its release would not terminate a newly created Worker.
