@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page }) => {
   // Hold only delivery of the real workspace result. File selection, queries, and close
   // still run through the web runtime; this makes the response-order window deterministic.
-  await page.route('**/src/main.tsx', async (route) => {
+  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'workspace = new RendererWorkspace(started.viewer, {';

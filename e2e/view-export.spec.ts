@@ -35,7 +35,7 @@ test('exports all matching rows beyond grid windows, commits an editor, and reta
 });
 
 test('cancels preparation while the workspace stays usable and retries the changed query', { tag: '@dev' }, async ({ page }, testInfo) => {
-  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'return Effect.suspend(() => {';
@@ -70,7 +70,7 @@ test('cancels preparation while the workspace stays usable and retries the chang
 });
 
 test('keeps a failed active edit open and does not export until it commits', { tag: '@dev' }, async ({ page }) => {
-  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'return this.calls.effect(() => this.runStatement(sql, values));';
@@ -103,7 +103,7 @@ test('keeps a failed active edit open and does not export until it commits', { t
 });
 
 test('preserves text entered while the export menu waits for a cell write', { tag: '@dev' }, async ({ page }) => {
-  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'return this.calls.effect(() => this.runStatement(sql, values));';

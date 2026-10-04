@@ -10,7 +10,13 @@ const requireDesktop = createRequire(path.join(desktopRoot, 'package.json'));
 let directory: string;
 let app: ElectronApplication;
 let page: Page;
+let appClosed = false;
 const contents = 'name,code\nAda,001\nGrace,002\n';
+
+declare global {
+  // State belongs only to the test's substitute for the native message box.
+  var desktopClosePromptTest: { shown: number; answer: ((response: number) => void) | null } | undefined;
+}
 
 async function launch(): Promise<void> {
   const env: Record<string, string> = {};
@@ -22,6 +28,8 @@ async function launch(): Promise<void> {
     args: [desktopRoot, `--user-data-dir=${path.join(directory, 'user-data')}`, '--no-sandbox'],
     env,
   });
+  appClosed = false;
+  app.on('close', () => { appClosed = true; });
   await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
   page = await app.firstWindow();
   await expect(page.getByRole('heading', { name: 'CSV Viewer', exact: true })).toBeVisible();
@@ -36,7 +44,7 @@ test.beforeEach(async () => {
 // Playwright requires fixture destructuring; Electron owns its own page and context.
 // oxlint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => {
-  if (app && testInfo.status !== testInfo.expectedStatus) {
+  if (app && !appClosed && testInfo.status !== testInfo.expectedStatus) {
     const screenshot = testInfo.outputPath('desktop.png');
     await page.screenshot({ path: screenshot });
     await testInfo.attach('desktop', { path: screenshot, contentType: 'image/png' });
@@ -44,11 +52,79 @@ test.afterEach(async ({}, testInfo) => {
     await app.context().tracing.stop({ path: trace });
     await testInfo.attach('trace', { path: trace, contentType: 'application/zip' });
   }
-  await app?.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
-  });
-  await app?.close();
+  if (app && !appClosed) {
+    await app.evaluate(({ dialog }) => {
+      globalThis.desktopClosePromptTest?.answer?.(0);
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
+    });
+    await app.close();
+  }
   await rm(directory, { recursive: true, force: true });
+});
+
+async function openSource(source: string): Promise<void> {
+  await app.evaluate(({ dialog }, filePath) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] });
+  }, source);
+  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true }).click();
+  await expect(csvCells(page, 'name')).toHaveText(['Ada', 'Grace']);
+}
+
+async function holdClosePrompt(): Promise<void> {
+  await app.evaluate(({ dialog }) => {
+    const state: NonNullable<typeof globalThis.desktopClosePromptTest> = { shown: 0, answer: null };
+    globalThis.desktopClosePromptTest = state;
+    dialog.showMessageBox = async () => {
+      state.shown += 1;
+      const response = await new Promise<number>((resolve) => { state.answer = resolve; });
+      state.answer = null;
+      return { response, checkboxChecked: false };
+    };
+  });
+}
+
+test('window close and app quit share confirmation; cancelling preserves edits and a later close disposes', async () => {
+  await openSource(path.join(directory, 'people.csv'));
+  await editCell(page, 'name', 0, 'Ada edited');
+  await holdClosePrompt();
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close(); });
+  await expect.poll(() => app.evaluate(() => globalThis.desktopClosePromptTest?.shown)).toBe(1);
+  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].close();
+    electronApp.quit();
+  });
+  await app.evaluate(() => { globalThis.desktopClosePromptTest?.answer?.(1); });
+  await expect(csvCells(page, 'name')).toHaveText(['Ada edited', 'Grace']);
+  expect(await app.evaluate(() => globalThis.desktopClosePromptTest?.shown)).toBe(1);
+
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close(); });
+  await expect.poll(() => app.evaluate(() => globalThis.desktopClosePromptTest?.shown)).toBe(2);
+  const electronProcess = app.process();
+  const closed = app.waitForEvent('close');
+  await app.evaluate(() => { globalThis.desktopClosePromptTest?.answer?.(0); });
+  await closed;
+  await expect.poll(() => electronProcess.exitCode).toBe(0);
+  expect(await readFile(path.join(directory, 'people.csv'), 'utf8')).toBe(contents);
+});
+
+test('quit rechecks confirmation when another CSV gains unexported changes', async () => {
+  await openSource(path.join(directory, 'people.csv'));
+  await editCell(page, 'name', 0, 'Ada edited');
+  await holdClosePrompt();
+  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
+  await expect.poll(() => app.evaluate(() => globalThis.desktopClosePromptTest?.shown)).toBe(1);
+  const secondSource = path.join(directory, 'other.csv');
+  await writeFile(secondSource, contents);
+  await openSource(secondSource);
+  await editCell(page, 'name', 0, 'Ada also edited');
+  await app.evaluate(() => { globalThis.desktopClosePromptTest?.answer?.(0); });
+  await expect.poll(() => app.evaluate(() => globalThis.desktopClosePromptTest?.shown)).toBe(2);
+  const electronProcess = app.process();
+  const closed = app.waitForEvent('close');
+  await app.evaluate(() => { globalThis.desktopClosePromptTest?.answer?.(0); });
+  await closed;
+  await expect.poll(() => electronProcess.exitCode).toBe(0);
+  expect(await readFile(secondSource, 'utf8')).toBe(contents);
 });
 
 test('opens and exports through IPC, refuses overwriting the source, and persists recent files', async () => {

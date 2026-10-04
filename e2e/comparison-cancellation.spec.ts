@@ -4,7 +4,7 @@ import { openCsv } from './helpers/csv';
 test('cancels a held refresh, preserves the previous result, and can retry', async ({ page }) => {
   // Hold the next cancellable driver operation. The real comparison lifecycle and UI
   // still run; interruption removes the gate instead of depending on machine speed.
-  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'return Effect.suspend(() => {';
