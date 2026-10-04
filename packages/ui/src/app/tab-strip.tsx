@@ -120,7 +120,7 @@ function TabItem({
     >
       <TabsTrigger
         value={id}
-        className="min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none group-data-collapsed/sidebar:h-8 group-data-collapsed/sidebar:justify-center group-data-collapsed/sidebar:p-0 group-data-collapsed/sidebar:[&>svg]:size-4"
+        className="h-8 min-w-0 flex-1 justify-start rounded-none border-0 bg-transparent px-3 py-1.5 shadow-none after:hidden data-active:bg-transparent data-active:shadow-none group-data-collapsed/sidebar:justify-center group-data-collapsed/sidebar:p-0 group-data-collapsed/sidebar:[&>svg]:size-4"
       >
         {icon}
         <span className="truncate group-data-collapsed/sidebar:sr-only">{label}</span>
