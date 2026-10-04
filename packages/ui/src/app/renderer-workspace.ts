@@ -107,6 +107,7 @@ export class RendererWorkspace {
         open: async (options) => {
           const sourceId = await this.host.acquireDroppedSource(file);
           if (sourceId instanceof Object) return sourceId;
+          // Acquired sources must reach CsvViewer even if the renderer stops during acquisition.
           return this.viewer.call({ operation: 'csv.open', sourceId, options });
         },
       });

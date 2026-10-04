@@ -25,7 +25,7 @@ export type ComparisonTabState = {
  * Rules kept here so they cannot drift: commands read their inputs from this state and are no-ops
  * without them; a rejected outcome or a failed call becomes `actionError`; editing the draft hides
  * the current invalid-key diagnostics; `receive` ignores older projections; a row window from a
- * superseded result or view mode is dropped; nothing settles after `dispose`.
+ * superseded result or view mode is dropped; late requests never update state after `dispose`.
  */
 export class ComparisonTab {
   private state: ComparisonTabState;
@@ -134,7 +134,7 @@ export class ComparisonTab {
   async rows(offset: number, limit: number): Promise<ComparisonWindow | null> {
     const { comparison, rows, columns } = this.state;
     const applied = comparison.applied;
-    if (!applied) return null;
+    if (this.disposed || !applied) return null;
     const outcome = await this.viewer.call({
       operation: 'comparison.get-window',
       comparisonId: comparison.comparisonId,
@@ -168,6 +168,7 @@ export class ComparisonTab {
 
   /** Runs one command; the operation returns the rejection message, or null when accepted. */
   private async command(fallback: string, operation: () => Promise<string | null>): Promise<void> {
+    if (this.disposed) return;
     this.set({ actionError: null });
     let actionError: string | null;
     try {

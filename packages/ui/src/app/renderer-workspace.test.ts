@@ -84,6 +84,24 @@ describe('RendererWorkspace lifecycle', () => {
     expect(workspace.snapshot().tabs).toEqual([]);
   });
 
+  it.each(['dispose', 'fatal'] as const)('hands off an acquired dropped source after %s without opening a renderer Tab', async (ending) => {
+    const acquisition = Promise.withResolvers<string>();
+    const acquire = vi.fn(() => acquisition.promise);
+    const open = vi.fn(async (): Promise<OpenCsvResult> => ({ status: 'opened', workingCsv: csv('a') }));
+    const { workspace, emit } = setup({ handlers: { 'csv.open': open } }, { acquireDroppedSource: acquire });
+    const opening = workspace.openDroppedFiles(['a.csv', 'b.csv'].map((name) => ({ name, file: new File(['a\n1'], name) })));
+    expect(acquire).toHaveBeenCalledOnce();
+    if (ending === 'dispose') workspace.dispose();
+    else emit({ type: 'fatal-error', message: 'Stopped' });
+    const stopped = workspace.snapshot();
+    acquisition.resolve('acquired-source');
+    await opening;
+    expect(open).toHaveBeenCalledExactlyOnceWith({ operation: 'csv.open', sourceId: 'acquired-source', options: {} });
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(workspace.snapshot()).toBe(stopped);
+    expect(workspace.snapshot().tabs).toEqual([]);
+  });
+
   it('retains a known CSV Tab and its query, then resets that same Tab on Reopen', async () => {
     const reopened = { ...csv('a'), rowCount: 15 };
     const { workspace } = setup({ handlers: {
@@ -267,6 +285,37 @@ describe('RendererWorkspace lifecycle', () => {
     expect(workspace.snapshot()).toMatchObject({ activeTabId: 'csv:a', error: 'Retry cleanup' });
     await workspace.close();
     expect(workspace.snapshot().tabs).toEqual([]);
+  });
+
+  it('shares close admission while prompting and releases it after a rejected confirmation', async () => {
+    const confirmation = Promise.withResolvers<boolean>();
+    const confirm = vi.fn(() => confirmation.promise);
+    const close = vi.fn<() => Promise<CloseWorkingCsvOutcome>>()
+      .mockResolvedValueOnce({ status: 'confirmation-required', impact: { hasUnexportedChanges: true, dependentComparisons: [] } })
+      .mockResolvedValue({ status: 'closed', closedWorkingCsvId: 'a', closedComparisonIds: [] });
+    const { workspace } = setup({ handlers: { 'csv.close': close } }, { confirmClose: confirm });
+    await workspace.open();
+    const closing = workspace.close();
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    await workspace.close();
+    expect(close).toHaveBeenCalledOnce();
+    confirmation.reject(new Error('Confirmation unavailable'));
+    await closing;
+    expect(workspace.snapshot()).toMatchObject({ activeTabId: 'csv:a', error: 'Confirmation unavailable' });
+    await workspace.close();
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(workspace.snapshot().tabs).toEqual([]);
+  });
+
+  it('discards a comparison candidate failure after its baseline Tab closes', async () => {
+    const pending = Promise.withResolvers<never>();
+    const { workspace } = setup({ handlers: { 'comparison.get-candidates': () => pending.promise } });
+    await workspace.open();
+    const candidates = workspace.candidates();
+    await workspace.close();
+    pending.reject(new Error('Baseline was released'));
+    expect(await candidates).toBeNull();
+    expect(workspace.snapshot()).toMatchObject({ tabs: [], error: null });
   });
 
   it.each(['dispose', 'fatal'] as const)('rejects late results and further intents after %s', async (ending) => {

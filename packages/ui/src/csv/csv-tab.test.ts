@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CsvColumnValueCounts, CsvEditState, CsvRowWindow } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvCellEditResult, CsvColumnValueCounts, CsvEditState, CsvRowWindow } from '@csv-viewer/workspace/csv-viewer';
 import { CsvTab } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer } from '../test-helpers/csv-viewer';
@@ -37,10 +37,12 @@ const editedState: CsvEditState = {
 /** Lets a test resolve one call while the Tab holds it in flight. */
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((settle) => {
+  let reject: (cause: Error) => void = () => undefined;
+  const promise = new Promise<T>((settle, fail) => {
     resolve = settle;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe('CsvTab', () => {
@@ -120,6 +122,135 @@ describe('CsvTab', () => {
     expect(tab.snapshot().filteredRowCount).toBe(1);
   });
 
+  it('preserves current row failures and drops rejected requests after query changes or disposal', async () => {
+    const failure = new Error('Unable to read the CSV.');
+    const superseded = deferred<CsvRowWindow>();
+    const disposed = deferred<CsvRowWindow>();
+    const getRows = vi.fn()
+      .mockRejectedValueOnce(failure)
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(disposed.promise);
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-rows': getRows } }), workingCsv);
+
+    await expect(tab.rows(0, 100)).rejects.toBe(failure);
+    expect(tab.snapshot().queryStatus).toBe('failed');
+
+    const previousQuery = tab.rows(0, 100);
+    tab.setSearch('ada');
+    superseded.reject(failure);
+    await expect(previousQuery).resolves.toBeNull();
+    expect(tab.snapshot().queryStatus).toBe('querying');
+
+    const previousTab = tab.rows(0, 100);
+    tab.dispose();
+    const state = tab.snapshot();
+    disposed.reject(failure);
+    await expect(previousTab).resolves.toBeNull();
+    expect(tab.snapshot()).toBe(state);
+  });
+
+  it('keeps the latest Live Stats when superseded requests finish or reject', async () => {
+    const first = deferred<CsvColumnValueCounts>();
+    const second = deferred<CsvColumnValueCounts>();
+    const latest = deferred<CsvColumnValueCounts>();
+    const getCounts = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(latest.promise);
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-value-counts': getCounts } }), workingCsv);
+
+    tab.toggleStats();
+    tab.setSearch('ada');
+    tab.setSearch('grace');
+    latest.resolve(counts(1));
+    await vi.waitFor(() => expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(1) }));
+    const state = tab.snapshot();
+
+    first.resolve(counts(250));
+    second.reject(new Error('Superseded stats failed.'));
+    await Promise.allSettled([first.promise, second.promise]);
+    expect(tab.snapshot()).toBe(state);
+  });
+
+  it('ends the stats continuation on panel close, Reopen CSV, and disposal', async () => {
+    const closed = deferred<CsvColumnValueCounts>();
+    const reopened = deferred<CsvColumnValueCounts>();
+    const disposed = deferred<CsvColumnValueCounts>();
+    const getCounts = vi.fn()
+      .mockReturnValueOnce(closed.promise)
+      .mockReturnValueOnce(reopened.promise)
+      .mockReturnValueOnce(disposed.promise);
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-value-counts': getCounts } }), workingCsv);
+    const listener = vi.fn();
+    tab.subscribe(listener);
+
+    tab.toggleStats();
+    tab.toggleStats();
+    let state = tab.snapshot();
+    closed.resolve(counts(250));
+    await closed.promise;
+    expect(tab.snapshot()).toBe(state);
+
+    tab.toggleStats();
+    tab.replaceWorkingCsv(workingCsvFixture({ dataRevision: 1, rowCount: 3 }));
+    state = tab.snapshot();
+    reopened.reject(new Error('Previous CSV stats failed.'));
+    await Promise.allSettled([reopened.promise]);
+    expect(tab.snapshot()).toBe(state);
+
+    tab.toggleStats();
+    tab.dispose();
+    listener.mockClear();
+    state = tab.snapshot();
+    disposed.resolve(counts(3));
+    await disposed.promise;
+    expect(tab.snapshot()).toBe(state);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('shows a current stats failure and permits another refresh', async () => {
+    const getCounts = vi.fn()
+      .mockRejectedValueOnce(new Error('Counts unavailable.'))
+      .mockResolvedValueOnce(counts(250));
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-value-counts': getCounts } }), workingCsv);
+
+    tab.toggleStats();
+    await vi.waitFor(() => expect(tab.snapshot().stats.result).toEqual({ status: 'failed', message: 'Counts unavailable.' }));
+    tab.setStatsColumn('age');
+    await vi.waitFor(() => expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(250) }));
+  });
+
+  it('preserves an admitted mutation outcome after disposal without updating the tab', async () => {
+    const edit = deferred<CsvCellEditResult>();
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.edit-cell': () => edit.promise } }), workingCsv);
+    const completion = tab.editCell('row-9', 'name', 'Ada');
+    tab.dispose();
+    const state = tab.snapshot();
+
+    edit.resolve({ ...editedState, rowId: 'row-9', column: 'name' });
+    await expect(completion).resolves.toBe(true);
+    expect(tab.snapshot()).toBe(state);
+  });
+
+  it('does not admit row, edit, clipboard, or export work after disposal', async () => {
+    const viewer = createTestCsvViewer();
+    const call = vi.spyOn(viewer, 'call');
+    const tab = new CsvTab(viewer, workingCsv);
+    tab.setFocusedColumn('name');
+    tab.dispose();
+    const state = tab.snapshot();
+
+    await expect(tab.rows(0, 100)).resolves.toBeNull();
+    await expect(tab.editCell('row-9', 'name', 'Ada')).resolves.toBe(false);
+    await expect(tab.copyFocusedColumn()).resolves.toBeUndefined();
+    await tab.export();
+    await tab.exportView();
+    await tab.cancelExport();
+
+    expect(call).not.toHaveBeenCalled();
+    expect(tab.snapshot()).toBe(state);
+  });
+
   it('reports a rejected edit and keeps the previous edit state', async () => {
     const tab = new CsvTab(
       createTestCsvViewer({
@@ -179,6 +310,29 @@ describe('CsvTab', () => {
     expect(state.revision).toBe(0);
   });
 
+  it('shares export admission and releases it after a failure so another export can run', async () => {
+    const pending = deferred<{ status: 'exported'; editState: CsvEditState }>();
+    const exportCsv = vi.fn().mockReturnValueOnce(pending.promise);
+    const exportView = vi.fn(async () => ({ status: 'exported' as const, rowCount: 12 }));
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.export': exportCsv, 'csv.export-view': exportView } }), workingCsv);
+    const completion = tab.export();
+    expect(tab.snapshot().exportOperation?.phase).toBe('delivering');
+
+    await tab.exportView();
+    expect(exportView).not.toHaveBeenCalled();
+    pending.reject(new Error('Export destination unavailable.'));
+    await completion;
+    expect(tab.snapshot().exportOperation).toBeNull();
+    expect(tab.snapshot().editError).toBe('Export destination unavailable.');
+
+    await tab.exportView();
+    expect(exportView).toHaveBeenCalledOnce();
+    expect(tab.snapshot().exportOperation).toBeNull();
+    expect(tab.snapshot().exportConfirmation).toBe('Export complete · 12 rows');
+    expect(tab.snapshot().revision).toBe(0);
+    expect(tab.snapshot().editState).toEqual(workingCsv.editState);
+  });
+
   it('copies the focused column under the current query, nulls as empty lines', async () => {
     const getColumnValues = vi.fn(async () => ({
       workingCsvId: workingCsv.workingCsvId,
@@ -207,6 +361,24 @@ describe('CsvTab', () => {
     });
     expect(writeText).toHaveBeenCalledWith('30\n\n41');
     vi.unstubAllGlobals();
+  });
+
+  it('does not write to the clipboard when the tab closes while values are loading', async () => {
+    const values = deferred<{ workingCsvId: string; column: string; values: string[] }>();
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    try {
+      const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-values': () => values.promise } }), workingCsv);
+      tab.setFocusedColumn('name');
+      const completion = tab.copyFocusedColumn();
+      tab.dispose();
+
+      values.resolve({ workingCsvId: workingCsv.workingCsvId, column: 'name', values: ['Ada'] });
+      await expect(completion).resolves.toBeUndefined();
+      expect(writeText).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('renames the focused column and remaps query, stats, and focus to the new name', async () => {
