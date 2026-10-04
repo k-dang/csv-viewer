@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonView, ComparisonWindowOutcome } from '@csv-viewer/workspace/csv-viewer';
+import type { ComparisonMutationOutcome, ComparisonView, ComparisonWindowOutcome } from '@csv-viewer/workspace/csv-viewer';
 import { ComparisonTab } from './comparison-tab';
 import { comparisonFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer } from '../test-helpers/csv-viewer';
@@ -134,6 +134,49 @@ describe('ComparisonTab', () => {
     const pendingResult = tab.rows(0, 100);
     tab.receive(comparisonFixture({ version: 3, applied: applied('result-2') }));
     expect(await pendingResult).toBeNull();
+  });
+
+  it('drops a pending row window after disposal and does not start more requests', async () => {
+    const pending = Promise.withResolvers<ComparisonWindowOutcome>();
+    const getWindow = vi.fn(() => pending.promise);
+    const swap = vi.fn();
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': getWindow,
+      'comparison.swap': swap,
+    } }), comparisonFixture({ applied: applied('result-1') }));
+
+    const rows = tab.rows(0, 100);
+    tab.dispose();
+    pending.resolve(window('result-1'));
+    expect(await rows).toBeNull();
+    expect(await tab.rows(0, 100)).toBeNull();
+    await tab.swap();
+    expect(getWindow).toHaveBeenCalledTimes(1);
+    expect(swap).not.toHaveBeenCalled();
+  });
+
+  it('keeps the original row-window rejection for the caller', async () => {
+    const failure = new Error('The row request failed.');
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': vi.fn().mockRejectedValue(failure),
+    } }), comparisonFixture({ applied: applied('result-1') }));
+
+    await expect(tab.rows(0, 100)).rejects.toBe(failure);
+    expect(tab.snapshot().actionError).toBeNull();
+  });
+
+  it('keeps a newer projection when a pending swap completes with an older one', async () => {
+    const pending = Promise.withResolvers<ComparisonMutationOutcome>();
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.swap': () => pending.promise,
+    } }), comparisonFixture());
+
+    const swap = tab.swap();
+    tab.receive(comparisonFixture({ version: 3, availableKeyColumns: ['current'] }));
+    pending.resolve({ status: 'changed', comparison: comparisonFixture({ version: 2, availableKeyColumns: ['old'] }) });
+    await swap;
+    expect(tab.snapshot().comparison.version).toBe(3);
+    expect(tab.snapshot().comparison.availableKeyColumns).toEqual(['current']);
   });
 
   it('dismisses the current attempt banner', () => {

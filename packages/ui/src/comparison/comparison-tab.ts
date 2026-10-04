@@ -5,6 +5,7 @@ import type {
   ComparisonWindow,
   CsvViewer,
 } from '@csv-viewer/workspace/csv-viewer';
+import { Cause, Effect } from 'effect';
 
 export type ComparisonTabState = {
   comparison: ComparisonView;
@@ -25,7 +26,7 @@ export type ComparisonTabState = {
  * Rules kept here so they cannot drift: commands read their inputs from this state and are no-ops
  * without them; a rejected outcome or a failed call becomes `actionError`; editing the draft hides
  * the current invalid-key diagnostics; `receive` ignores older projections; a row window from a
- * superseded result or view mode is dropped; nothing settles after `dispose`.
+ * superseded result or view mode is dropped; late requests never update state after `dispose`.
  */
 export class ComparisonTab {
   private state: ComparisonTabState;
@@ -96,34 +97,31 @@ export class ComparisonTab {
   /** Starts validating and applying the Draft Comparison Key. Outcomes arrive through `receive`. */
   applyKey(): Promise<void> {
     const { draftKey } = this.state;
-    return draftKey.length === 0 ? Promise.resolve() : this.begin({ kind: 'apply-key', key: draftKey });
+    return Effect.runPromise(draftKey.length === 0 ? Effect.void : this.begin({ kind: 'apply-key', key: draftKey }));
   }
 
   refresh(): Promise<void> {
-    return this.state.comparison.applied ? this.begin({ kind: 'refresh' }) : Promise.resolve();
+    return Effect.runPromise(this.state.comparison.applied ? this.begin({ kind: 'refresh' }) : Effect.void);
   }
 
   swap(): Promise<void> {
-    return this.command('Unable to swap comparison sides.', async () => {
-      const outcome = await this.viewer.call({ operation: 'comparison.swap', comparisonId: this.comparisonId });
+    return Effect.runPromise(this.command('Unable to swap comparison sides.', Effect.gen({ self: this }, function* () {
+      const outcome = yield* fromPromise(() => this.viewer.call({ operation: 'comparison.swap', comparisonId: this.comparisonId }));
       if (outcome.status === 'rejected') return outcome.fault.message;
       this.receive(outcome.comparison);
       return null;
-    });
+    })));
   }
 
   /** Asks to cancel the operation in flight. No-op when none is. */
   cancel(): Promise<void> {
     const operation = this.state.comparison.operation;
-    if (!operation) return Promise.resolve();
-    return this.command('Unable to cancel comparison.', async () => {
-      await this.viewer.call({
-        operation: 'comparison.cancel',
-        comparisonId: this.comparisonId,
-        operationId: operation.operationId,
-      });
-      return null;
-    });
+    if (!operation) return Effect.runPromise(Effect.void);
+    return Effect.runPromise(this.command('Unable to cancel comparison.', fromPromise(() => this.viewer.call({
+      operation: 'comparison.cancel',
+      comparisonId: this.comparisonId,
+      operationId: operation.operationId,
+    })).pipe(Effect.as(null))));
   }
 
   /**
@@ -131,11 +129,20 @@ export class ComparisonTab {
    * applied result, or when the result or the view mode moved on while the request was in flight,
    * so the caller shows nothing rather than a superseded window.
    */
-  async rows(offset: number, limit: number): Promise<ComparisonWindow | null> {
+  rows(offset: number, limit: number): Promise<ComparisonWindow | null> {
+    return Effect.runPromise(this.requestRows(offset, limit));
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.listeners.clear();
+  }
+
+  private readonly requestRows = Effect.fnUntraced(function* (this: ComparisonTab, offset: number, limit: number) {
     const { comparison, rows, columns } = this.state;
     const applied = comparison.applied;
-    if (!applied) return null;
-    const outcome = await this.viewer.call({
+    if (this.disposed || !applied) return null;
+    const outcome = yield* fromPromise(() => this.viewer.call({
       operation: 'comparison.get-window',
       comparisonId: comparison.comparisonId,
       resultToken: applied.resultToken,
@@ -143,7 +150,7 @@ export class ComparisonTab {
       limit,
       rows,
       columns,
-    });
+    }));
     const current = this.state;
     const stale =
       this.disposed ||
@@ -152,31 +159,29 @@ export class ComparisonTab {
       current.columns !== columns;
     if (stale || outcome.status !== 'ready') return null;
     return outcome.window;
-  }
+  });
 
-  dispose(): void {
-    this.disposed = true;
-    this.listeners.clear();
-  }
-
-  private begin(request: { kind: 'apply-key'; key: string[] } | { kind: 'refresh' }): Promise<void> {
-    return this.command('Unable to start comparison.', async () => {
-      const outcome = await this.viewer.call({ operation: 'comparison.begin', comparisonId: this.comparisonId, ...request });
+  private begin(request: { kind: 'apply-key'; key: string[] } | { kind: 'refresh' }): Effect.Effect<void> {
+    return this.command('Unable to start comparison.', Effect.gen({ self: this }, function* () {
+      const outcome = yield* fromPromise(() => this.viewer.call({ operation: 'comparison.begin', comparisonId: this.comparisonId, ...request }));
       return outcome.status === 'rejected' ? outcome.fault.message : null;
-    });
+    }));
   }
 
   /** Runs one command; the operation returns the rejection message, or null when accepted. */
-  private async command(fallback: string, operation: () => Promise<string | null>): Promise<void> {
+  private readonly command = Effect.fnUntraced(function* (
+    this: ComparisonTab,
+    fallback: string,
+    operation: Effect.Effect<string | null, unknown>,
+  ) {
+    if (this.disposed) return;
     this.set({ actionError: null });
-    let actionError: string | null;
-    try {
-      actionError = await operation();
-    } catch (error) {
-      actionError = error instanceof Error && error.message ? error.message : fallback;
-    }
+    const actionError = yield* operation.pipe(Effect.catchCause((cause) => {
+      const error = Cause.squash(cause);
+      return Effect.succeed(error instanceof Error && error.message ? error.message : fallback);
+    }));
     if (actionError !== null && !this.disposed) this.set({ actionError });
-  }
+  });
 
   private editDraft(draftKey: string[]): void {
     const attempt = this.state.comparison.lastAttempt;
@@ -191,4 +196,9 @@ export class ComparisonTab {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
   }
+}
+
+/** Adapt the CsvViewer Promise boundary while preserving its rejection for row-window callers. */
+function fromPromise<A>(operation: () => Promise<A>) {
+  return Effect.tryPromise({ try: operation, catch: (error) => error });
 }

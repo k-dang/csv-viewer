@@ -42,6 +42,8 @@ To drive the real app by hand or with an agent, use the [verification skill](.ag
 
 Desktop and web share one `CsvViewer` request and event contract. `packages/workspace` implements it with Effect 4. Edits to one file run in order, and reads run alongside them. A table stays alive while any admitted request holds it. Shutdown waits for that work, then releases tables, connections, and source buffers, and retries any cleanup that failed. [Workspace resource ownership](packages/workspace/README.md) describes these rules in detail.
 
+The renderer controllers compose asynchronous commands as Effects and expose Promises to React and AG Grid. They keep result-version checks to discard stale replies. A CSV Tab interrupts its local stats refresh when superseded or closed; the underlying `CsvViewer` request still runs, and the workspace owns its cleanup. Admitted edits finish, and acquired sources complete their handoff, even when the renderer stops.
+
 ## Diagnostics
 
 The app logs each operation's stages, timings, outcome, and cleanup failures. Logs never contain file names, paths, column names, cell values, query text, SQL, or driver errors. To capture logs on desktop or web, see [Read diagnostics](.agents/skills/verify-csv-viewer/SKILL.md#read-diagnostics).
