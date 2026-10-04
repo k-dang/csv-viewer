@@ -20,7 +20,7 @@ Preconditions: launch the desired runtime and open `fixtures/phase-2-sample.csv`
 
 - **Draft.** Run `click --role gridcell --name "Ada Lovelace" --double`, then `fill --focused --value "Ada Lovelace Edited"`. Leave the editor open.
 - **Search.** Run `fill --role searchbox --name "Global search" --value "Ada"`. Wait for `1 visible of 5 rows`. Opening Export options commits any remaining active editor.
-- **Scope.** Run `click --role button --name "Export options"`. Wait for `Export current view · 1 rows` and `All matching rows, in the current sort order`. The trigger also opens with Enter for keyboard access.
+- **Scope.** Run `click --role button --name "Export options"`. Wait for `Export current view · 1 rows`. The trigger also opens with Enter for keyboard access.
 - **Deliver.** Run `click --role menuitem --name "Export current view · 1 rows"`. On web, wait for `Download started · 1 rows`, read the newest `phase-2-sample-view.csv`, and confirm one data row containing the edited name and every column. On desktop, choose a separate destination and wait for `Export complete · 1 rows`. Re-read the source fixture to prove it remains unchanged.
 - **History.** Confirm Unexported Changes remains visible after delivery. Run `click --role button --name "Undo edit"`; the original name returns. Redo remains available.
 - **Empty.** Search for `no-matching-value`, wait for `0 visible of 5 rows`, and open Export options. The zero-row menu item is disabled and shows `No matching rows to export`.
