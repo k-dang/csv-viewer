@@ -16,7 +16,7 @@ export function CsvExportControls({ tab, commitEditing, exportView }: {
   const busy = state.exportOperation !== null;
   const countReady = state.queryStatus === 'ready';
   const explanation = !countReady ? 'Waiting for the current query'
-    : state.filteredRowCount === 0 ? 'No matching rows to export' : 'All matching rows, in the current sort order';
+    : state.filteredRowCount === 0 ? 'No matching rows to export' : null;
   return (
     <>
       <div className="flex items-center">
@@ -37,7 +37,7 @@ export function CsvExportControls({ tab, commitEditing, exportView }: {
                   <FileDown className="size-4" />
                   Export current view{countReady ? ` · ${formatNumber(state.filteredRowCount)} rows` : ''}
                 </Menu.Item>
-                <p className="px-3 pb-2 text-xs text-muted-foreground">{explanation}</p>
+                {explanation ? <p className="px-3 pb-2 text-xs text-muted-foreground">{explanation}</p> : null}
               </Menu.Popup>
             </Menu.Positioner>
           </Menu.Portal>
