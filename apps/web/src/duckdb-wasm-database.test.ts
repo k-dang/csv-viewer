@@ -241,10 +241,11 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
 
   it('reports a Worker crash once and refuses to restart the engine', async () => {
     const worker = new ControllableWorker();
+    const createWorker = vi.fn(() => Promise.resolve(worker));
     database = new DuckDbWasmWorkspaceDatabase({
       mainModule: 'duckdb.wasm',
       mainWorker: 'duckdb.worker.js',
-      createWorker: () => Promise.resolve(worker),
+      createWorker,
     });
     Effect.runFork(Effect.scoped(database.open()));
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -258,6 +259,11 @@ describe('DuckDbWasmWorkspaceDatabase', () => {
       name: 'DataEngineError',
       cause: { message: stoppedEngineMessage },
     });
+    await expect(Effect.runPromise(Effect.scoped(database.open()))).rejects.toMatchObject({
+      name: 'DataEngineError',
+      cause: { message: stoppedEngineMessage },
+    });
+    expect(createWorker).toHaveBeenCalledOnce();
   });
 
   it('reports a failed Worker termination after a crash from the engine release', async () => {

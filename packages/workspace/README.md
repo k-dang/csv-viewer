@@ -53,7 +53,7 @@ Each capability module owns its service tag, interface, and Layer:
 
 The runtime supplies its host. Tests can supply their own Comparison executor. `workspace-runtime.ts` composes the Layers. Implementation classes stay private to their modules.
 
-The database acquires its engine and owner connection eagerly, in a scope. Each runtime's database registers its release steps with `releaseOnClose` before it can hold the matching resource, so a failed or interrupted acquisition releases exactly what it acquired, through the same `workspace.release-database` stage as disposal. The workspace exists only after acquisition succeeds. Release steps run in reverse order: the owner connection closes first, then the engine.
+The database acquires its engine and owner connection eagerly, in a scope. Each runtime's database either registers a release step with `releaseOnClose` before it can hold the matching resource, or acquires the resource with `acquireWithRelease`, which registers its release with no interruptible gap. A failed or interrupted acquisition therefore releases exactly what it acquired, through the same `workspace.release-database` stage as disposal. The workspace exists only after acquisition succeeds. Release steps run in reverse order: the owner connection closes first, then the engine.
 
 Disposal runs in this order:
 

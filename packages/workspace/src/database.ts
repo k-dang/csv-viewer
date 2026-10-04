@@ -41,8 +41,9 @@ export const WorkspaceDatabase = Context.Service<WorkspaceDatabase>('csv-viewer/
 
 /**
  * Acquires a runtime's database in the given scope. Each adapter registers its release steps with
- * `releaseOnClose` before it can hold the matching resource, so an acquisition that fails or is
- * interrupted partway releases exactly what it acquired.
+ * `releaseOnClose` before it can hold the matching resource, or acquires the resource with
+ * `acquireWithRelease`, so an acquisition that fails or is interrupted partway releases exactly
+ * what it acquired.
  */
 export type OpenWorkspaceDatabase = Effect.Effect<WorkspaceDatabase, DataEngineError, Scope.Scope>;
 
@@ -56,12 +57,25 @@ export class DatabaseReleaseError extends Data.TaggedError('DatabaseReleaseError
  * connection closes before the engine stops, and every step runs even when an earlier one failed.
  */
 export function releaseOnClose(
-  step: 'connection' | 'engine',
+  step: DatabaseReleaseStep,
   release: Effect.Effect<void, DataEngineError>,
 ): Effect.Effect<void, never, Scope.Scope> {
-  return Effect.addFinalizer(() => observeStage(`workspace.close-database-${step}`, release).pipe(
-    Effect.orDie,
-  ));
+  return Effect.addFinalizer(() => observeRelease(step, release));
+}
+
+/** Acquires one resource and registers its release step without an interruptible gap between them. */
+export function acquireWithRelease<A>(
+  step: DatabaseReleaseStep,
+  acquire: Effect.Effect<A, DataEngineError>,
+  release: (resource: A) => Effect.Effect<void, DataEngineError>,
+): Effect.Effect<A, DataEngineError, Scope.Scope> {
+  return Effect.acquireRelease(acquire, (resource) => observeRelease(step, release(resource)));
+}
+
+type DatabaseReleaseStep = 'connection' | 'engine';
+
+function observeRelease(step: DatabaseReleaseStep, release: Effect.Effect<void, DataEngineError>) {
+  return observeStage(`workspace.close-database-${step}`, release).pipe(Effect.orDie);
 }
 
 /**

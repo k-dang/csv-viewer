@@ -2,7 +2,7 @@ import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
 import { Effect, type Scope } from 'effect';
 import {
   driverEffect,
-  releaseOnClose,
+  acquireWithRelease,
   DataEngineError,
   type WorkspaceDatabase,
   type WorkspaceDatabaseConnection,
@@ -66,13 +66,15 @@ export class DuckDbWorkspaceDatabase implements WorkspaceDatabase {
   /** Closing the scope closes the owner connection, then the instance. */
   static open(): Effect.Effect<DuckDbWorkspaceDatabase, DataEngineError, Scope.Scope> {
     return Effect.gen(function* () {
-      const instance = yield* driverEffect(() => DuckDBInstance.create(':memory:'));
-      yield* releaseOnClose('engine', Effect.try({
-        try: () => instance.closeSync(),
+      const instance = yield* acquireWithRelease('engine', driverEffect(() => DuckDBInstance.create(':memory:')), (opened) => Effect.try({
+        try: () => opened.closeSync(),
         catch: (cause) => new DataEngineError({ cause }),
       }));
-      const connection = new NativeDuckDbConnection(yield* driverEffect(() => instance.connect()));
-      yield* releaseOnClose('connection', connection.close());
+      const connection = yield* acquireWithRelease(
+        'connection',
+        driverEffect(async () => new NativeDuckDbConnection(await instance.connect())),
+        (opened) => opened.close(),
+      );
       return new DuckDbWorkspaceDatabase(instance, connection);
     });
   }

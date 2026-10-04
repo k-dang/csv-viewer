@@ -184,6 +184,8 @@ export class DuckDbWasmWorkspaceDatabase implements WorkspaceDatabase {
     return Effect.gen({ self: this }, function* () {
       yield* releaseOnClose('engine', this.closeEngine());
       yield* releaseOnClose('connection', this.closeOwnerConnection());
+      // A stopped engine stays stopped: its release would not terminate a newly created Worker.
+      yield* Effect.try({ try: () => this.throwIfFatal(), catch: (cause) => new DataEngineError({ cause }) });
       yield* this.start();
       yield* observeStage('web.startup-check', this.verifyInMemoryCsvQuery());
       return this;
