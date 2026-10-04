@@ -36,7 +36,7 @@ async function openCsv(page: Page) {
 }
 
 test('can open another CSV after source preparation defects without exhausting capacity', { tag: '@dev' }, async ({ page }, testInfo) => {
-  await page.route('**/src/web-workspace-host.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/web-workspace-host.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     expect(source).toContain('registerSource(file) {');
@@ -101,7 +101,7 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   const diagnostics = captureDiagnostics(page);
   // In the dev build, register a faulty consumer before the renderer's real subscription.
   // The built-bundle suite exercises the same Worker failure without source instrumentation.
-  await page.route('**/src/main.tsx', async (route) => {
+  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
@@ -140,7 +140,7 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
 test('navigation starts disposal and creates a usable empty workspace', { tag: '@dev' }, async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);
   // Observe the existing disposal callback synchronously: unload need not finish async cleanup.
-  await page.route('**/src/main.tsx', async (route) => {
+  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'dispose: async () => {';

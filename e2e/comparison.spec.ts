@@ -14,7 +14,7 @@ test('preserves cleanup defects when closing a source and permits a successful r
     if (message.text().includes('message=csv.close')) diagnostics.push(message.text());
   });
   // Fail one snapshot deletion at the engine boundary; the real close and retry still run.
-  await page.route('**/src/duckdb-wasm-database.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'run(sql, values) {';

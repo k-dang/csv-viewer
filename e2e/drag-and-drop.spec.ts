@@ -85,7 +85,7 @@ test('blocks drops inside a modal and preserves the candidate picker', async ({ 
 });
 
 test('declines a second drop while the first source is being acquired', async ({ page }) => {
-  await page.route('**/src/web-composition.ts', async (route) => {
+  await page.route((url) => url.pathname === '/src/web-composition.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();
     const anchor = 'acquireDroppedSource: async (file) => host.registerSource(file)';
