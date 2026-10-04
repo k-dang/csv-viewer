@@ -1,4 +1,27 @@
 import { expect, test } from '@playwright/test';
+import { openCsv } from './helpers/csv';
+
+test('sidebar collapse keeps CSV Tabs in the same vertical positions', async ({ page }) => {
+  await page.goto('/');
+  await openCsv(page, 'people.csv', 'name\nAda\n');
+  await openCsv(page, 'other.csv', 'name\nGrace\n');
+  const tabs = page.getByRole('tab');
+  const positions = await tabs.evaluateAll((elements) => elements.map((tab) => tab.getBoundingClientRect().y));
+
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await expect.poll(() => tabs.evaluateAll((elements) => elements.map((tab) => tab.getBoundingClientRect().y))).toEqual(positions);
+  await expect(page.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeFocused();
+  await expect(page.getByRole('tab', { name: 'other.csv', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const openCenter = await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true })
+    .evaluate((button) => { const rect = button.getBoundingClientRect(); return rect.x + rect.width / 2; });
+  await expect.poll(() => tabs.evaluateAll((elements) => elements.map((tab) => {
+    const rect = tab.getBoundingClientRect();
+    return rect.x + rect.width / 2;
+  }))).toEqual(positions.map(() => openCenter));
+
+  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+  await expect.poll(() => tabs.evaluateAll((elements) => elements.map((tab) => tab.getBoundingClientRect().y))).toEqual(positions);
+});
 
 test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page }) => {
   // Hold only delivery of the real workspace result. File selection, queries, and close

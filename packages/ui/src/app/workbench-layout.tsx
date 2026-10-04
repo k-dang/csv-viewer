@@ -126,7 +126,7 @@ export function WorkbenchLayout({
 
 function SidebarHeading({ children }: { children: ReactNode }) {
   return (
-    <p className="px-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-collapsed/sidebar:sr-only">
+    <p className="truncate px-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-collapsed/sidebar:invisible">
       {children}
     </p>
   );
