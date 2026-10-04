@@ -153,48 +153,38 @@ export class CsvTab {
    * One row window under the current query. Resolves null when the query or data moved on while
    * the request was in flight, so the caller shows nothing rather than a superseded window.
    */
-  rows(offset: number, limit: number): Promise<CsvRowWindow | null> {
-    return Effect.runPromise(this.loadRows(offset, limit));
-  }
-
-  private readonly loadRows = Effect.fnUntraced(function* (
-    this: CsvTab,
-    offset: number,
-    limit: number,
-  ): Effect.fn.Return<CsvRowWindow | null, unknown> {
+  async rows(offset: number, limit: number): Promise<CsvRowWindow | null> {
     if (this.disposed) return null;
     const version = this.queryVersion;
     const { query, workingCsv } = this.state;
     this.set({ queryStatus: 'querying' });
-    return yield* fromPromise(() => this.viewer.call({
-      operation: 'csv.get-rows',
-      workingCsvId: workingCsv.workingCsvId,
-      offset,
-      limit,
-      sort: query.sort,
-      filters: query.filters,
-      search: query.search.trim(),
-    })).pipe(Effect.matchEffect({
-      onSuccess: (window) => Effect.sync(() => {
-        if (this.stale(version)) return null;
-        this.set({
-          queryStatus: 'ready',
-          filteredRowCount: window.filteredRowCount,
-          totalRowCount: window.totalRowCount,
-        });
-        return window;
-      }),
-      onFailure: (cause) => Effect.gen({ self: this }, function* () {
-        if (this.stale(version)) return null;
-        this.set({ queryStatus: 'failed' });
-        return yield* Effect.fail(cause);
-      }),
-    }));
-  });
+    try {
+      const window = await this.viewer.call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset,
+        limit,
+        sort: query.sort,
+        filters: query.filters,
+        search: query.search.trim(),
+      });
+      if (this.stale(version)) return null;
+      this.set({
+        queryStatus: 'ready',
+        filteredRowCount: window.filteredRowCount,
+        totalRowCount: window.totalRowCount,
+      });
+      return window;
+    } catch (error) {
+      if (this.stale(version)) return null;
+      this.set({ queryStatus: 'failed' });
+      throw error;
+    }
+  }
 
   /** Resolves false when the edit was rejected, so the grid can restore the previous cell value. */
   editCell(rowId: string, column: string, value: string): Promise<boolean> {
-    return Effect.runPromise(this.mutate('Unable to edit cell.', () =>
+    return this.mutate('Unable to edit cell.', () =>
       this.viewer.call({
         operation: 'csv.edit-cell',
         workingCsvId: this.workingCsvId,
@@ -202,11 +192,11 @@ export class CsvTab {
         column,
         value,
       }),
-    ));
+    );
   }
 
   insertRow(placement: CsvInsertRowPlacement): Promise<boolean> {
-    return Effect.runPromise(this.mutate('Unable to insert row.', () =>
+    return this.mutate('Unable to insert row.', () =>
       this.viewer.call({
         operation: 'csv.insert-row',
         workingCsvId: this.workingCsvId,
@@ -214,69 +204,69 @@ export class CsvTab {
         rowIds: this.state.selectedRowIds,
         hasActiveQuery: this.state.hasActiveQuery,
       }),
-    ));
+    );
   }
 
   deleteSelectedRows(): Promise<boolean> {
     if (this.state.selectedRowIds.length === 0) return Promise.resolve(false);
-    return Effect.runPromise(this.mutate('Unable to delete selected rows.', () =>
+    return this.mutate('Unable to delete selected rows.', () =>
       this.viewer.call({
         operation: 'csv.delete-rows',
         workingCsvId: this.workingCsvId,
         rowIds: this.state.selectedRowIds,
       }),
-    ));
+    );
   }
 
   undo(): Promise<boolean> {
-    return Effect.runPromise(this.mutate('Unable to undo edit.', () =>
+    return this.mutate('Unable to undo edit.', () =>
       this.viewer.call({ operation: 'csv.undo', workingCsvId: this.workingCsvId }),
-    ));
+    );
   }
 
   redo(): Promise<boolean> {
-    return Effect.runPromise(this.mutate('Unable to redo edit.', () =>
+    return this.mutate('Unable to redo edit.', () =>
       this.viewer.call({ operation: 'csv.redo', workingCsvId: this.workingCsvId }),
-    ));
+    );
   }
 
   renameFocusedColumn(name: string): Promise<boolean> {
     const column = this.state.focusedColumn;
     if (!column) return Promise.resolve(false);
     if (name.trim() === column) return Promise.resolve(true);
-    return Effect.runPromise(this.mutate('Unable to rename column.', () =>
+    return this.mutate('Unable to rename column.', () =>
       this.viewer.call({
         operation: 'csv.rename-column',
         workingCsvId: this.workingCsvId,
         column,
         name,
       }),
-    ));
+    );
   }
 
   insertColumn(placement: CsvColumnPlacement): Promise<boolean> {
     const column = this.state.focusedColumn;
     if (!column) return Promise.resolve(false);
-    return Effect.runPromise(this.mutate('Unable to insert column.', () =>
+    return this.mutate('Unable to insert column.', () =>
       this.viewer.call({
         operation: 'csv.insert-column',
         workingCsvId: this.workingCsvId,
         column,
         placement,
       }),
-    ));
+    );
   }
 
   deleteFocusedColumn(): Promise<boolean> {
     const column = this.state.focusedColumn;
     if (!column) return Promise.resolve(false);
-    return Effect.runPromise(this.mutate('Unable to delete column.', () =>
+    return this.mutate('Unable to delete column.', () =>
       this.viewer.call({
         operation: 'csv.delete-column',
         workingCsvId: this.workingCsvId,
         column,
       }),
-    ));
+    );
   }
 
   reorderColumns(columns: readonly string[]): Promise<boolean> {
@@ -284,51 +274,48 @@ export class CsvTab {
     if (columns.length === current.length && columns.every((name, index) => name === current[index])) {
       return Promise.resolve(true);
     }
-    return Effect.runPromise(this.mutate('Unable to reorder columns.', () =>
+    return this.mutate('Unable to reorder columns.', () =>
       this.viewer.call({
         operation: 'csv.reorder-columns',
         workingCsvId: this.workingCsvId,
         columns: [...columns],
       }),
-    ));
+    );
   }
 
   /**
    * Copies the focused column under the current query to the clipboard, one value per line, nulls
    * as empty lines. No-op without a focused column; a failure is shown like an edit error.
    */
-  copyFocusedColumn(): Promise<{ column: string; count: number } | undefined> {
-    return Effect.runPromise(Effect.gen({ self: this }, function* () {
-      const { focusedColumn, query, workingCsv } = this.state;
-      if (this.disposed || !focusedColumn) return;
-      this.set({ editError: null });
-      const result = yield* fromPromise(() => this.viewer.call({
+  async copyFocusedColumn(): Promise<{ column: string; count: number } | undefined> {
+    const { focusedColumn, query, workingCsv } = this.state;
+    if (this.disposed || !focusedColumn) return;
+    this.set({ editError: null });
+    try {
+      const result = await this.viewer.call({
         operation: 'csv.get-column-values',
         workingCsvId: workingCsv.workingCsvId,
         column: focusedColumn,
         sort: query.sort,
         filters: query.filters,
         search: query.search.trim(),
-      }));
+      });
       if (this.disposed) return;
-      yield* fromPromise(() => navigator.clipboard.writeText(result.values.map((value) => value ?? '').join('\n')));
+      await navigator.clipboard.writeText(result.values.map((value) => value ?? '').join('\n'));
       if (this.disposed) return;
       return { column: focusedColumn, count: result.values.length };
-    }).pipe(Effect.catch((cause) => Effect.sync(() => {
-      this.fail(cause, 'Unable to copy column.');
-      return undefined;
-    }))));
+    } catch (error) {
+      this.fail(error, 'Unable to copy column.');
+    }
   }
 
   /** Export CSV changes no data, so the grid keeps its rows; only the edit state moves. */
   export(): Promise<void> {
-    return Effect.runPromise(this.withExport('delivering', 'Unable to export CSV.', () =>
-      Effect.gen({ self: this }, function* () {
-        const result = yield* fromPromise(() => this.viewer.call({ operation: 'csv.export', workingCsvId: this.workingCsvId }));
-        if (this.disposed || result.status === 'cancelled') return;
-        this.set({ editState: result.editState, exportConfirmation: this.viewer.capabilities.exportCsvSuccessMessage });
-      }),
-    ));
+    return this.withExport('delivering', 'Unable to export CSV.', async () => {
+      const result = await this.viewer.call({ operation: 'csv.export', workingCsvId: this.workingCsvId });
+      if (this.disposed || result.status === 'cancelled') return;
+      this.set({ editState: result.editState, exportConfirmation: this.viewer.capabilities.exportCsvSuccessMessage });
+    });
   }
 
   receiveExport(event: CsvViewExportEvent): void {
@@ -338,25 +325,23 @@ export class CsvTab {
   }
 
   exportView(): Promise<void> {
-    return Effect.runPromise(this.withExport('preparing', 'Unable to export current view.', (operationId) =>
-      Effect.gen({ self: this }, function* () {
-        const { query } = this.state;
-        const result = yield* fromPromise(() => this.viewer.call({ operation: 'csv.export-view', workingCsvId: this.workingCsvId,
-          operationId, sort: query.sort, filters: query.filters, search: query.search.trim() }));
-        if (this.disposed) return;
-        if (result.status === 'empty') this.set({ exportConfirmation: 'No matching rows to export' });
-        else if (result.status === 'exported') this.set({ exportConfirmation:
-          `${this.viewer.capabilities.exportCsvSuccessMessage} · ${result.rowCount.toLocaleString()} rows` });
-      }),
-    ));
+    return this.withExport('preparing', 'Unable to export current view.', async (operationId) => {
+      const { query } = this.state;
+      const result = await this.viewer.call({ operation: 'csv.export-view', workingCsvId: this.workingCsvId,
+        operationId, sort: query.sort, filters: query.filters, search: query.search.trim() });
+      if (this.disposed) return;
+      if (result.status === 'empty') this.set({ exportConfirmation: 'No matching rows to export' });
+      else if (result.status === 'exported') this.set({ exportConfirmation:
+        `${this.viewer.capabilities.exportCsvSuccessMessage} · ${result.rowCount.toLocaleString()} rows` });
+    });
   }
 
-  cancelExport(): Promise<void> {
-    return Effect.runPromise(Effect.gen({ self: this }, function* () {
-      const operation = this.state.exportOperation;
-      if (this.disposed || !operation || operation.phase !== 'preparing') return;
-      yield* fromPromise(() => this.viewer.call({ operation: 'csv.cancel-view-export', workingCsvId: this.workingCsvId, operationId: operation.operationId }));
-    }).pipe(Effect.catch((cause) => Effect.sync(() => this.fail(cause, 'Unable to cancel export.')))));
+  async cancelExport(): Promise<void> {
+    const operation = this.state.exportOperation;
+    if (this.disposed || !operation || operation.phase !== 'preparing') return;
+    try {
+      await this.viewer.call({ operation: 'csv.cancel-view-export', workingCsvId: this.workingCsvId, operationId: operation.operationId });
+    } catch (error) { this.fail(error, 'Unable to cancel export.'); }
   }
 
   dispose(): void {
@@ -366,58 +351,52 @@ export class CsvTab {
   }
 
   /** Export admission and cleanup are shared; completion preserves each export's edit semantics. */
-  private readonly withExport = Effect.fnUntraced(function* (
-    this: CsvTab,
+  private async withExport(
     phase: 'preparing' | 'delivering',
     fallback: string,
-    operation: (operationId: string) => Effect.Effect<void, unknown>,
-  ) {
+    operation: (operationId: string) => Promise<void>,
+  ): Promise<void> {
     if (this.disposed || this.state.exportOperation) return;
     const operationId = crypto.randomUUID();
     this.set({ editError: null, exportConfirmation: null, exportOperation: { operationId, phase } });
-    yield* Effect.suspend(() => operation(operationId)).pipe(
-      Effect.catch((cause) => Effect.sync(() => this.fail(cause, fallback))),
-      Effect.ensuring(Effect.sync(() => {
-        if (!this.disposed && this.state.exportOperation?.operationId === operationId) this.set({ exportOperation: null });
-      })),
-    );
-  });
+    try {
+      await operation(operationId);
+    } catch (error) {
+      this.fail(error, fallback);
+    } finally {
+      if (!this.disposed && this.snapshot().exportOperation?.operationId === operationId) this.set({ exportOperation: null });
+    }
+  }
 
-  private readonly mutate = Effect.fnUntraced(function* (
-    this: CsvTab,
-    fallback: string,
-    operation: () => Promise<CsvEditState>,
-  ) {
+  private async mutate(fallback: string, operation: () => Promise<CsvEditState>): Promise<boolean> {
     if (this.disposed) return false;
     this.set({ editError: null });
-    return yield* fromPromise(operation).pipe(Effect.match({
-      onSuccess: (result) => {
-        // An admitted write still resolves successfully after disposal; the grid uses this result.
-        if (this.disposed) return true;
-        this.queryVersion += 1;
-        const columns = schemaColumns(result);
-        const workingCsv = columns
-          ? { ...this.state.workingCsv, columns }
-          : this.state.workingCsv;
-        const remapped = columns ? remapColumnNames(this.state, columns) : {};
-        this.set({
-          workingCsv,
-          ...remapped,
-          editState: toEditState(result),
-          revision: this.state.revision + 1,
-          selectedRowIds: [],
-          exportConfirmation: null,
-          queryStatus: 'querying',
-        });
-        this.refreshStats();
-        return true;
-      },
-      onFailure: (cause) => {
-        this.fail(cause, fallback);
-        return false;
-      },
-    }));
-  });
+    try {
+      const result = await operation();
+      // An admitted write still resolves successfully after disposal; the grid uses this result.
+      if (this.disposed) return true;
+      this.queryVersion += 1;
+      const columns = schemaColumns(result);
+      const workingCsv = columns
+        ? { ...this.state.workingCsv, columns }
+        : this.state.workingCsv;
+      const remapped = columns ? remapColumnNames(this.state, columns) : {};
+      this.set({
+        workingCsv,
+        ...remapped,
+        editState: toEditState(result),
+        revision: this.state.revision + 1,
+        selectedRowIds: [],
+        exportConfirmation: null,
+        queryStatus: 'querying',
+      });
+      this.refreshStats();
+      return true;
+    } catch (error) {
+      this.fail(error, fallback);
+      return false;
+    }
+  }
 
   private fail(cause: unknown, fallback: string): void {
     if (this.disposed) return;
@@ -436,17 +415,20 @@ export class CsvTab {
     if (this.disposed || !this.state.stats.open) return;
     const { query, stats, workingCsv } = this.state;
     this.set({ stats: { ...stats, result: { status: 'loading' } } });
-    this.statsFiber = Effect.runFork(fromPromise(() => this.viewer.call({
-      operation: 'csv.get-column-value-counts',
-      workingCsvId: workingCsv.workingCsvId,
-      column: stats.column,
-      filters: query.filters,
-      search: query.search.trim(),
-    })).pipe(Effect.matchEffect({
+    this.statsFiber = Effect.runFork(Effect.tryPromise({
+      try: () => this.viewer.call({
+        operation: 'csv.get-column-value-counts',
+        workingCsvId: workingCsv.workingCsvId,
+        column: stats.column,
+        filters: query.filters,
+        search: query.search.trim(),
+      }),
+      catch: (error) => error,
+    }).pipe(Effect.matchEffect({
       onSuccess: (counts) => Effect.sync(() => this.settleStats({ status: 'ready', counts })),
-      onFailure: (cause) => Effect.sync(() => this.settleStats({
+      onFailure: (error) => Effect.sync(() => this.settleStats({
         status: 'failed',
-        message: cause instanceof Error ? cause.message : 'Unable to calculate column value counts.',
+        message: error instanceof Error ? error.message : 'Unable to calculate column value counts.',
       })),
     })));
   }
@@ -556,9 +538,4 @@ function renamedColumn(
 
 function sameJson<T>(left: T, right: T): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-/** CsvViewer owns the Promise boundary; preserve its rejection for the caller's UI policy. */
-function fromPromise<A>(operation: () => Promise<A>): Effect.Effect<A, unknown> {
-  return Effect.tryPromise({ try: operation, catch: (cause) => cause });
 }

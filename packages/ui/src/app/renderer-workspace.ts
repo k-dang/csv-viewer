@@ -1,4 +1,3 @@
-import { Effect } from 'effect';
 import type {
   CloseImpact,
   ComparisonCandidate,
@@ -42,7 +41,7 @@ export type RendererWorkspaceHost = {
 
 type OpenRequest = Extract<CsvViewerRequest, { operation: 'csv.open' | 'csv.open-recent' | 'csv.reopen' }>;
 export type DroppedCsvItem = { name: string; file: File | null };
-type CsvOpenOperation = { name: string | null; open: (options: CsvDialectOptions) => Effect.Effect<OpenCsvResult, string> };
+type CsvOpenOperation = { name: string | null; open: (options: CsvDialectOptions) => Promise<OpenCsvResult> };
 
 /**
  * Owns the renderer's Tabs and their lifetime, independently of React commits. Commands and
@@ -105,16 +104,15 @@ export class RendererWorkspace {
       }
       operations.push({
         name: item.name,
-        open: (options) => Effect.gen({ self: this }, function* () {
-          const sourceId = yield* requestEffect(() => this.host.acquireDroppedSource(file), 'Unable to open CSV.');
+        open: async (options) => {
+          const sourceId = await this.host.acquireDroppedSource(file);
           if (sourceId instanceof Object) return sourceId;
-          // The host retains acquired sources until CsvViewer receives them. Complete that
-          // handoff even after stopping, then discard the response at the renderer boundary.
-          return yield* requestEffect(() => this.viewer.call({ operation: 'csv.open', sourceId, options }), 'Unable to open CSV.');
-        }),
+          // Acquired sources must reach CsvViewer even if the renderer stops during acquisition.
+          return this.viewer.call({ operation: 'csv.open', sourceId, options });
+        },
       });
     }
-    return Effect.runPromise(this.runOpens(operations, failures));
+    return this.runOpens(operations, failures, 'Unable to open CSV.');
   }
 
   openRecent(sourceId: CsvSourceId): Promise<void> {
@@ -140,45 +138,28 @@ export class RendererWorkspace {
     return this.state.tabs.some((tab) => tab.kind === 'csv' && tab.tab.snapshot().editState.hasUnexportedChanges);
   }
 
-  candidates(): Promise<{ baseline: WorkingCsvView; candidates: ComparisonCandidate[] } | null> {
-    return Effect.runPromise(this.listCandidates());
-  }
-
-  private readonly listCandidates = Effect.fnUntraced(function* (
-    this: RendererWorkspace,
-  ) {
+  async candidates(): Promise<{ baseline: WorkingCsvView; candidates: ComparisonCandidate[] } | null> {
     const tab = this.activeTab();
     if (tab?.kind !== 'csv' || !this.current(tab)) return null;
-    return yield* requestEffect(
-      () => this.viewer.call({ operation: 'comparison.get-candidates', baselineId: tab.tab.workingCsvId }),
-      'Unable to list comparison candidates.',
-    ).pipe(
-      Effect.map((candidates) => this.current(tab) ? { baseline: tab.tab.snapshot().workingCsv, candidates } : null),
-      Effect.catch((message) => Effect.sync(() => {
-        if (this.current(tab)) this.set({ error: message });
-        return null;
-      })),
-    );
-  });
-
-  openComparison(baselineId: string, candidateId: string): Promise<boolean> {
-    return Effect.runPromise(this.createComparison(baselineId, candidateId));
+    try {
+      const candidates = await this.viewer.call({
+        operation: 'comparison.get-candidates', baselineId: tab.tab.workingCsvId,
+      });
+      return this.current(tab) ? { baseline: tab.tab.snapshot().workingCsv, candidates } : null;
+    } catch (error) {
+      if (this.current(tab)) this.set({ error: error instanceof Error ? error.message : 'Unable to list comparison candidates.' });
+      return null;
+    }
   }
 
-  private readonly createComparison = Effect.fnUntraced(function* (
-    this: RendererWorkspace,
-    baselineId: string,
-    candidateId: string,
-  ) {
+  async openComparison(baselineId: string, candidateId: string): Promise<boolean> {
     const baseline = this.csvEntry(baselineId);
     const candidate = this.csvEntry(candidateId);
     if (!baseline || !candidate || !this.current(baseline) || !this.current(candidate)) return false;
     const closedComparisons = new Set<string>();
     this.comparisonOpens.add(closedComparisons);
-    return yield* Effect.gen({ self: this }, function* () {
-      const result = yield* requestEffect(
-        () => this.viewer.call({ operation: 'comparison.open', baselineId, candidateId }), 'Unable to open Comparison.',
-      );
+    try {
+      const result = await this.viewer.call({ operation: 'comparison.open', baselineId, candidateId });
       if (!this.current(baseline) || !this.current(candidate)) return false;
       if (result.status === 'rejected') {
         this.set({ error: result.fault.message });
@@ -198,47 +179,32 @@ export class RendererWorkspace {
         });
       }
       return true;
-    }).pipe(
-      Effect.catch((message) => Effect.sync(() => {
-        if (this.current(baseline) && this.current(candidate)) this.set({ error: message });
-        return false;
-      })),
-      Effect.ensuring(Effect.sync(() => { this.comparisonOpens.delete(closedComparisons); })),
-    );
-  });
-
-  close(tabId: string = this.state.activeTabId ?? ''): Promise<void> {
-    return Effect.runPromise(this.closeTab(tabId));
+    } catch (error) {
+      if (this.current(baseline) && this.current(candidate)) this.set({ error: error instanceof Error ? error.message : 'Unable to open Comparison.' });
+      return false;
+    } finally {
+      this.comparisonOpens.delete(closedComparisons);
+    }
   }
 
-  private readonly closeTab = Effect.fnUntraced(function* (
-    this: RendererWorkspace,
-    tabId: string,
-  ) {
+  async close(tabId: string = this.state.activeTabId ?? ''): Promise<void> {
     const tab = this.state.tabs.find((entry) => entry.id === tabId);
     if (!tab || !this.current(tab) || this.closingTabs.has(tab.id)) return;
     this.closingTabs.add(tab.id);
-    return yield* Effect.gen({ self: this }, function* () {
+    try {
       if (tab.kind === 'comparison') {
-        const result = yield* requestEffect(
-          () => this.viewer.call({ operation: 'comparison.close', comparisonId: tab.tab.comparisonId }), 'Unable to close the Tab.',
-        );
+        const result = await this.viewer.call({ operation: 'comparison.close', comparisonId: tab.tab.comparisonId });
         if (this.stopped) return;
         if (result.status === 'failed') this.set({ error: result.failure.message });
         else this.comparisonEvent({ kind: 'closed', comparisonId: result.comparisonId });
         return;
       }
       const workingCsvId = tab.tab.workingCsvId;
-      let result = yield* requestEffect(() => this.viewer.call({ operation: 'csv.close', workingCsvId }), 'Unable to close the Tab.');
+      let result = await this.viewer.call({ operation: 'csv.close', workingCsvId });
       while (this.current(tab) && result.status === 'confirmation-required') {
-        const impact = result.impact;
-        const confirmed = yield* requestEffect(
-          () => Promise.resolve(this.host.confirmClose(tab.tab.snapshot().workingCsv.source.name, impact)), 'Unable to close the Tab.',
-        );
+        const confirmed = await this.host.confirmClose(tab.tab.snapshot().workingCsv.source.name, result.impact);
         if (!confirmed || !this.current(tab)) return;
-        result = yield* requestEffect(
-          () => this.viewer.call({ operation: 'csv.close', workingCsvId, confirmedImpact: impact }), 'Unable to close the Tab.',
-        );
+        result = await this.viewer.call({ operation: 'csv.close', workingCsvId, confirmedImpact: result.impact });
       }
       if (!this.current(tab)) return;
       if (result.status === 'failed') {
@@ -250,13 +216,12 @@ export class RendererWorkspace {
       const ids = new Set(result.closedComparisonIds.map((id) => `comparison:${id}`));
       ids.add(tab.id);
       this.removeTabs(ids);
-    }).pipe(
-      Effect.catch((message) => Effect.sync(() => {
-        if (this.current(tab)) this.set({ error: message });
-      })),
-      Effect.ensuring(Effect.sync(() => { this.closingTabs.delete(tab.id); })),
-    );
-  });
+    } catch (error) {
+      if (this.current(tab)) this.set({ error: error instanceof Error ? error.message : 'Unable to close the Tab.' });
+    } finally {
+      this.closingTabs.delete(tab.id);
+    }
+  }
 
   /** Retires renderer objects only. The application runtime owns disposal of the data workspace. */
   dispose(): void {
@@ -269,18 +234,15 @@ export class RendererWorkspace {
     fallback: string,
     reopening?: Extract<RendererTab, { kind: 'csv' }>,
   ): Promise<void> {
-    return Effect.runPromise(this.runOpens([{
-      name: null,
-      open: (options) => requestEffect(() => this.viewer.call(request(options)), fallback),
-    }], [], reopening));
+    return this.runOpens([{ name: null, open: (options) => this.viewer.call(request(options)) }], [], fallback, reopening);
   }
 
-  private readonly runOpens = Effect.fnUntraced(function* (
-    this: RendererWorkspace,
+  private async runOpens(
     operations: CsvOpenOperation[],
     failures: string[],
+    fallback: string,
     reopening?: Extract<RendererTab, { kind: 'csv' }>,
-  ) {
+  ): Promise<void> {
     if (this.stopped || this.state.isOpening) return;
     const options = buildDialectOptions(this.state.delimiter, this.state.headerMode);
     if (isDialectError(options)) {
@@ -292,10 +254,10 @@ export class RendererWorkspace {
     this.openingClosedCsvs = closedCsvs;
     this.recentSourcesRequest += 1;
     this.set({ isOpening: true });
-    return yield* Effect.gen({ self: this }, function* () {
+    try {
       for (const operation of operations) {
         if (this.stopped) return;
-        const result = yield* operation.open(options).pipe(Effect.catch((message) => Effect.succeed({ status: 'failed' as const, message })));
+        const result = await attemptOpen(operation, options, fallback);
         if (this.stopped || (reopening && !this.current(reopening))) return;
         if (result.status === 'failed' || result.status === 'capacity-exceeded') {
           failures.push(operation.name ? `${operation.name}: ${result.message}` : result.message);
@@ -306,14 +268,14 @@ export class RendererWorkspace {
       if (!this.stopped && (!reopening || this.current(reopening)) && failures.length > 0) {
         this.set({ error: failures.join('\n') });
       }
-    }).pipe(Effect.ensuring(Effect.gen({ self: this }, function* () {
+    } finally {
       this.openingClosedCsvs = null;
       if (!this.stopped) {
         this.set({ isOpening: false });
-        yield* this.loadRecentSources();
+        await this.refreshRecentSources();
       }
-    })));
-  });
+    }
+  }
 
   private applyOpen(result: Extract<OpenCsvResult, { status: 'opened' | 'already-open' }>): void {
     const workingCsv = result.workingCsv;
@@ -391,20 +353,17 @@ export class RendererWorkspace {
   }
 
   /** Refresh history when the empty workspace appears or an open attempt finishes there. */
-  private refreshRecentSources(): Promise<void> {
-    return Effect.runPromise(this.loadRecentSources());
-  }
-
-  private readonly loadRecentSources = Effect.fnUntraced(function* (
-    this: RendererWorkspace,
-  ) {
+  private async refreshRecentSources(): Promise<void> {
     if (this.stopped || !this.viewer.capabilities.recentCsvSources || this.state.isOpening || this.state.tabs.length > 0) return;
     const request = ++this.recentSourcesRequest;
-    const recentSources = yield* requestEffect(
-      () => this.viewer.call({ operation: 'csv.get-recent-sources' }), 'Unable to list recent CSV sources.',
-    ).pipe(Effect.catch(() => Effect.succeed([])));
+    let recentSources: RecentCsvSource[];
+    try {
+      recentSources = await this.viewer.call({ operation: 'csv.get-recent-sources' });
+    } catch {
+      recentSources = [];
+    }
     if (!this.stopped && request === this.recentSourcesRequest) this.set({ recentSources });
-  });
+  }
 
   private stop(): void {
     if (this.stopped) return;
@@ -418,7 +377,10 @@ export class RendererWorkspace {
   }
 }
 
-/** Adapts runtime Promises at their boundary while retaining the user's original error message. */
-function requestEffect<A>(operation: () => Promise<A>, fallback: string): Effect.Effect<A, string> {
-  return Effect.tryPromise({ try: operation, catch: (error) => error instanceof Error ? error.message : fallback });
+async function attemptOpen(operation: CsvOpenOperation, options: CsvDialectOptions, fallback: string): Promise<OpenCsvResult> {
+  try {
+    return await operation.open(options);
+  } catch (error) {
+    return { status: 'failed', message: error instanceof Error ? error.message : fallback };
+  }
 }
