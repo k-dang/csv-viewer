@@ -973,7 +973,6 @@ async function runDrag(options) {
 }
 
 async function dispatchMouseDrag(session, x1, y1, x2, y2) {
-  // AG Grid commits a header reorder only after the pointer travels onto another header.
   const steps = 8;
   await session.send('Input.dispatchMouseEvent', {
     type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1,

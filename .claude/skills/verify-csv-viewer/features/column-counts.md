@@ -41,7 +41,7 @@ None. The Stats Panel, its Count Scope, and the Base UI select all behave identi
 - Close the open option list before clicking anything else in the window. A click outside the list leaves Stats Column on its current value.
 - Counts follow search and filters, not sort order. Sorting still refetches and briefly re-shows `Calculating counts`; the numbers come back identical.
 - `wait` only polls for the presence of a substring, so the disappearance of `Calculating counts` cannot be waited on. Wait for `N scoped rows` instead.
-- Opening the panel after focusing a cell uses that column, and the panel remembers its last column across close/open. If counts look like `id` uniqueness (five values of 1), you are not on `status`.
+- Opening the panel after focusing a cell uses that column. With no focused column, the panel remembers its last Stats Column across close and open. If counts look like `id` uniqueness (five values of 1), you are not on `status`.
 - The panel is `<aside aria-label="Stats Panel">` with no `role`, so `--role region` never matches it. Wait for the text `Column Value Counts`.
 - The toolbar button label toggles between `Open stats panel` and `Close stats panel`. While the panel is open, the in-panel X uses the same Close name, so `click` reports ambiguous without `--nth 0`. Do not reach for `--exact` here: both names are doubled to `Close stats panel Close stats panel`, so an exact match finds nothing.
 - `Open stats panel` is an accessible name, not visible text. After closing, `wait --text "Open stats panel"` times out. The panel is gone when `Column Value Counts` is gone.

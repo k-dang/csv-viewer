@@ -63,4 +63,4 @@ Preconditions:
 - A drop while any dialog is open is declined silently, and the Copy column toast counts as one (`role="dialog"`). Close toasts with `click --role button --name "Close toast" --nth 0` before dropping.
 - Folders are rejected even when their names end in .csv. Text and in-app grid drags must retain their normal behavior.
 - Mixed-drop errors remain visible after successful files open. The last successful open receives focus, including an already-open desktop source.
-- Desktop dirty reopen uses a native confirmation. Finish verification before invoking it without a human.
+- Desktop dirty reopen uses a native confirmation. Web dirty reopen uses `window.confirm` (`Unexported Changes will be lost.`), and the helper cannot answer it. Reopen only a clean tab. Finish verification before invoking a dirty reopen without a human.
