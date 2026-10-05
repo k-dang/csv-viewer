@@ -44,4 +44,5 @@ None. The Stats Panel, its Count Scope, and the Base UI select all behave identi
 - Opening the panel after focusing a cell uses that column, and the panel remembers its last column across close/open. If counts look like `id` uniqueness (five values of 1), you are not on `status`.
 - The panel is `<aside aria-label="Stats Panel">` with no `role`, so `--role region` never matches it. Wait for the text `Column Value Counts`.
 - The toolbar button label toggles between `Open stats panel` and `Close stats panel`. While the panel is open, the in-panel X uses the same Close name, so `click` reports ambiguous without `--nth 0`. Do not reach for `--exact` here: both names are doubled to `Close stats panel Close stats panel`, so an exact match finds nothing.
+- `Open stats panel` is an accessible name, not visible text. After closing, `wait --text "Open stats panel"` times out. The panel is gone when `Column Value Counts` is gone.
 - Search `active` is a substring match. Do not wait for `3 visible of 5 rows`.

@@ -31,6 +31,7 @@ const commands = {
   text: runText,
   upload: runUpload,
   drop: runDrop,
+  drag: runDrag,
 };
 
 function parseFlags(argv) {
@@ -951,6 +952,43 @@ async function runClick(options) {
     const clickCount = options.double ? 2 : 1;
     await dispatchMouseClick(session, found.x, found.y, clickCount, options.right ? 'right' : 'left');
     printJson({ status: 'ok', name: found.name, disabled: found.disabled });
+  });
+}
+
+async function runDrag(options) {
+  const toName = options['to-name'];
+  if (!toName) fail('drag requires --to-name');
+  const run = await requireCurrentRun();
+  await withCdp(run, async (session) => {
+    const from = await locate(session, options);
+    const to = await locate(session, {
+      role: options['to-role'] || options.role,
+      name: String(toName),
+      exact: Boolean(options.exact),
+      nth: options['to-nth'],
+    });
+    await dispatchMouseDrag(session, from.x, from.y, to.x, to.y);
+    printJson({ status: 'ok', from: from.name, to: to.name });
+  });
+}
+
+async function dispatchMouseDrag(session, x1, y1, x2, y2) {
+  // AG Grid commits a header reorder only after the pointer travels onto another header.
+  const steps = 8;
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1,
+  });
+  for (let step = 1; step <= steps; step += 1) {
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: x1 + ((x2 - x1) * step) / steps,
+      y: y1 + ((y2 - y1) * step) / steps,
+      button: 'left',
+      buttons: 1,
+    });
+  }
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: x2, y: y2, button: 'left', buttons: 0, clickCount: 1,
   });
 }
 
