@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { openCsv } from './helpers/csv';
 
-test('cancels a held refresh, preserves the previous result, and can retry', async ({ page }) => {
+test('cancels a held refresh, preserves the previous result, and can retry', { tag: '@dev' }, async ({ page }) => {
   // Hold the next cancellable driver operation. The real comparison lifecycle and UI
   // still run; interruption removes the gate instead of depending on machine speed.
   await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {

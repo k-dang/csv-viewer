@@ -38,23 +38,78 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build desktop app
+        run: pnpm build:desktop
+
+  browser:
+    name: Dev browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps --only-shell chromium
 
       - name: Run browser tests
         run: pnpm test:browser
-
-      - name: Run built web browser tests
-        run: pnpm test:browser:built
-
-      - name: Build
-        run: pnpm build
 
       - name: Upload failure screenshots
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: browser-failures
+          path: test-results/
+          if-no-files-found: ignore
+
+  browser-built:
+    name: Built web browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+
+      - name: Run built web browser tests
+        run: pnpm test:browser:built
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-build-failures
           path: test-results/
           if-no-files-found: ignore
 
@@ -69,7 +124,6 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install chromium
       - run: pnpm test:desktop
       - name: Upload failure evidence
         if: failure()

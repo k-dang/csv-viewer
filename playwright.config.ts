@@ -5,6 +5,8 @@ const baseURL = 'http://127.0.0.1:4173';
 export default defineConfig({
   testDir: './e2e',
   testIgnore: ['desktop/**'],
+  // Only source-instrumented scenarios need Vite; user workflows run against built assets.
+  grep: /@dev/,
   workers: 2,
   forbidOnly: Boolean(process.env.CI),
   use: {
