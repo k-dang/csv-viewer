@@ -1,5 +1,5 @@
-import { Effect, Layer, Logger } from 'effect';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Cause, Effect, Exit, Layer, Logger } from 'effect';
+import { afterEach, beforeEach, describe, expect, it } from '@effect/vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DataEngineError, WorkspaceDatabase } from '../../../packages/workspace/src/database';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
@@ -7,6 +7,7 @@ import { openInScope } from '../../../packages/workspace/test/scoped-database';
 import { WorkingCsvs, workingCsvsLayer } from '../../../packages/workspace/src/working-csv/working-csv-store';
 import { CsvWorkspaceHost } from '../../../packages/workspace/src/workspace-host';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
+import { failNextExportPreparation, failNextExportWorkerRelease } from '../../../packages/workspace/test/contract/database-failure-injection';
 
 /**
  * Store invariants that the CsvWorkspace surface cannot observe: refusing work after its own
@@ -42,6 +43,28 @@ async function openWorkingCsv(fileName: string, contents: string) {
 }
 
 describe('Working CSV store invariants', () => {
+  it.effect.each(['read', 'serialization'] as const)('retains a %s failure alongside worker cleanup failure and retries cleanup', (failure) => Effect.gen(function* () {
+    const { workingCsvId } = yield* Effect.promise(() => openWorkingCsv('export-failures.csv', 'name\nAda\n'));
+    yield* Effect.addFinalizer(() => store.disposeStore().pipe(Effect.orDie));
+    yield* store.editCell({ workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
+    failNextExportPreparation(database, failure);
+    const closed = failNextExportWorkerRelease(database, 1);
+
+    const exit = yield* Effect.exit(store.exportCsv(workingCsvId));
+    if (Exit.isSuccess(exit)) throw new Error('Expected export preparation to fail.');
+    expect(exit.cause.reasons).toHaveLength(2);
+    const failures = exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error);
+    expect(failures).toMatchObject(failure === 'read'
+      ? [{ cause: { message: 'PRIVATE export read failure' } }, { cause: { message: 'PRIVATE export release failure' } }]
+      : [{ cause: { message: 'PRIVATE export release failure' } }]);
+    expect(Cause.hasDies(exit.cause)).toBe(failure === 'serialization');
+    expect((yield* store.getEditState({ workingCsvId })).hasUnexportedChanges).toBe(true);
+    expect(fixture.prompts.defaultExportPaths).toEqual([]);
+    expect(closed()).toBe(false);
+    yield* store.disposeStore();
+    expect(closed()).toBe(true);
+  }));
+
   it('rejects a store open once disposal begins', async () => {
     const workingCsv = await openWorkingCsv('open-before-disposal.csv', 'name\nAda\n');
     const lateSourceId = await fixture.registerSource('late-open.csv', 'name\nGrace\n');

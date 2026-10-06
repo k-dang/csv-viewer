@@ -1,5 +1,5 @@
 import { DataEngineError, WorkspaceDatabase, type WorkspaceDatabaseConnection } from '../database';
-import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Result, type Scope, type Types } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Result, Semaphore, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
 import { WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
@@ -152,8 +152,8 @@ class WorkingCsvStore implements WorkingCsvs {
   private closingWorkingCsvs = new Set<string>();
   /** Leases per physical table. `released` completes when the last lease is returned. */
   private tableLeases = new Map<string, TableLease>();
-  /** The most recently reserved mutation turn of each Working CSV. */
-  private mutationTails = new Map<WorkingCsvId, Deferred.Deferred<void>>();
+  /** One permit per Working CSV; users include the holder and queued callers. */
+  private readonly mutationLocks = new Map<WorkingCsvId, { semaphore: Semaphore.Semaphore; users: number }>();
   /** The table release in flight for each closing Working CSV. */
   private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, DataEngineError>>();
   /** Export workers whose close failed. Disposal retries them before the database is released. */
@@ -703,31 +703,26 @@ class WorkingCsvStore implements WorkingCsvs {
     this: WorkingCsvStore,
     workingCsvId: WorkingCsvId,
   ): Effect.fn.Return<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError> {
-    let releaseFailure: DataEngineError | undefined;
-    const prepared = yield* this.read(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
-      const { metadata } = state;
-      const connection = yield* Effect.acquireRelease(
-        this.database.connectWorker(),
-        // Finalizers cannot return typed failures; report one after the scope closes.
-        (worker) => this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => {
-          releaseFailure = error;
-        }))),
-      );
-      const rows = yield* readExportRows(connection, state.tableName, metadata.columns);
-      return {
-        state,
-        sourceId: state.sourceId,
-        suggestedName: metadata.source.name,
-        revisionId: state.history.currentRevision,
-        contents: serializeCsvExport({
-          columns: metadata.columns,
-          rows,
-          delimiter: metadata.dialect.delimiter ?? state.defaultDelimiter,
-          header: metadata.dialect.header !== false,
-        }),
-      };
-    }));
-    if (releaseFailure) return yield* Effect.fail(releaseFailure);
+    const prepared = yield* this.read(workingCsvId, (state) => Effect.acquireUseRelease(
+      this.database.connectWorker(),
+      (connection) => Effect.gen(function* () {
+        const { metadata } = state;
+        const rows = yield* readExportRows(connection, state.tableName, metadata.columns);
+        return {
+          state,
+          sourceId: state.sourceId,
+          suggestedName: metadata.source.name,
+          revisionId: state.history.currentRevision,
+          contents: serializeCsvExport({
+            columns: metadata.columns,
+            rows,
+            delimiter: metadata.dialect.delimiter ?? state.defaultDelimiter,
+            header: metadata.dialect.header !== false,
+          }),
+        };
+      }),
+      (worker) => this.releaseExportWorker(worker),
+    ));
 
     const delivery = yield* observeStage('csv.deliver-export', this.host.deliverExport({
       sourceId: prepared.sourceId,
@@ -937,22 +932,31 @@ class WorkingCsvStore implements WorkingCsvs {
   }, Effect.scoped);
 
   /**
-   * Reserves the Working CSV's next mutation turn immediately, then waits for the turns reserved
-   * before it. The turn passes on when the scope closes.
+   * Keeps one lock while any holder or waiter needs it. Cancellation removes a waiter immediately,
+   * and the caller's outer lease still protects queued work from close and disposal.
    */
-  private awaitTurn(workingCsvId: WorkingCsvId): Effect.Effect<void, never, Scope.Scope> {
-    return Effect.acquireRelease(
+  private readonly awaitTurn = Effect.fnUntraced(function* (
+    this: WorkingCsvStore,
+    workingCsvId: WorkingCsvId,
+  ): Effect.fn.Return<void, never, Scope.Scope> {
+    const lock = yield* Effect.acquireRelease(
       Effect.sync(() => {
-        const previous = this.mutationTails.get(workingCsvId);
-        const turn = Deferred.makeUnsafe<void>();
-        this.mutationTails.set(workingCsvId, turn);
-        return { previous, turn };
+        const lock = this.mutationLocks.get(workingCsvId) ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+        this.mutationLocks.set(workingCsvId, lock);
+        lock.users += 1;
+        return lock;
       }),
-      ({ previous, turn }) => (previous ? Deferred.await(previous) : Effect.void).pipe(Effect.andThen(Effect.sync(() => {
-        if (this.mutationTails.get(workingCsvId) === turn) this.mutationTails.delete(workingCsvId);
-      })), Effect.andThen(Deferred.succeed(turn, undefined))),
-    ).pipe(Effect.flatMap(({ previous }) => observeStage('csv.queue-wait', previous ? Deferred.await(previous) : Effect.void)));
-  }
+      (lock) => Effect.sync(() => {
+        lock.users -= 1;
+        if (lock.users === 0) this.mutationLocks.delete(workingCsvId);
+      }),
+    );
+    yield* observeStage('csv.queue-wait', Effect.acquireRelease(
+      lock.semaphore.take(1),
+      () => lock.semaphore.release(1),
+      { interruptible: true },
+    ));
+  });
 
   /**
    * The one lease primitive for reads, export serialization, mutations, reopen, and Comparison

@@ -83,43 +83,39 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     );
   }
 
-  acquireDroppedSource(filePath: string) {
-    return Effect.gen({ self: this }, function* () {
-      if (!/\.(csv|tsv|txt)$/i.test(filePath)) {
-        return yield* Effect.fail(new WorkspaceRequestError({ message: 'Only CSV, TSV, and TXT files can be dropped.' }));
-      }
-      const fileStats = yield* filesystemEffect(() => stat(filePath)).pipe(Effect.mapError(toSourceUnavailableError));
-      if (!fileStats.isFile()) {
-        return yield* Effect.fail(new WorkspaceRequestError({ message: 'Folders cannot be opened. Drop CSV, TSV, or TXT files.' }));
-      }
-      return yield* this.registerSource(filePath);
-    });
-  }
+  readonly acquireDroppedSource = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, filePath: string) {
+    if (!/\.(csv|tsv|txt)$/i.test(filePath)) {
+      return yield* Effect.fail(new WorkspaceRequestError({ message: 'Only CSV, TSV, and TXT files can be dropped.' }));
+    }
+    const fileStats = yield* filesystemEffect(() => stat(filePath)).pipe(Effect.mapError(toSourceUnavailableError));
+    if (!fileStats.isFile()) {
+      return yield* Effect.fail(new WorkspaceRequestError({ message: 'Folders cannot be opened. Drop CSV, TSV, or TXT files.' }));
+    }
+    return yield* this.registerSource(filePath);
+  });
 
   releaseSource(): void {
     // Desktop retains identity for Recent CSV Sources; it holds no open file or byte reservation.
   }
 
-  describeSource(sourceId: CsvSourceId) {
-    return Effect.gen({ self: this }, function* () {
-      const { filePath } = yield* this.requireSource(sourceId);
-      const fileStats = yield* filesystemEffect(() => stat(filePath)).pipe(
-        Effect.tapError((cause) => cause.code === 'ENOENT' ? this.forgetRecentPath(filePath) : Effect.void),
-        Effect.mapError(toSourceUnavailableError),
-      );
-      if (!fileStats.isFile()) {
-        yield* this.forgetRecentPath(filePath);
-        return yield* Effect.fail(new CsvSourceUnavailableError({ code: 'unreadable', message: 'Selected path is not a file.' }));
-      }
-      return {
-        sourceId,
-        name: path.basename(filePath),
-        location: filePath,
-        sizeBytes: fileStats.size,
-        defaultDelimiter: defaultDelimiterForSourceName(filePath),
-      } satisfies CsvSourceDescription;
-    });
-  }
+  readonly describeSource = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, sourceId: CsvSourceId) {
+    const { filePath } = yield* this.requireSource(sourceId);
+    const fileStats = yield* filesystemEffect(() => stat(filePath)).pipe(
+      Effect.tapError((cause) => cause.code === 'ENOENT' ? this.forgetRecentPath(filePath) : Effect.void),
+      Effect.mapError(toSourceUnavailableError),
+    );
+    if (!fileStats.isFile()) {
+      yield* this.forgetRecentPath(filePath);
+      return yield* Effect.fail(new CsvSourceUnavailableError({ code: 'unreadable', message: 'Selected path is not a file.' }));
+    }
+    return {
+      sourceId,
+      name: path.basename(filePath),
+      location: filePath,
+      sizeBytes: fileStats.size,
+      defaultDelimiter: defaultDelimiterForSourceName(filePath),
+    } satisfies CsvSourceDescription;
+  });
 
   acquireEngineSource(sourceId: CsvSourceId) {
     return scopedEngineSource(
@@ -128,87 +124,81 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     );
   }
 
-  deliverExport(request: CsvExportRequestForDelivery) {
-    return Effect.gen({ self: this }, function* () {
-      const source = yield* this.requireSource(request.sourceId);
-      const defaultPath = path.join(path.dirname(source.filePath), request.kind === 'view' ? request.suggestedName : buildDefaultExportName(request.suggestedName));
-      while (true) {
-        const destinationPath = yield* Effect.promise(() => this.prompts.chooseExportDestination(defaultPath));
-        if (!destinationPath) return { status: 'cancelled' } satisfies CsvExportDelivery;
-        const conflicts = yield* filesystemEffect(() => isSourceDestination(source, destinationPath)).pipe(Effect.mapError(toExportDestinationError));
-        if (conflicts) {
-          yield* Effect.promise(() => this.prompts.showSourceConflict());
-          continue;
-        }
-        const published = yield* filesystemEffect(() => publishExport(source, destinationPath, request.contents, this.writeExport)).pipe(Effect.mapError(toExportDestinationError));
-        if (!published) {
-          yield* Effect.promise(() => this.prompts.showSourceConflict());
-          continue;
-        }
-        return { status: 'delivered' } satisfies CsvExportDelivery;
+  readonly deliverExport = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, request: CsvExportRequestForDelivery) {
+    const source = yield* this.requireSource(request.sourceId);
+    const defaultPath = path.join(path.dirname(source.filePath), request.kind === 'view' ? request.suggestedName : buildDefaultExportName(request.suggestedName));
+    while (true) {
+      const destinationPath = yield* Effect.promise(() => this.prompts.chooseExportDestination(defaultPath));
+      if (!destinationPath) return { status: 'cancelled' } satisfies CsvExportDelivery;
+      const conflicts = yield* filesystemEffect(() => isSourceDestination(source, destinationPath)).pipe(Effect.mapError(toExportDestinationError));
+      if (conflicts) {
+        yield* Effect.promise(() => this.prompts.showSourceConflict());
+        continue;
       }
-    });
-  }
+      const published = yield* filesystemEffect(() => publishExport(source, destinationPath, request.contents, this.writeExport)).pipe(Effect.mapError(toExportDestinationError));
+      if (!published) {
+        yield* Effect.promise(() => this.prompts.showSourceConflict());
+        continue;
+      }
+      return { status: 'delivered' } satisfies CsvExportDelivery;
+    }
+  });
 
-  recentSources() {
-    return Effect.gen({ self: this }, function* () {
-      const entries = yield* this.readRecentEntries();
-      const gone = new Set<string>();
-      const hidden = new Set<string>();
-      for (const entry of entries) {
-        const resolvedPath = path.resolve(entry.path);
-        const state = yield* this.classifyRecentPath(entry.path);
-        switch (state) {
-          case 'file':
-            break;
-          case 'gone':
-            gone.add(resolvedPath);
-            break;
-          case 'inaccessible':
-            hidden.add(resolvedPath);
-            break;
-          default: {
-            const unreachable: never = state;
-            throw new Error(`Unexpected recent path state: ${unreachable}`);
-          }
+  readonly recentSources = Effect.fnUntraced(function* (this: DesktopWorkspaceHost) {
+    const entries = yield* this.readRecentEntries();
+    const gone = new Set<string>();
+    const hidden = new Set<string>();
+    for (const entry of entries) {
+      const resolvedPath = path.resolve(entry.path);
+      const state = yield* this.classifyRecentPath(entry.path);
+      switch (state) {
+        case 'file':
+          break;
+        case 'gone':
+          gone.add(resolvedPath);
+          break;
+        case 'inaccessible':
+          hidden.add(resolvedPath);
+          break;
+        default: {
+          const unreachable: never = state;
+          throw new Error(`Unexpected recent path state: ${unreachable}`);
         }
       }
-      const current = gone.size === 0
-        ? entries
-        : yield* this.modifyRecentEntries((latest) => latest.filter((entry) => !gone.has(path.resolve(entry.path))));
-      const available = current.filter((entry) => {
-        const resolvedPath = path.resolve(entry.path);
-        return !gone.has(resolvedPath) && !hidden.has(resolvedPath);
-      });
-      return yield* Effect.forEach(available, (entry) => this.registerSource(entry.path).pipe(
-        Effect.map((sourceId) => ({
-          sourceId,
-          name: entry.name,
-          location: entry.path,
-          sizeBytes: entry.sizeBytes,
-          lastOpenedAt: entry.lastOpenedAt,
-        })),
-      ), { concurrency: 'unbounded' });
+    }
+    const current = gone.size === 0
+      ? entries
+      : yield* this.modifyRecentEntries((latest) => latest.filter((entry) => !gone.has(path.resolve(entry.path))));
+    const available = current.filter((entry) => {
+      const resolvedPath = path.resolve(entry.path);
+      return !gone.has(resolvedPath) && !hidden.has(resolvedPath);
     });
-  }
+    return yield* Effect.forEach(available, (entry) => this.registerSource(entry.path).pipe(
+      Effect.map((sourceId) => ({
+        sourceId,
+        name: entry.name,
+        location: entry.path,
+        sizeBytes: entry.sizeBytes,
+        lastOpenedAt: entry.lastOpenedAt,
+      })),
+    ), { concurrency: 'unbounded' });
+  });
 
-  recordRecentSource(sourceId: CsvSourceId) {
-    return Effect.gen({ self: this }, function* () {
-      const source = this.sources.get(sourceId);
-      if (!source) return;
-      const normalizedPath = path.resolve(source.filePath);
-      const fileStats = yield* filesystemEffect(() => stat(normalizedPath)).pipe(Effect.catch(() => Effect.succeed(null)));
-      const nextEntry: RecentSourceEntry = {
-        path: normalizedPath,
-        name: path.basename(normalizedPath),
-        sizeBytes: fileStats?.size ?? 0,
-        lastOpenedAt: new Date().toISOString(),
-      };
-      yield* this.modifyRecentEntries((entries) =>
-        [nextEntry, ...entries.filter((entry) => path.resolve(entry.path) !== normalizedPath)].slice(0, maxRecentSources),
-      );
-    });
-  }
+  readonly recordRecentSource = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, sourceId: CsvSourceId) {
+    const source = this.sources.get(sourceId);
+    if (!source) return;
+    const normalizedPath = path.resolve(source.filePath);
+    const fileStats = yield* filesystemEffect(() => stat(normalizedPath)).pipe(Effect.catch(() => Effect.succeed(null)));
+    const nextEntry: RecentSourceEntry = {
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      sizeBytes: fileStats?.size ?? 0,
+      lastOpenedAt: new Date().toISOString(),
+    };
+    yield* this.modifyRecentEntries((entries) =>
+      [nextEntry, ...entries.filter((entry) => path.resolve(entry.path) !== normalizedPath)].slice(0, maxRecentSources),
+    );
+  });
 
   confirmDiscardChanges(sourceName: string) {
     return Effect.promise(() => this.prompts.confirmDiscardChanges(sourceName));
@@ -237,22 +227,18 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     return this.modifyRecentEntries((entries) => entries.filter((entry) => path.resolve(entry.path) !== resolvedPath));
   }
 
-  private modifyRecentEntries(update: (entries: RecentSourceEntry[]) => RecentSourceEntry[]) {
-    return Effect.gen({ self: this }, function* () {
-      const entries = yield* this.readRecentEntries();
-      const next = update(entries);
-      if (next.length === entries.length && next.every((entry, index) => entry === entries[index])) return entries;
-      yield* this.writeRecentEntries(next);
-      return next;
-    }).pipe(this.recentEntriesLock.withPermit, Effect.uninterruptible);
-  }
+  private readonly modifyRecentEntries = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, update: (entries: RecentSourceEntry[]) => RecentSourceEntry[]) {
+    const entries = yield* this.readRecentEntries();
+    const next = update(entries);
+    if (next.length === entries.length && next.every((entry, index) => entry === entries[index])) return entries;
+    yield* this.writeRecentEntries(next);
+    return next;
+  }, this.recentEntriesLock.withPermit, Effect.uninterruptible);
 
-  private writeRecentEntries(entries: RecentSourceEntry[]) {
-    return Effect.gen({ self: this }, function* () {
-      yield* filesystemEffect(() => mkdir(path.dirname(this.recentSourcesPath), { recursive: true }));
-      yield* filesystemEffect(() => writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8'));
-    }).pipe(Effect.catch((cause) => Effect.sync(() => warnRecentSourceFailure('write', recentSourceFailureCategory(cause)))));
-  }
+  private readonly writeRecentEntries = Effect.fnUntraced(function* (this: DesktopWorkspaceHost, entries: RecentSourceEntry[]) {
+    yield* filesystemEffect(() => mkdir(path.dirname(this.recentSourcesPath), { recursive: true }));
+    yield* filesystemEffect(() => writeFile(this.recentSourcesPath, JSON.stringify(entries, null, 2), 'utf8'));
+  }, Effect.catch((cause) => Effect.sync(() => warnRecentSourceFailure('write', recentSourceFailureCategory(cause)))));
 
   private readRecentEntries() {
     return filesystemEffect(() => readFile(this.recentSourcesPath, 'utf8')).pipe(
