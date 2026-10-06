@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DataEngineError, WorkspaceDatabase } from '../../../packages/workspace/src/database';
 import { DuckDbWorkspaceDatabase } from '../src/main/duckdb-database';
+import { openInScope } from '../../../packages/workspace/test/scoped-database';
 import { WorkingCsvs, workingCsvsLayer } from '../../../packages/workspace/src/working-csv/working-csv-store';
 import { CsvWorkspaceHost } from '../../../packages/workspace/src/workspace-host';
 import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/workspace-artifact-registry';
@@ -14,18 +15,18 @@ import type { WorkspaceArtifactRegistry } from '../../../packages/workspace/src/
  */
 let fixture: CsvWorkspaceFixture;
 let database: DuckDbWorkspaceDatabase;
+let closeDatabase: () => Promise<void>;
 let store: WorkingCsvs;
 
 beforeEach(async () => {
   fixture = await CsvWorkspaceFixture.create();
-  database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
+  ({ database, close: closeDatabase } = await openInScope(DuckDbWorkspaceDatabase.open()));
   const resources = Layer.mergeAll(Layer.succeed(CsvWorkspaceHost, fixture.host), Layer.succeed(WorkspaceDatabase, database));
   store = Effect.runSync(Effect.service(WorkingCsvs).pipe(Effect.provide(workingCsvsLayer.pipe(Layer.provide(resources)))));
 });
 
 afterEach(async () => {
-  await Effect.runPromise(database.closeOwnerConnection());
-  await Effect.runPromise(database.closeEngine());
+  await closeDatabase();
   await fixture.dispose();
 });
 
