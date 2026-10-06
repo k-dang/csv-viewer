@@ -93,9 +93,9 @@ Every CsvViewer request logs a stage named after its operation, such as `csv.get
 
 Open and reopen log `csv.release-engine-source` when the temporary engine reference is released. A failed release records `cleanup-failed` on that stage and on the request, while a successful CSV load still returns `opened`. The logs omit the source reference, path, and driver error.
 
-The workspace logs `workspace.acquire-database` when it starts and `workspace.release-database` when it is disposed, both with `workspaceId` and no `requestId`. A failed release logs `workspace.close-database-connection` or `workspace.close-database-engine` with a failure outcome, and `workspace.dispose` then reports `failed`.
+The workspace logs `workspace.acquire-database` when it starts and `workspace.release-database` when it is disposed, both with `workspaceId` and no `requestId`. A failed release logs `workspace.close-database-connection` or `workspace.close-database-engine` with a failure outcome, `workspace.release-database` reports `cleanup-failed`, and `workspace.dispose` then reports `failed`.
 
-On web, `web.startup-check` reports the in-memory CSV probe after engine acquisition. A failed or interrupted startup reports its acquisition outcome and `web.startup-cleanup`; interruption is `interrupted`, and failed cleanup is `cleanup-failed`. `web.startup-late-cleanup` reports a failed termination if a Worker arrives after cancellation. `workspace.engine-stopped` records a fatal Worker stop once. These stages use the same `workspaceId` and omit Worker errors and driver text.
+On web, `web.startup-check` reports the in-memory CSV probe inside engine acquisition. A failed or interrupted startup reports its acquisition outcome, then `workspace.release-database` for whatever it acquired; interruption is `interrupted`, and a failed release is `cleanup-failed`. `web.startup-late-cleanup` reports terminating a Worker that arrives after cancellation, and `cleanup-failed` if termination fails. `workspace.engine-stopped` records a fatal Worker stop once. These stages use the same `workspaceId` and omit Worker errors and driver text.
 
 Filter Effect output by `operationId` to follow a comparison through cleanup. Read the matching stage's log-span timing on its completion line; enclosing span timings show elapsed time, so do not add them together. Check `outcome` and `cleanup` separately. Browser navigation can stop logging before disposal completes.
 
@@ -231,6 +231,7 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | `type --text <text>` | Insert text at the current caret via CDP |
 | `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). A bare `Enter` carries its keypress text, so it submits forms. Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
 | `drop --file <path>` or `drop --files <JSON array>` | Both runtimes. Sends file-backed Chromium drag input at the window center. Add `--hover` for the highlight, `--cancel` to cancel, or `--x` and `--y` to target another location |
+| `drag --role <role> --name <name> --to-name <name> [--to-role <role>] [--exact] [--nth N] [--to-nth N]` | Press on one control and release on another. Column reorder uses `--role columnheader` |
 | `upload --role <role> --name <name> --file <path>` | Web only. Arms file-chooser interception, clicks the control, and answers the chooser with `--file` (resolved from the repo root) |
 | `wait --text <substring> [--timeout 10000]` | Poll `document.body.innerText` |
 | `snapshot --path <file>` | Visible text plus a compact AX dump |

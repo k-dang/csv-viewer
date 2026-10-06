@@ -84,7 +84,7 @@ test('blocks drops inside a modal and preserves the candidate picker', async ({ 
   await expect(page.getByRole('tab', { name: 'third.csv', exact: true })).toBeVisible();
 });
 
-test('declines a second drop while the first source is being acquired', async ({ page }) => {
+test('declines a second drop while the first source is being acquired', { tag: '@dev' }, async ({ page }) => {
   await page.route((url) => url.pathname === '/src/web-composition.ts', async (route) => {
     const response = await route.fetch();
     const source = await response.text();

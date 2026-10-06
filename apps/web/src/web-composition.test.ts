@@ -7,6 +7,7 @@ import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonExecutor } from '../../../packages/workspace/src/comparison/comparison-executor';
 import { DataEngineError } from '@csv-viewer/workspace/database';
+import { openInScope } from '../../../packages/workspace/test/scoped-database';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
 import { Deferred, Effect, Exit, Fiber } from 'effect';
 import { AsyncDuckDB } from '@duckdb/duckdb-wasm';
@@ -25,7 +26,7 @@ afterEach(async () => {
 
 describe('web CsvViewer composition', () => {
   it('releases a CSV Source registered while its acquisition is interrupted', async () => {
-    const database = await Effect.runPromise(createNodeDuckDbWasmDatabase().open());
+    const { database, close } = await openInScope(createNodeDuckDbWasmDatabase().open());
     const file = new File(['name\nAda\n'], 'people.csv');
     const host = new WebWorkspaceHost(database, async () => file);
     const sourceId = host.registerSource(file);
@@ -61,8 +62,7 @@ describe('web CsvViewer composition', () => {
       releaseRegistration.resolve();
       await Effect.runPromise(Fiber.interrupt(work));
       registration.mockRestore();
-      await Effect.runPromise(database.closeOwnerConnection());
-      await Effect.runPromise(database.closeEngine());
+      await close();
     }
   });
 
@@ -104,7 +104,7 @@ describe('web CsvViewer composition', () => {
     });
     expect(pickFile).not.toHaveBeenCalled();
     expect(capture.outcome('workspace.acquire-database')).toBe('recoverable-failure');
-    expect(capture.outcome('web.startup-cleanup')).toBe('succeeded');
+    expect(capture.outcome('workspace.release-database')).toBe('succeeded');
     expect(capture.logs.join('')).not.toContain('Workers are unavailable');
   });
 
@@ -115,16 +115,16 @@ describe('web CsvViewer composition', () => {
       { type: 'text/plain' },
     );
     const selections = [selectedFile, selectedFile];
-    const database = createNodeDuckDbWasmDatabase();
-    const check = vi.spyOn(database, 'verifyInMemoryCsvQuery');
+    const capture = diagnosticCapture();
     const started = await startWebCsvViewer(
-      database,
+      createNodeDuckDbWasmDatabase(),
       async () => selections.shift() ?? null,
+      { diagnostics: capture.configuration },
     );
     if (started.status !== 'ready')
       throw new Error('Web startup check failed.');
     viewer = started.viewer;
-    expect(check).toHaveBeenCalledOnce();
+    expect(capture.outcome('web.startup-check')).toBe('succeeded');
 
     expect(viewer.capabilities).toEqual({
       recentCsvSources: false,
@@ -243,11 +243,7 @@ describe('web CsvViewer composition', () => {
       dispose: () => Effect.die(new Error('A stopped engine must not run executor cleanup.')),
     };
     viewer = await createCsvViewer(database.open(), host, {
-      executor, diagnostics: capture.configuration,
-      startup: {
-        stopped: database.stopped, check: database.verifyInMemoryCsvQuery(), cleanup: database.closeStartup(),
-        observeLateCleanupFailure: (report) => database.onLateStartupCleanupFailure(report),
-      },
+      executor, diagnostics: capture.configuration, startup: { stopped: database.stopped },
     });
     const left = await viewer.call({ operation: 'csv.open' });
     const right = await viewer.call({ operation: 'csv.open' });
@@ -275,15 +271,12 @@ describe('web CsvViewer composition', () => {
   }, 20_000);
 
   it('releases an acquired database when a pending startup check outlives a fatal stop', async () => {
-    const database = new FatalTestDatabase();
     const checking = Promise.withResolvers<void>();
     const checkResult = Promise.withResolvers<void>();
-    vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.promise(() => {
+    const database = new FatalTestDatabase(Effect.promise(() => {
       checking.resolve();
       return checkResult.promise;
     }));
-    const releaseConnection = vi.spyOn(database, 'closeOwnerConnection');
-    const releaseEngine = vi.spyOn(database, 'closeEngine');
     const capture = diagnosticCapture();
     const startup = startWebCsvViewer(database, async () => null, { diagnostics: capture.configuration });
 
@@ -291,9 +284,9 @@ describe('web CsvViewer composition', () => {
     database.failWorker();
     await expect(startup).resolves.toEqual({ status: 'unsupported' });
     checkResult.resolve();
-    expect(releaseConnection).toHaveBeenCalledOnce();
-    expect(releaseEngine).toHaveBeenCalled();
-    expect(capture.outcome('workspace.release-database')).toBe('succeeded');
+    for (const stage of ['workspace.close-database-connection', 'workspace.close-database-engine', 'workspace.release-database']) {
+      expect(capture.outcome(stage)).toBe('succeeded');
+    }
   });
 });
 
@@ -303,8 +296,12 @@ function pageTransitionEvent(type: 'pagehide' | 'pageshow', persisted: boolean):
   return event;
 }
 
+/** Skips the engine start. Each test chooses the startup check and the engine release outcome. */
 class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
-  constructor() {
+  constructor(
+    private readonly check: Effect.Effect<void, DataEngineError> = Effect.void,
+    private readonly engineRelease: Effect.Effect<void, DataEngineError> = Effect.void,
+  ) {
     super({
       mainModule: 'duckdb.wasm',
       mainWorker: 'duckdb.worker.js',
@@ -312,20 +309,16 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
     });
   }
 
-  override open(): Effect.Effect<this> {
-    return Effect.succeed(this);
-  }
-
-  override verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
+  protected override start(): Effect.Effect<void, DataEngineError> {
     return Effect.void;
   }
 
-  override closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
-    return Effect.void;
+  protected override verifyInMemoryCsvQuery(): Effect.Effect<void, DataEngineError> {
+    return this.check;
   }
 
-  override closeEngine(): Effect.Effect<void, DataEngineError> {
-    return Effect.void;
+  protected override closeEngine(): Effect.Effect<void, DataEngineError> {
+    return this.engineRelease;
   }
 
   failWorker(): void {
@@ -335,15 +328,16 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
 
 it('reports a failed startup check and failed cleanup without driver text', async () => {
   const capture = diagnosticCapture();
-  const database = new FatalTestDatabase();
-  vi.spyOn(database, 'verifyInMemoryCsvQuery').mockReturnValue(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE startup failure') })));
-  vi.spyOn(database, 'closeEngine').mockReturnValue(Effect.fail(new DataEngineError({ cause: new Error('PRIVATE termination failure') })));
+  const database = new FatalTestDatabase(
+    Effect.fail(new DataEngineError({ cause: new Error('PRIVATE startup failure') })),
+    Effect.fail(new DataEngineError({ cause: new Error('PRIVATE termination failure') })),
+  );
 
   await expect(startWebCsvViewer(database, async () => null, { diagnostics: capture.configuration }))
     .resolves.toEqual({ status: 'unsupported' });
 
   expect(capture.outcome('web.startup-check')).toBe('recoverable-failure');
-  expect(capture.outcome('web.startup-cleanup')).toBe('cleanup-failed');
+  expect(capture.outcome('workspace.release-database')).toBe('cleanup-failed');
   expect(capture.logs.join('')).not.toContain('PRIVATE');
 });
 
@@ -360,7 +354,7 @@ it('reports Worker termination failure during acquisition as startup cleanup', a
   worker.emitError(new Error('PRIVATE Worker crash'));
 
   await expect(startup).resolves.toEqual({ status: 'unsupported' });
-  expect(capture.outcome('web.startup-cleanup')).toBe('cleanup-failed');
+  expect(capture.outcome('workspace.release-database')).toBe('cleanup-failed');
   expect(capture.logs.join('')).not.toContain('PRIVATE');
 });
 
@@ -385,7 +379,7 @@ it('cancels pending Worker creation on page hide without waiting for it to resol
   dispose();
   await vi.waitFor(() => expect(settled).toHaveBeenCalledWith({ status: 'unsupported' }));
   expect(capture.outcome('workspace.acquire-database')).toBe('interrupted');
-  expect(capture.outcome('web.startup-cleanup')).toBe('succeeded');
+  expect(capture.outcome('workspace.release-database')).toBe('succeeded');
   creation.resolve(worker);
   await vi.waitFor(() => expect(worker.terminate).toHaveBeenCalledOnce());
 });

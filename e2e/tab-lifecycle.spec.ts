@@ -23,7 +23,7 @@ test('sidebar collapse keeps CSV Tabs in the same vertical positions', async ({ 
   await expect.poll(() => tabs.evaluateAll((elements) => elements.map((tab) => tab.getBoundingClientRect().y))).toEqual(positions);
 });
 
-test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page }) => {
+test('a delayed Reopen response cannot restore a closed CSV Tab', { tag: '@dev' }, async ({ page }) => {
   // Hold only delivery of the real workspace result. File selection, queries, and close
   // still run through the web runtime; this makes the response-order window deterministic.
   await beforeWorkspaceStarts(page, `

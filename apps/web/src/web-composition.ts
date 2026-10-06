@@ -29,13 +29,7 @@ export async function startWebCsvViewer(
     const host = new WebWorkspaceHost(database, pickFile, limits);
     const workspace = await createCsvViewer(database.open(), host, {
       diagnostics,
-      startup: {
-        signal,
-        stopped: database.stopped,
-        check: database.verifyInMemoryCsvQuery(),
-        cleanup: database.closeStartup(),
-        observeLateCleanupFailure: (report) => database.onLateStartupCleanupFailure(report),
-      },
+      startup: { signal, stopped: database.stopped },
     });
     return {
       status: 'ready',

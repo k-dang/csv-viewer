@@ -1,4 +1,6 @@
+import { DuckDBConnection } from '@duckdb/node-api';
 import { Effect } from 'effect';
+import { vi } from 'vitest';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +26,7 @@ import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/wo
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextDatabaseRelease, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -88,8 +90,9 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
         path.join(directory, 'recent-sources.json'),
         writeExport,
       );
-      const database = await Effect.runPromise(DuckDbWorkspaceDatabase.open());
-      const workspace = await createCsvViewer(Effect.succeed(database), host, { executor, diagnostics });
+      let database!: DuckDbWorkspaceDatabase;
+      const open = DuckDbWorkspaceDatabase.open().pipe(Effect.tap((opened) => Effect.sync(() => { database = opened; })));
+      const workspace = await createCsvViewer(open, host, { executor, diagnostics });
       return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
     } catch (error) {
       await rm(directory, { recursive: true, force: true });
@@ -133,7 +136,14 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
       );
     };
   }
-  failNextDatabaseRelease(): void { failNextDatabaseRelease(this.database); }
+  /** The next connection close, which at disposal is the owner connection's, closes and then reports failure. */
+  failNextDatabaseRelease(): void {
+    const closeSync = DuckDBConnection.prototype.closeSync;
+    vi.spyOn(DuckDBConnection.prototype, 'closeSync').mockImplementationOnce(function (this: DuckDBConnection) {
+      closeSync.call(this);
+      throw new Error('PRIVATE database release failure');
+    });
+  }
   failNextDescribeSource(): void {
     const describeSource = this.host.describeSource.bind(this.host);
     this.host.describeSource = () => {

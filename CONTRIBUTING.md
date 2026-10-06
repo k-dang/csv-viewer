@@ -15,17 +15,19 @@ If you change desktop behavior, also run `pnpm test:desktop`.
 
 `pnpm build` runs type checking and Oxlint, and any lint warning fails it. To run those checks alone, use `pnpm typecheck` and `pnpm lint`.
 
-The browser tests need Chromium. Install it once with `pnpm exec playwright install chromium`. On Linux, add `--with-deps`.
+The web browser tests need Chromium's headless shell. Install it once with `pnpm exec playwright install --only-shell chromium`. On Linux, add `--with-deps`. Desktop tests use Electron's own browser and need no Playwright browser download.
 
 ## End-to-end tests
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm test:browser` | The full web suite in Chromium: editing, queries and stats, comparison, parsing, export, drag and drop, and the page lifecycle. |
-| `pnpm test:browser:built` | User workflows, engine failure, and recovery against the production web build. Race and cancellation cases need source instrumentation, so only `pnpm test:browser` runs them. |
+| `pnpm test:browser` | Scenarios tagged `@dev` that inject faults or delays into Vite source modules: races, cancellation, cleanup, and navigation. |
+| `pnpm test:browser:built` | Builds the web app and runs all other web scenarios against production assets: editing, queries and stats, comparison, parsing, export, drag and drop, tabs, engine failure, and recovery. |
 | `pnpm test:desktop` | Builds the Electron app and launches it with isolated profiles. Covers preload and IPC, native DuckDB, export source protection, recent sources across a restart, dropped-file identity, and reopen confirmation. |
 
-CI runs the web suites on Linux and the desktop suite on Windows. A failed browser test keeps its screenshots and traces. A failed desktop test attaches the Electron window and its trace.
+Together, the two web commands run every scenario once. Tag tests that intercept Vite source modules with `@dev`; tests that work against emitted assets belong in the built suite.
+
+CI runs unit tests, type checking, lint, and the desktop build in one Linux job, with each web suite in its own parallel Linux job. The built suite owns the web build. Desktop end-to-end tests run in parallel on Windows. A failed browser test keeps its screenshots and traces. A failed desktop test attaches the Electron window and its trace.
 
 The desktop tests fake only the answers from the OS file chooser and message boxes. Check native dialog appearance and keyboard behavior by hand. Each test uses temporary files and a throwaway profile, so it never touches your recent files or app session.
 

@@ -1,6 +1,7 @@
 import WebWorker from 'web-worker';
 import { Effect } from 'effect';
 import { expect, it, vi } from 'vitest';
+import { openInScope } from '../../../../packages/workspace/test/scoped-database';
 import {
   SharedEngineWasmDatabase,
   WasmWorkspaceFixture,
@@ -36,16 +37,14 @@ it('waits for the DuckDB-Wasm worker thread to exit before completing engine shu
 });
 
 it('hands the next database an empty engine, dropping tables and registered files alike', async () => {
-  const first = await Effect.runPromise(new SharedEngineWasmDatabase().open());
-  const leaked = await Effect.runPromise(first.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n')));
-  await Effect.runPromise(first.run('CREATE TABLE leftover(x INTEGER)'));
-  await Effect.runPromise(first.closeOwnerConnection());
-  await Effect.runPromise(first.closeEngine());
+  const first = await openInScope(new SharedEngineWasmDatabase().open());
+  const leaked = await Effect.runPromise(first.database.registerFileBuffer('leaky.csv', new TextEncoder().encode('name\nAda\n')));
+  await Effect.runPromise(first.database.run('CREATE TABLE leftover(x INTEGER)'));
+  await first.close();
 
-  const second = await Effect.runPromise(new SharedEngineWasmDatabase().open());
+  const { database: second, close } = await openInScope(new SharedEngineWasmDatabase().open());
   await expect(Effect.runPromise(second.readObjects('SELECT * FROM leftover'))).rejects.toThrow();
   await expect(Effect.runPromise(second.readObjects(`SELECT * FROM read_csv('${leaked}', all_varchar = true)`)),
   ).rejects.toThrow();
-  await Effect.runPromise(second.closeOwnerConnection());
-  await Effect.runPromise(second.closeEngine());
+  await close();
 });

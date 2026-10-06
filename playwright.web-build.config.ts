@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 // Run user workflows against emitted assets, excluding cases that instrument Vite source.
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: ['desktop/**', 'drag-and-drop.spec.ts', 'tab-lifecycle.spec.ts', 'comparison-cancellation.spec.ts'],
+  testIgnore: ['desktop/**'],
   grepInvert: /@dev/,
   workers: 2,
   forbidOnly: Boolean(process.env.CI),

@@ -99,12 +99,20 @@ test('shows checking and unsupported states when the real engine cannot load', a
 });
 
 test('a real Worker failure shows the sanitized terminal screen and reload recovers', async ({ page }, testInfo) => {
-  const diagnostics = captureDiagnostics(page);
-  // In the dev build, register a faulty consumer before the renderer's real subscription.
-  // The built-bundle suite exercises the same Worker failure without source instrumentation.
+  await verifyWorkerFailureRecovery(page, testInfo);
+});
+
+test('a faulty subscriber cannot hide a Worker failure or prevent recovery', { tag: '@dev' }, async ({ page }, testInfo) => {
+  // Register a faulty consumer before the renderer's real subscription.
   await beforeWorkspaceStarts(page, `
     started.viewer.onEvent(() => { throw new Error('PRIVATE subscriber defect'); });
   `);
+  await verifyWorkerFailureRecovery(page, testInfo);
+});
+
+/** Exercises a real Worker stop and recovery with or without a faulty event subscriber. */
+async function verifyWorkerFailureRecovery(page: Page, testInfo: TestInfo): Promise<void> {
+  const diagnostics = captureDiagnostics(page);
   const workerReady = page.waitForEvent('worker');
   await page.goto('/');
   const worker = await workerReady;
@@ -129,7 +137,7 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   await openCsv(page);
   await captureState(page, testInfo, 'recovered');
   await attachDiagnostics(testInfo, diagnostics);
-});
+}
 
 test('navigation starts disposal and creates a usable empty workspace', { tag: '@dev' }, async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);

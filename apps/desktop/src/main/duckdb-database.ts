@@ -1,9 +1,10 @@
 import { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
-import { Effect } from 'effect';
+import { Effect, type Scope } from 'effect';
 import {
   driverEffect,
+  acquireWithRelease,
   DataEngineError,
-  type OwnedWorkspaceDatabase,
+  type WorkspaceDatabase,
   type WorkspaceDatabaseConnection,
 } from '@csv-viewer/workspace/database';
 import type { QueryValues } from '@csv-viewer/workspace/csv-query';
@@ -52,25 +53,29 @@ class NativeDuckDbConnection implements WorkspaceDatabaseConnection {
 }
 
 /**
- * The native in-memory database, open from `open` until the workspace runtime releases it. This is
- * the only module that opens, closes, or hands out native connections, so the workspace above it
- * never holds a driver type.
+ * The native in-memory database, open from `open` until its scope closes. This is the only module
+ * that opens, closes, or hands out native connections, so the workspace above it never holds a
+ * driver type.
  */
-export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
+export class DuckDbWorkspaceDatabase implements WorkspaceDatabase {
   private constructor(
     private readonly instance: DuckDBInstance,
     private readonly connection: NativeDuckDbConnection,
   ) {}
 
-  static open(): Effect.Effect<DuckDbWorkspaceDatabase, DataEngineError> {
-    return driverEffect(async () => {
-      const instance = await DuckDBInstance.create(':memory:');
-      try {
-        return new DuckDbWorkspaceDatabase(instance, new NativeDuckDbConnection(await instance.connect()));
-      } catch (error) {
-        instance.closeSync();
-        throw error;
-      }
+  /** Closing the scope closes the owner connection, then the instance. */
+  static open(): Effect.Effect<DuckDbWorkspaceDatabase, DataEngineError, Scope.Scope> {
+    return Effect.gen(function* () {
+      const instance = yield* acquireWithRelease('engine', driverEffect(() => DuckDBInstance.create(':memory:')), (opened) => Effect.try({
+        try: () => opened.closeSync(),
+        catch: (cause) => new DataEngineError({ cause }),
+      }));
+      const connection = yield* acquireWithRelease(
+        'connection',
+        driverEffect(async () => new NativeDuckDbConnection(await instance.connect())),
+        (opened) => opened.close(),
+      );
+      return new DuckDbWorkspaceDatabase(instance, connection);
     });
   }
 
@@ -88,16 +93,5 @@ export class DuckDbWorkspaceDatabase implements OwnedWorkspaceDatabase {
 
   readObjects(sql: string, values?: QueryValues): Effect.Effect<EngineRow[], DataEngineError> {
     return this.connection.readObjects(sql, values);
-  }
-
-  closeOwnerConnection(): Effect.Effect<void, DataEngineError> {
-    return this.connection.close();
-  }
-
-  closeEngine(): Effect.Effect<void, DataEngineError> {
-    return Effect.try({
-      try: () => this.instance.closeSync(),
-      catch: (cause) => new DataEngineError({ cause }),
-    });
   }
 }

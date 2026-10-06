@@ -630,7 +630,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         const records = capture.completed();
         expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).toBe('succeeded');
         expect(records.filter((record) => record.message === 'workspace.release-database').map((record) => record.annotations.outcome))
-          .toEqual(['recoverable-failure']);
+          .toEqual(['cleanup-failed']);
         for (const [stage, outcome] of [['workspace.close-database-connection', 'recoverable-failure'], ['workspace.close-database-engine', 'succeeded']]) {
           expect(records.filter((record) => record.message === stage).map((record) => record.annotations.outcome)).toEqual([outcome]);
         }
@@ -698,7 +698,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         await expect(fixture.disposeWorkspace()).rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
         const records = capture.completed();
         expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).not.toBe('succeeded');
-        expect(records.find((record) => record.message === 'workspace.release-database')?.annotations.outcome).toBe('recoverable-failure');
+        expect(records.find((record) => record.message === 'workspace.release-database')?.annotations.outcome).toBe('cleanup-failed');
         const disposal = records.find((record) => record.message === 'workspace.dispose');
         expect(disposal?.annotations.outcome).toBe('failed');
         expect(disposal?.annotations.cleanup).toBe('cleanup-failed');
