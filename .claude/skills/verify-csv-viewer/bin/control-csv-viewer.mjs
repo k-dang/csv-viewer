@@ -816,10 +816,16 @@ async function killPid(pid) {
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
     return;
   }
+  // detached: true makes this pid a process-group leader. Signal the group so
+  // grandchildren (Vite under pnpm, Chrome helpers) exit with it.
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(-pid, 'SIGTERM');
   } catch {
-    // already gone
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // already gone
+    }
   }
 }
 
