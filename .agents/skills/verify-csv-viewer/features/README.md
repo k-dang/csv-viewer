@@ -52,7 +52,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 - [Open a CSV](./open-csv.md) covers file drops, the empty window, Recent CSV Sources, tabs, reopen, and close.
 - [Search and clear query](./search-filter.md) covers global search, empty matches, and Clear query.
-- [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, undo/redo, and Export CSV (driveable on web, a native dialog on desktop).
+- [Edit a CSV](./edit-csv.md) covers cell edits, insert, append, delete, column reorder, undo/redo, and Export CSV (driveable on web, a native dialog on desktop).
 - [Export current view](./export-current-view.md) covers the split menu, query scope, editor commit, preparation cancellation, and retained Unexported Changes.
 - [Compare two CSVs](./compare-csvs.md) covers Compare…, the candidate picker, Apply key, and result badges.
 - [Column value counts](./column-counts.md) covers the Stats Panel scoped to the current search and filters.

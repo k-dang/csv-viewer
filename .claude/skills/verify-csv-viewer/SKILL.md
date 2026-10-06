@@ -231,6 +231,7 @@ If launch or doctor fails partway through, run cleanup before the next launch so
 | `type --text <text>` | Insert text at the current caret via CDP |
 | `press --key <key>` | Key down/up (`Enter`, `Escape`, `Tab`). A bare `Enter` carries its keypress text, so it submits forms. Chords use `+` with `Control`, `Meta`, `Shift`, or `Alt` (`Control+c`) |
 | `drop --file <path>` or `drop --files <JSON array>` | Both runtimes. Sends file-backed Chromium drag input at the window center. Add `--hover` for the highlight, `--cancel` to cancel, or `--x` and `--y` to target another location |
+| `drag --role <role> --name <name> --to-name <name> [--to-role <role>] [--exact] [--nth N] [--to-nth N]` | Press on one control and release on another. Column reorder uses `--role columnheader` |
 | `upload --role <role> --name <name> --file <path>` | Web only. Arms file-chooser interception, clicks the control, and answers the chooser with `--file` (resolved from the repo root) |
 | `wait --text <substring> [--timeout 10000]` | Poll `document.body.innerText` |
 | `snapshot --path <file>` | Visible text plus a compact AX dump |

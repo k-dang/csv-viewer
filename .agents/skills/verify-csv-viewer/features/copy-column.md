@@ -37,7 +37,7 @@ None. The clipboard write is the browser Clipboard API on both targets.
 
 ## Gotchas
 
-- The clipboard is not readable through the helper. Prove the copy by `Copied N` matching the visible row count; the joined text itself is covered by the workspace contract tests.
+- The clipboard is not readable through the helper. Prove the copy by `Copied N` matching the visible row count. The workspace contract returns the value array, nulls included. The newline join is checked in `packages/ui/src/csv/csv-tab.test.ts` and `e2e/clipboard.spec.ts`.
 - The toast timer is three seconds. It pauses after the window blurs, or while the pointer is over the toast. A launch that never blurs the window does not pause it, so `Copied N values` can disappear about three seconds later. Take the screenshot as soon as the toast appears. If `Close toast` is already gone, continue. While a toast is still up, run `click --role button --name "Close toast" --nth 0` once per toast, then re-run `text` until `Copied` is gone before the editing check.
 - A visible toast is `role="dialog"`, and the drop zone declines drops while any dialog is open. Close every toast before a `drop`, or the drop silently does nothing.
 - The status bar count has no singular form: a one-row query reads `1 values`, while the toast reads `Copied 1 value`.

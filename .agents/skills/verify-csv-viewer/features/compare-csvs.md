@@ -50,7 +50,7 @@ Both runtimes support this recipe through file drops. Web also supports `upload`
 - Do not pass `--exact` to the key checkbox. Its accessible name includes the input `value`, so it reads `id on` and an exact match finds nothing.
 - After `Swap sides` the tab title changes too. A wait on the pre-swap title hangs.
 - The fixtures differ in exactly one cell. Do not expect Ada's row to differ. It is byte-identical in both files. An unexported edit after Apply key does not recompute the badges. The tab shows `Outdated Comparison` and keeps `Changed 1` and `Unchanged 4` until `Refresh comparison` or `Apply key`. Refresh after editing Ada's cell yields `Changed 2` and `Unchanged 3`.
-- While a comparison runs, the progress banner has its own `Cancel` button, and a cancelled run shows `Comparison cancelled. No result was applied.` with a `Dismiss` button. These fixtures finish too fast to reach it; do not click a `Cancel` you did not open the picker for.
+- While a comparison runs, the progress banner has its own `Cancel` button. A cancel with no applied result shows `Comparison cancelled. No result was applied.` After a result exists, cancel shows `Comparison cancelled. The previous applied result was preserved.` Both include `Dismiss`. These fixtures finish too fast to reach the in-progress banner. Do not click a `Cancel` you did not open the picker for.
 - An empty key draft leaves `Apply key` disabled, so `compare-invalid` needs a key column with blank or duplicated values, not an empty selection.
 - Source search and filters do not limit comparison. Clear them only if they confuse the screenshot, not because comparison requires it.
 - `status` is a poor first key if duplicates exist. `id` is unique in both fixtures.
