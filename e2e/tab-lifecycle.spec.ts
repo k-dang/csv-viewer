@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openCsv } from './helpers/csv';
+import { beforeWorkspaceStarts, openCsv } from './helpers/csv';
 
 test('sidebar collapse keeps CSV Tabs in the same vertical positions', async ({ page }) => {
   await page.goto('/');
@@ -26,29 +26,19 @@ test('sidebar collapse keeps CSV Tabs in the same vertical positions', async ({ 
 test('a delayed Reopen response cannot restore a closed CSV Tab', async ({ page }) => {
   // Hold only delivery of the real workspace result. File selection, queries, and close
   // still run through the web runtime; this makes the response-order window deterministic.
-  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
-    const response = await route.fetch();
-    const source = await response.text();
-    const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
-    expect(source).toContain(anchor);
-    await route.fulfill({
-      response,
-      body: source.replace(anchor, `
-        const call = started.viewer.call.bind(started.viewer);
-        started.viewer.call = async (request) => {
-          const result = await call(request);
-          if (request.operation === 'csv.reopen') {
-            await new Promise((resolve) => {
-              window.addEventListener('release-reopen', resolve, { once: true });
-              document.body.dataset.reopenHeld = 'true';
-            });
-          }
-          return result;
-        };
-        ${anchor}
-      `),
-    });
-  });
+  await beforeWorkspaceStarts(page, `
+    const call = started.viewer.call.bind(started.viewer);
+    started.viewer.call = async (request) => {
+      const result = await call(request);
+      if (request.operation === 'csv.reopen') {
+        await new Promise((resolve) => {
+          window.addEventListener('release-reopen', resolve, { once: true });
+          document.body.dataset.reopenHeld = 'true';
+        });
+      }
+      return result;
+    };
+  `);
   await page.goto('/');
   const openButton = page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Open CSV', exact: true });
   const [picker] = await Promise.all([page.waitForEvent('filechooser'), openButton.click()]);

@@ -1,11 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { AgGridReact, type AgGridReactProps } from 'ag-grid-react';
 import {
   CellApiModule,
+  type CellContextMenuEvent,
   type CellFocusedEvent,
   type CellKeyDownEvent,
   CellStyleModule,
   ColumnApiModule,
+  CustomFilterModule,
   DateFilterModule,
   InfiniteRowModelModule,
   ModuleRegistry,
@@ -14,7 +16,6 @@ import {
   RowApiModule,
   RowSelectionModule,
   TextEditorModule,
-  TextFilterModule,
   type CellValueChangedEvent,
   type ColDef,
   type ColumnMovedEvent,
@@ -39,7 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { gridTheme } from '@/lib/grid-theme';
-import type { CsvRow } from '@csv-viewer/workspace/csv-viewer';
+import type { CsvFilterDescriptor, CsvRow, CsvSortDescriptor } from '@csv-viewer/workspace/csv-viewer';
 import { csvInternalRowIdField } from '@csv-viewer/workspace/csv-viewer';
 import type { CsvTab } from './csv-tab';
 import { copyCell, isCopyCellShortcut } from './copy-column';
@@ -49,11 +50,15 @@ import { QueryStatusIndicator } from './query-status-indicator';
 import { CsvStatsPanel } from './csv-stats-panel';
 import { CsvColumnMenu } from './csv-column-menu';
 import { CsvExportControls } from './csv-export-controls';
+import { CsvValueFilter, type CsvValueFilterParams } from './csv-value-filter';
+import { CsvCellMenu, type CellMenuTarget } from './csv-cell-menu';
+import { setValuePicked, valueFilter, type ValueFilterModel, type ValuePick } from './value-filter-model';
 
 ModuleRegistry.registerModules([
   CellApiModule,
   CellStyleModule,
   ColumnApiModule,
+  CustomFilterModule,
   DateFilterModule,
   InfiniteRowModelModule,
   NumberFilterModule,
@@ -61,10 +66,16 @@ ModuleRegistry.registerModules([
   RowApiModule,
   RowSelectionModule,
   TextEditorModule,
-  TextFilterModule,
 ]);
 
 const filterDebounceMs = 1500;
+
+const rowSelection: AgGridReactProps<CsvRow>['rowSelection'] = {
+  mode: 'multiRow',
+  enableClickSelection: true,
+  checkboxes: false,
+  headerCheckbox: false,
+};
 
 export type CsvGridProps = {
   tab: CsvTab;
@@ -97,6 +108,8 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   const gridApiRef = useRef<GridApi<CsvRow> | null>(null);
   const pendingCellCommit = useRef<Promise<boolean> | null>(null);
   const failedCellEdit = useRef<{ rowId: string; column: string; value: string } | null>(null);
+  const [cellMenu, setCellMenu] = useState<CellMenuTarget | null>(null);
+  const [cellMenuOpen, setCellMenuOpen] = useState(false);
 
   const columnDefs = useMemo<ColDef<CsvRow>[]>(
     () =>
@@ -106,10 +119,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         minWidth: getColumnMinWidth(column.type),
         resizable: true,
         sortable: true,
-        filter: getColumnFilter(column.type),
-        filterParams: {
-          debounceMs: filterDebounceMs,
-        },
+        ...columnFilter(column.type, tab),
         suppressMovable: false,
         cellClassRules: {
           'csv-cell-empty': (params) => params.value === '',
@@ -117,7 +127,23 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         },
         valueFormatter: ({ value }) => formatCellValue(value),
       })),
-    [workingCsv.columns],
+    [workingCsv.columns, tab],
+  );
+
+  // Stable across renders: a new defaultColDef makes AG Grid refresh its headers, which closes an
+  // open filter popup on every Tab state change.
+  const defaultColDef = useMemo<ColDef<CsvRow>>(
+    () => ({
+      editable: true,
+      cellEditor: 'agTextCellEditor',
+      cellEditorParams: (params: ICellEditorParams<CsvRow>) => {
+        const failed = failedCellEdit.current;
+        return failed && failed.rowId === params.data?.[csvInternalRowIdField] && failed.column === params.column.getColId()
+          ? { value: failed.value } : {};
+      },
+      minWidth: 120,
+    }),
+    [],
   );
 
   // The grid's models are handed to the Tab right before each fetch, so the Tab's query is always
@@ -125,12 +151,14 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   const datasource = useMemo<IDatasource>(
     () => ({
       getRows: (params) => {
-        // SAFETY: This grid only registers AG Grid's built-in text, number, and date filters.
+        // SAFETY: This grid only registers the Value Filter and AG Grid's built-in number and date filters.
         tab.setGridQuery(toCsvSortDescriptors(params.sortModel), toCsvFilterDescriptors(params.filterModel as AgFilterModel));
         tab
           .rows(params.startRow, Math.max(0, params.endRow - params.startRow))
           .then((window) => {
+            // A superseded window must still answer: AG Grid holds a loader slot per open request.
             if (window) params.successCallback(window.rows, window.filteredRowCount);
+            else params.failCallback();
           })
           .catch(() => params.failCallback());
       },
@@ -143,8 +171,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
-    api.applyColumnState({ state: toAgSortState(query.sort), defaultState: { sort: null } });
-    api.setFilterModel(toAgFilterModel(query.filters));
+    applyGridQuery(api, query.sort, query.filters);
   }, [workingCsv.columns]);
 
   // Edits, history steps, search changes, and Reopen CSV all change what the loaded blocks hold.
@@ -158,8 +185,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api) return;
-    api.applyColumnState({ defaultState: { sort: null } });
-    api.setFilterModel(null);
+    applyGridQuery(api, [], []);
   }, [workingCsv.workingCsvId, workingCsv.dataRevision]);
 
   // The Tab clears its selection after every mutation; the grid drops its highlighted rows too.
@@ -191,8 +217,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
     const api = gridApiRef.current;
     tab.clearQuery();
     if (!api) return;
-    api.applyColumnState({ defaultState: { sort: null } });
-    api.setFilterModel(null);
+    applyGridQuery(api, [], []);
   }
 
   async function onCellValueChanged(event: CellValueChangedEvent<CsvRow>) {
@@ -251,7 +276,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0));
       const sort = sorted.flatMap((column) => column.sort === 'asc' || column.sort === 'desc'
         ? [{ column: column.colId, direction: column.sort }] : []);
-      // SAFETY: The grid registers only the built-in text, number, and date filters.
+      // SAFETY: The grid registers only the Value Filter and the built-in number and date filters.
       tab.setGridQuery(sort, toCsvFilterDescriptors(api.getFilterModel() as AgFilterModel));
     }
   }
@@ -268,6 +293,26 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   function onCellFocused(event: CellFocusedEvent<CsvRow>) {
     const column = event.column instanceof Object ? event.column.getColId() : event.column ?? undefined;
     if (column) tab.setFocusedColumn(column);
+  }
+
+  // Cells of Value Filter columns open the Cell Menu. Other cells, and a right-click over selected
+  // text, keep the browser's own menu.
+  function onCellContextMenu({ event, column, value }: CellContextMenuEvent<CsvRow>) {
+    if (!(event instanceof MouseEvent) || window.getSelection()?.isCollapsed === false) return;
+    if (column.getColDef().filter !== CsvValueFilter) return;
+    event.preventDefault();
+    setCellMenu({ column: column.getColId(), value: value ?? null, point: DOMRect.fromRect({ x: event.clientX, y: event.clientY }) });
+    setCellMenuOpen(true);
+  }
+
+  /** Keeps or hides one exact value through the column's Value Filter, leaving its search term. */
+  async function filterCellValue({ column, value }: CellMenuTarget, keep: boolean) {
+    const api = gridApiRef.current;
+    if (!api) return;
+    const current = api.getColumnFilterModel<ValueFilterModel>(column);
+    const pick: ValuePick | undefined = keep ? { operator: 'in', values: [value] } : setValuePicked(current?.pick, value, false);
+    await api.setColumnFilterModel(column, valueFilter(current?.contains ?? '', pick));
+    api.onFilterChanged();
   }
 
   // Ctrl+C copies the focused cell's raw value (null as empty). An open editor and text the user
@@ -425,28 +470,14 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
               key={workingCsv.workingCsvId}
               theme={gridTheme}
               columnDefs={columnDefs}
-              defaultColDef={{
-                editable: true,
-                cellEditor: 'agTextCellEditor',
-                cellEditorParams: (params: ICellEditorParams<CsvRow>) => {
-                  const failed = failedCellEdit.current;
-                  return failed && failed.rowId === params.data?.[csvInternalRowIdField] && failed.column === params.column.getColId()
-                    ? { value: failed.value } : {};
-                },
-                minWidth: 120,
-              }}
+              defaultColDef={defaultColDef}
               getRowId={(params) => params.data[csvInternalRowIdField]}
               rowModelType="infinite"
               datasource={datasource}
               cacheBlockSize={100}
               maxBlocksInCache={6}
               rowBuffer={8}
-              rowSelection={{
-                mode: 'multiRow',
-                enableClickSelection: true,
-                checkboxes: false,
-                headerCheckbox: false,
-              }}
+              rowSelection={rowSelection}
               enableCellTextSelection
               ensureDomOrder
               suppressDragLeaveHidesColumns
@@ -458,9 +489,16 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
               onSelectionChanged={onSelectionChanged}
               onCellFocused={onCellFocused}
               onCellKeyDown={onCellKeyDown}
+              onCellContextMenu={onCellContextMenu}
               overlayNoRowsTemplate="<span class='ag-overlay-loading-center'>No rows match the current query.</span>"
             />
           </CsvColumnMenu>
+          <CsvCellMenu
+            target={cellMenu}
+            open={cellMenuOpen}
+            onOpenChange={setCellMenuOpen}
+            onFilter={(target, keep) => void filterCellValue(target, keep)}
+          />
         </div>
         {stats.open ? <CsvStatsPanel tab={tab} /> : null}
       </div>
@@ -470,7 +508,9 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
         {focusedColumn ? (
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="min-w-0 truncate font-semibold text-foreground">{focusedColumn}</span>
-            <span className="shrink-0 text-muted-foreground">{formatNumber(state.filteredRowCount)} values</span>
+            <span className="shrink-0 text-muted-foreground">
+              {formatNumber(state.filteredRowCount)} {state.filteredRowCount === 1 ? 'value' : 'values'}
+            </span>
           </span>
         ) : (
           <span className="min-w-0 flex-1 truncate text-muted-foreground">Right-click a column header to edit the column.</span>
@@ -493,26 +533,44 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
   );
 }
 
-function getColumnFilter(columnType: string): string {
+/**
+ * Pushes a sort and filter state onto the grid. Filters go first: a sort change rebuilds AG Grid's
+ * row cache from the filter model it holds at that moment, and the Value Filter's model would
+ * otherwise still be the old one.
+ */
+function applyGridQuery(api: GridApi<CsvRow>, sort: CsvSortDescriptor[], filters: CsvFilterDescriptor[]): void {
+  api.setFilterModel(toAgFilterModel(filters));
+  api.applyColumnState({ state: toAgSortState(sort), defaultState: { sort: null } });
+}
+
+function filterKind(columnType: string): 'number' | 'date' | 'text' {
   if (
     /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|FLOAT|DOUBLE|DECIMAL)/i.test(
       columnType,
     )
   ) {
-    return 'agNumberColumnFilter';
+    return 'number';
   }
 
   if (/^(DATE|TIMESTAMP|TIMESTAMP_TZ|TIME)/i.test(columnType)) {
-    return 'agDateColumnFilter';
+    return 'date';
   }
 
-  return 'agTextColumnFilter';
+  return 'text';
+}
+
+/** Number and date columns use AG Grid's own filters; text columns use the Value Filter. */
+function columnFilter(columnType: string, tab: CsvTab): Pick<ColDef<CsvRow>, 'filter' | 'filterParams'> {
+  switch (filterKind(columnType)) {
+    case 'number':
+      return { filter: 'agNumberColumnFilter', filterParams: { debounceMs: filterDebounceMs } };
+    case 'date':
+      return { filter: 'agDateColumnFilter', filterParams: { debounceMs: filterDebounceMs } };
+    case 'text':
+      return { filter: CsvValueFilter, filterParams: { tab } satisfies CsvValueFilterParams };
+  }
 }
 
 function getColumnMinWidth(columnType: string): number {
-  if (/^(DATE|TIMESTAMP|TIMESTAMP_TZ|TIME)/i.test(columnType)) {
-    return 180;
-  }
-
-  return 140;
+  return filterKind(columnType) === 'date' ? 180 : 140;
 }

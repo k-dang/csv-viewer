@@ -142,9 +142,9 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         filters: [
           {
             column: 'team',
-            kind: 'text',
-            operator: 'equals',
-            value: 'compiler',
+            kind: 'values',
+            operator: 'in',
+            values: ['compiler'],
           },
         ],
       });
@@ -347,7 +347,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         ].join('\n'),
       );
       const compilerFilter = [
-        { column: 'team', kind: 'text', operator: 'equals', value: 'compiler' },
+        { column: 'team', kind: 'values', operator: 'in', values: ['compiler'] },
       ] as const;
       const filtered = await workspace().call({
         operation: 'csv.get-rows',
@@ -505,7 +505,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
     // The selected row identifier is the only input; the window it was chosen from never reaches the workspace.
     it.each([
       { view: 'sorted', query: { sort: [{ column: 'team', direction: 'asc' as const }] }, pick: 2, placement: 'below' as const, matches: null },
-      { view: 'filtered', query: { filters: [{ column: 'team', kind: 'text' as const, operator: 'equals' as const, value: 'kernel' }] }, pick: 0, placement: 'above' as const, matches: ['3'] },
+      { view: 'filtered', query: { filters: [{ column: 'team', kind: 'values' as const, operator: 'in' as const, values: ['kernel'] }] }, pick: 0, placement: 'above' as const, matches: ['3'] },
       { view: 'searched', query: { search: 'navy' }, pick: 0, placement: 'below' as const, matches: ['2'] },
     ])('inserts relative to the selected source row from a $view window', async ({ view, query, pick, placement, matches }) => {
       const workingCsv = await openPeople(`insert-${view}.csv`);

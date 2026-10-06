@@ -645,6 +645,31 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       ]);
     });
 
+    it('keeps or hides exact values, treating null and the empty string as distinct values', async () => {
+      const workingCsv = await fixture.openSource(
+        'values-filter.csv',
+        ['name,team', 'Ada,compiler', 'Grace,Compiler', 'Linus,', 'Margaret,navy'].join('\n'),
+      );
+      const request = { workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 };
+      await workspace().call({ operation: 'csv.edit-cell', workingCsvId: workingCsv.workingCsvId, rowId: '4', column: 'team', value: '' });
+      const names = async (operator: 'in' | 'notIn', values: (string | null)[]) => {
+        const window = await workspace().call({
+          operation: 'csv.get-rows',
+          ...request,
+          filters: [{ column: 'team', kind: 'values', operator, values }],
+        });
+        return window.rows.map((row) => row.name);
+      };
+
+      expect(await names('in', ['compiler'])).toEqual(['Ada']);
+      expect(await names('in', [null])).toEqual(['Linus']);
+      expect(await names('in', [''])).toEqual(['Margaret']);
+      expect(await names('in', [])).toEqual([]);
+      expect(await names('notIn', ['compiler'])).toEqual(['Grace', 'Linus', 'Margaret']);
+      expect(await names('notIn', ['compiler', null])).toEqual(['Grace', 'Margaret']);
+      expect(await names('notIn', [])).toEqual(['Ada', 'Grace', 'Linus', 'Margaret']);
+    });
+
     it('filters inferred date columns', async () => {
       const workingCsv = await fixture.openSource(
         'dates.csv',
@@ -842,9 +867,9 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         filters: [
           {
             column: 'team',
-            kind: 'text',
-            operator: 'equals',
-            value: 'compiler',
+            kind: 'values',
+            operator: 'in',
+            values: ['compiler'],
           },
         ] as const,
         search: 'a',
@@ -892,7 +917,7 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         workingCsvId: workingCsv.workingCsvId,
         column: 'score',
         sort: [{ column: 'name', direction: 'desc' }],
-        filters: [{ column: 'team', kind: 'text', operator: 'equals', value: 'compiler' }],
+        filters: [{ column: 'team', kind: 'values', operator: 'in', values: ['compiler'] }],
         search: 'a',
       });
 
@@ -932,9 +957,9 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         filters: [
           {
             column: 'team',
-            kind: 'text',
-            operator: 'equals',
-            value: 'compiler',
+            kind: 'values',
+            operator: 'in',
+            values: ['compiler'],
           },
         ] as const,
       };

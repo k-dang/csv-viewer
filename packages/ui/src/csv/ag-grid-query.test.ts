@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { toAgFilterModel, toAgSortState, toCsvFilterDescriptors, toCsvSortDescriptors } from './ag-grid-query';
 
 describe('AG Grid query translation', () => {
-  it('maps sort and AND-combined filters, and drops OR-combined filters whole', () => {
+  it('maps sort, Value Filters, and AND-combined filters, and drops OR-combined filters whole', () => {
     expect(toCsvSortDescriptors([{ colId: 'age', sort: 'desc' }])).toEqual([{ column: 'age', direction: 'desc' }]);
 
     expect(
       toCsvFilterDescriptors({
-        name: { filterType: 'text', type: 'contains', filter: 'Ada' },
+        name: { filterType: 'values', contains: 'Ada', pick: { operator: 'notIn', values: [null] } },
+        team: { filterType: 'values', pick: { operator: 'in', values: ['compiler'] } },
         age: {
           operator: 'AND',
           conditions: [
@@ -15,16 +16,18 @@ describe('AG Grid query translation', () => {
             { filterType: 'number', type: 'blank' },
           ],
         },
-        city: {
+        score: {
           operator: 'OR',
           conditions: [
-            { filterType: 'text', type: 'equals', filter: 'Paris' },
-            { filterType: 'text', type: 'equals', filter: 'Rome' },
+            { filterType: 'number', type: 'equals', filter: 1 },
+            { filterType: 'number', type: 'equals', filter: 2 },
           ],
         },
       }),
     ).toEqual([
       { column: 'name', kind: 'text', operator: 'contains', value: 'Ada' },
+      { column: 'name', kind: 'values', operator: 'notIn', values: [null] },
+      { column: 'team', kind: 'values', operator: 'in', values: ['compiler'] },
       { column: 'age', kind: 'number', operator: 'greaterThan', value: 30, valueTo: undefined },
       { column: 'age', kind: 'number', operator: 'blank' },
     ]);
@@ -37,11 +40,12 @@ describe('AG Grid query translation', () => {
     expect(
       toAgFilterModel([
         { column: 'work_email', kind: 'text', operator: 'contains', value: 'ada' },
+        { column: 'work_email', kind: 'values', operator: 'in', values: ['ada@example.com', ''] },
         { column: 'age', kind: 'number', operator: 'greaterThan', value: 30 },
         { column: 'age', kind: 'number', operator: 'blank' },
       ]),
     ).toEqual({
-      work_email: { filterType: 'text', type: 'contains', filter: 'ada' },
+      work_email: { filterType: 'values', contains: 'ada', pick: { operator: 'in', values: ['ada@example.com', ''] } },
       age: {
         operator: 'AND',
         conditions: [

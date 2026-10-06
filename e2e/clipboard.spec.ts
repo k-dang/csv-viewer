@@ -12,6 +12,9 @@ test('copies query-scoped column values in sort order and distinguishes cell and
   await expect(page.getByText('Copied 2 values', { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replaceAll('\r\n', '\n'))).toBe('Ada\nGrace');
   await page.getByRole('gridcell', { name: 'Grace', exact: true }).click();
+  // The closing Column Menu must not pull focus back to its header once its animation ends.
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(page.getByRole('gridcell', { name: 'Grace', exact: true })).toBeFocused();
   await page.keyboard.press('ControlOrMeta+c');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('Grace');
   await page.keyboard.press('ControlOrMeta+Shift+a');

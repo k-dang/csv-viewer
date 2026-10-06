@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { beforeWorkspaceStarts } from './helpers/csv';
 
 async function captureState(page: Page, testInfo: TestInfo, name: string) {
   const screenshot = testInfo.outputPath(`${name}.png`);
@@ -101,16 +102,9 @@ test('a real Worker failure shows the sanitized terminal screen and reload recov
   const diagnostics = captureDiagnostics(page);
   // In the dev build, register a faulty consumer before the renderer's real subscription.
   // The built-bundle suite exercises the same Worker failure without source instrumentation.
-  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
-    const response = await route.fetch();
-    const source = await response.text();
-    const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
-    expect(source).toContain(anchor);
-    await route.fulfill({ response, body: source.replace(anchor, `
-      started.viewer.onEvent(() => { throw new Error('PRIVATE subscriber defect'); });
-      ${anchor}
-    `) });
-  });
+  await beforeWorkspaceStarts(page, `
+    started.viewer.onEvent(() => { throw new Error('PRIVATE subscriber defect'); });
+  `);
   const workerReady = page.waitForEvent('worker');
   await page.goto('/');
   const worker = await workerReady;

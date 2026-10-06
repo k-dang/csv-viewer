@@ -2,8 +2,8 @@ import type {
   CsvFilterDescriptor,
   CsvNumberFilterOperator,
   CsvSortDescriptor,
-  CsvTextFilterOperator,
 } from '@csv-viewer/workspace/csv-viewer';
+import { valueFilter, type ValueFilterModel } from './value-filter-model';
 
 /** Translates AG Grid's sort and filter models into CsvViewer descriptors. View-side only. */
 
@@ -12,7 +12,7 @@ export type AgSortModelItem = {
   sort: 'asc' | 'desc';
 };
 
-export type AgFilterModel = Record<string, AgFilterCondition | AgCombinedFilter>;
+export type AgFilterModel = Record<string, AgFilterCondition | AgCombinedFilter | ValueFilterModel>;
 
 type AgCombinedFilter = {
   operator?: 'AND' | 'OR';
@@ -20,10 +20,10 @@ type AgCombinedFilter = {
 };
 
 type AgFilterCondition = {
-  filterType?: 'text' | 'number' | 'date';
+  filterType?: 'number' | 'date';
   type?: string;
-  filter?: string | number | null;
-  filterTo?: string | number | null;
+  filter?: number | null;
+  filterTo?: number | null;
   dateFrom?: string | null;
   dateTo?: string | null;
 };
@@ -53,16 +53,30 @@ export function toAgFilterModel(filters: CsvFilterDescriptor[]) {
 
   const model: AgFilterModel = {};
   for (const [column, list] of grouped) {
+    const folded = foldValueFilter(list);
+    if (folded) {
+      model[column] = folded;
+      continue;
+    }
     const conditions = list.map(toAgFilterCondition);
     model[column] = conditions.length === 1 ? conditions[0] : { operator: 'AND', conditions };
   }
   return model;
 }
 
+/** Text and values descriptors only come from a Value Filter, so they fold back into one model. */
+function foldValueFilter(list: CsvFilterDescriptor[]): ValueFilterModel | null {
+  let contains = '';
+  let pick: ValueFilterModel['pick'];
+  for (const filter of list) {
+    if (filter.kind === 'text') contains = filter.value;
+    else if (filter.kind === 'values') pick = { operator: filter.operator, values: [...filter.values] };
+  }
+  return valueFilter(contains, pick);
+}
+
 function toAgFilterCondition(filter: CsvFilterDescriptor): AgFilterCondition {
   switch (filter.kind) {
-    case 'text':
-      return { filterType: 'text', type: filter.operator, filter: filter.value ?? '' };
     case 'number':
       return {
         filterType: 'number',
@@ -77,6 +91,9 @@ function toAgFilterCondition(filter: CsvFilterDescriptor): AgFilterCondition {
         dateFrom: filter.value ?? null,
         dateTo: filter.valueTo ?? null,
       };
+    case 'text':
+    case 'values':
+      throw new Error('Value Filter descriptors fold into one model before reaching AG Grid conditions.');
     default: {
       const exhaustive: never = filter;
       throw new Error(`Unsupported CSV filter kind: ${String(exhaustive)}`);
@@ -90,6 +107,8 @@ function toAgFilterCondition(filter: CsvFilterDescriptor): AgFilterCondition {
  */
 export function toCsvFilterDescriptors(filterModel: AgFilterModel): CsvFilterDescriptor[] {
   return Object.entries(filterModel).flatMap(([column, model]) => {
+    if (isValueFilterModel(model)) return valueFilterDescriptors(column, model);
+
     if (isCombinedFilter(model)) {
       if (model.operator === 'OR') {
         return [];
@@ -102,55 +121,48 @@ export function toCsvFilterDescriptors(filterModel: AgFilterModel): CsvFilterDes
   });
 }
 
+/** The descriptors one column's Value Filter model narrows rows with. */
+function valueFilterDescriptors(column: string, model: ValueFilterModel): CsvFilterDescriptor[] {
+  const descriptors: CsvFilterDescriptor[] = [];
+  if (model.contains) descriptors.push({ column, kind: 'text', operator: 'contains', value: model.contains });
+  if (model.pick) descriptors.push({ column, kind: 'values', ...model.pick });
+  return descriptors;
+}
+
+function isValueFilterModel(model: AgFilterCondition | AgCombinedFilter | ValueFilterModel): model is ValueFilterModel {
+  return 'filterType' in model && model.filterType === 'values';
+}
+
 function isCombinedFilter(model: AgFilterCondition | AgCombinedFilter): model is AgCombinedFilter {
   return 'conditions' in model && Array.isArray(model.conditions);
 }
 
 function toCsvFilterDescriptor(column: string, model: AgFilterCondition): CsvFilterDescriptor {
   const type = model.type;
+  const kind = model.filterType === 'date' ? 'date' : 'number';
 
   if (type === 'blank' || type === 'notBlank') {
-    const kind = model.filterType === 'number' || model.filterType === 'date' ? model.filterType : 'text';
     return { column, kind, operator: type };
   }
 
-  if (model.filterType === 'number') {
+  if (kind === 'number') {
     return {
       column,
-      kind: 'number',
+      kind,
       operator: toNumberOperator(type),
       value: Number(model.filter),
       valueTo: model.filterTo === null || model.filterTo === undefined ? undefined : Number(model.filterTo),
     };
   }
 
-  if (model.filterType === 'date') {
-    return {
-      column,
-      kind: 'date',
-      // Date and number filters share AG Grid's comparison operator names.
-      operator: toNumberOperator(type),
-      value: model.dateFrom ?? undefined,
-      valueTo: model.dateTo ?? undefined,
-    };
-  }
-
-  return { column, kind: 'text', operator: toTextOperator(type), value: String(model.filter ?? '') };
-}
-
-function toTextOperator(type: string | undefined): CsvTextFilterOperator {
-  if (
-    type === 'contains' ||
-    type === 'notContains' ||
-    type === 'equals' ||
-    type === 'notEqual' ||
-    type === 'startsWith' ||
-    type === 'endsWith'
-  ) {
-    return type;
-  }
-
-  return 'contains';
+  return {
+    column,
+    kind,
+    // Date and number filters share AG Grid's comparison operator names.
+    operator: toNumberOperator(type),
+    value: model.dateFrom ?? undefined,
+    valueTo: model.dateTo ?? undefined,
+  };
 }
 
 function toNumberOperator(type: string | undefined): CsvNumberFilterOperator {

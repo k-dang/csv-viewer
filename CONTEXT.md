@@ -104,6 +104,10 @@ _Avoid_: Full distribution, histogram
 The percentage of Count Scope rows represented by one Counted Value. Scope Percentage is shown with each Top Counted Value.
 _Avoid_: Overall percentage, file percentage
 
+**Value Filter**:
+The column filter on text columns. It keeps rows whose value contains a search term and keeps or hides exact Counted Values picked from a list of the column's Top Counted Values. The list is scoped like Column Value Counts but ignores the column's own picked values, so a hidden value stays listed and can be picked again.
+_Avoid_: Set filter, checkbox filter, text filter
+
 **Stats Panel**:
 A side panel that presents quick statistics for its Tab's Working CSV without replacing the row grid. Stats Panel visibility and the Stats Column are per-Tab state. The first version of the Stats Panel presents read-only Column Value Counts for one selected column.
 _Avoid_: Analytics dashboard, report view

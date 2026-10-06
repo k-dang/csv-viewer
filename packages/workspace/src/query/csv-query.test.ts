@@ -28,7 +28,7 @@ describe('CSV query column validation', () => {
   const unknown = 'Unknown CSV column: missing';
 
   it('rejects an unknown filter, sort, or requested column with the validation message', () => {
-    const filters = [{ kind: 'text' as const, column: 'missing', operator: 'blank' as const }];
+    const filters = [{ kind: 'text' as const, column: 'missing', operator: 'contains' as const, value: '' }];
     const sort = [{ column: 'missing', direction: 'asc' as const }];
     expect(failureMessage(buildRowsQuery({ ...scope, filters, sort: [], limit: 10, offset: 0 }))).toBe(unknown);
     expect(failureMessage(buildRowsQuery({ ...scope, filters: [], sort, limit: 10, offset: 0 }))).toBe(unknown);

@@ -44,3 +44,25 @@ export async function columnMenu(page: Page, column: string, action: string): Pr
   await page.getByRole('columnheader', { name: column, exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: action, exact: true }).click();
 }
+
+/**
+ * Runs `script` in the page's entry module just before the workspace is created, where it can wrap
+ * `started.viewer` (for example, to hold a response). Dev server only: the built app has no main.tsx.
+ */
+export async function beforeWorkspaceStarts(page: Page, script: string): Promise<void> {
+  await page.route((url) => url.pathname === '/src/main.tsx', async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const anchor = 'workspace = new RendererWorkspace(started.viewer, {';
+    expect(source).toContain(anchor);
+    await route.fulfill({ response, body: source.replace(anchor, `${script}
+${anchor}`) });
+  });
+}
+
+/** Opens a column's filter popup from its header with the keyboard, and returns the popup. */
+export async function openColumnFilter(page: Page, column: string) {
+  await page.getByRole('columnheader', { name: column, exact: true }).focus();
+  await page.keyboard.press('Control+Enter');
+  return page.getByRole('group', { name: `Filter ${column}`, exact: true });
+}

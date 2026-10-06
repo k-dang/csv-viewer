@@ -220,8 +220,7 @@ export const RECIPES = {
       arrange: [step(click({ kind: 'filter-button', column: 'name' }), visible({ kind: 'field', field: 'filter-input' }))],
       act: { kind: 'fill', field: 'filter-input', text: fixture.needle.term },
       marks: [querying, ready, cell(0, 'name', fixture.needle.name), count(1, fixture.rows)],
-      // The filter popup closes when a large grid refreshes, so the input is gone.
-      // Escape is a no-op once it has closed. Clear query restores the unfiltered rows.
+      // Escape closes the filter popup. Clear query restores the unfiltered rows.
       reset: [
         step({ kind: 'key', key: 'Escape' }),
         step(click({ kind: 'clear-query' }), querying, ready, ...restoredRows(fixture)),
@@ -730,7 +729,7 @@ function installProbe(globalName) {
 
   function fieldNode(field) {
     if (field === 'search') return document.querySelector('#global-search');
-    if (field === 'filter-input') return document.querySelector('.ag-popup .ag-filter-body input, .ag-menu .ag-filter-body input');
+    if (field === 'filter-input') return document.querySelector('.ag-popup input[aria-label="Search values"]');
     if (field === 'cell-editor') return document.querySelector('.ag-cell-inline-editing input');
     if (field === 'column-name') return document.querySelector('input[aria-label="Column name"]');
     throw new Error('Unknown field ' + field);

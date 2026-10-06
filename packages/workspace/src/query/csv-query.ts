@@ -6,10 +6,10 @@ import type {
   CsvFilterDescriptor,
   CsvNumberFilterOperator,
   CsvSortDescriptor,
-  CsvTextFilterOperator,
+  CsvValuesFilterOperator,
 } from '../csv-viewer';
 import { Result } from 'effect';
-import { csvInternalRowIdField } from '../csv-viewer';
+import { csvInternalRowIdField, topCountedValuesLimit } from '../csv-viewer';
 import { WorkspaceRequestError } from '../errors';
 import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
 
@@ -298,7 +298,7 @@ export function buildColumnValueCountsQuery({
     FROM counted_values
     CROSS JOIN scoped_total
     ORDER BY counted_values.value_count DESC, counted_values.counted_value ASC NULLS FIRST
-    LIMIT 50`,
+    LIMIT ${topCountedValuesLimit}`,
       values: scope.values,
     };
   });
@@ -404,44 +404,37 @@ function buildFilterClause(
 ): QueryBuild<string> {
   return Result.map(requireKnownColumn(filter.column, knownColumns), () => {
     const columnSql = quoteIdentifier(filter.column);
-    if (filter.operator === 'blank')
-      return `(${columnSql} IS NULL OR ${castForText(columnSql)} = '')`;
-    if (filter.operator === 'notBlank')
-      return `(${columnSql} IS NOT NULL AND ${castForText(columnSql)} <> '')`;
-    if (filter.kind === 'text') {
-      return buildTextFilterClause(columnSql, filter.operator, filter.value ?? '', values);
+    switch (filter.kind) {
+      case 'text':
+        values.push(`%${escapeLike(filter.value)}%`);
+        return `${castForText(columnSql)} ILIKE ? ESCAPE '\\'`;
+      case 'values':
+        return buildValuesFilterClause(columnSql, filter.operator, filter.values, values);
+      default:
+        if (filter.operator === 'blank') return `(${columnSql} IS NULL OR ${castForText(columnSql)} = '')`;
+        if (filter.operator === 'notBlank') return `(${columnSql} IS NOT NULL AND ${castForText(columnSql)} <> '')`;
+        return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
     }
-    return buildScalarFilterClause(columnSql, filter.operator, filter.value, filter.valueTo, values);
   });
 }
 
-function buildTextFilterClause(
+/** Matches exact Counted Values: `null` matches null cells only, never the empty string. */
+function buildValuesFilterClause(
   columnSql: string,
-  operator: CsvTextFilterOperator,
-  value: string,
+  operator: CsvValuesFilterOperator,
+  picked: readonly (string | null)[],
   values: QueryValues,
 ): string {
-  const textSql = castForText(columnSql);
-  switch (operator) {
-    case 'contains':
-      values.push(`%${escapeLike(value)}%`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
-    case 'notContains':
-      values.push(`%${escapeLike(value)}%`);
-      return `(${columnSql} IS NULL OR ${textSql} NOT ILIKE ? ESCAPE '\\')`;
-    case 'equals':
-      values.push(value);
-      return `${textSql} = ?`;
-    case 'notEqual':
-      values.push(value);
-      return `(${columnSql} IS NULL OR ${textSql} <> ?)`;
-    case 'startsWith':
-      values.push(`${escapeLike(value)}%`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
-    case 'endsWith':
-      values.push(`%${escapeLike(value)}`);
-      return `${textSql} ILIKE ? ESCAPE '\\'`;
+  const strings = picked.filter((value) => value !== null);
+  const matches: string[] = [];
+  if (strings.length > 0) {
+    values.push(...strings);
+    matches.push(`CAST(${columnSql} AS VARCHAR) IN (${buildPlaceholders(strings.length)})`);
   }
+  if (strings.length < picked.length) matches.push(`${columnSql} IS NULL`);
+  // A null cell makes `IN` unknown; coalesce keeps `notIn` from dropping nulls it did not pick.
+  const matchSql = matches.length > 0 ? `coalesce(${matches.join(' OR ')}, false)` : 'false';
+  return operator === 'in' ? matchSql : `NOT ${matchSql}`;
 }
 
 function buildScalarFilterClause(

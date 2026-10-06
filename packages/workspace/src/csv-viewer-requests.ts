@@ -19,9 +19,6 @@ export const CsvSortDescriptor = Schema.Struct({
 });
 export type CsvSortDescriptor = typeof CsvSortDescriptor.Type;
 
-export const CsvTextFilterOperator = Schema.Literals(['contains', 'notContains', 'equals', 'notEqual', 'startsWith', 'endsWith']);
-export type CsvTextFilterOperator = typeof CsvTextFilterOperator.Type;
-
 export const CsvNumberFilterOperator = Schema.Literals([
   'equals', 'notEqual', 'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual', 'inRange',
 ]);
@@ -33,13 +30,26 @@ export type CsvDateFilterOperator = typeof CsvDateFilterOperator.Type;
 export const CsvBlankFilterOperator = Schema.Literals(['blank', 'notBlank']);
 export type CsvBlankFilterOperator = typeof CsvBlankFilterOperator.Type;
 
-/** Number filter values accept `NaN`, which the renderer sends for a non-numeric filter entry. */
+export const CsvValuesFilterOperator = Schema.Literals(['in', 'notIn']);
+export type CsvValuesFilterOperator = typeof CsvValuesFilterOperator.Type;
+
+/**
+ * Number filter values accept `NaN`, which the renderer sends for a non-numeric filter entry.
+ * A `text` filter matches a case-insensitive substring. A `values` filter keeps (`in`) or hides
+ * (`notIn`) exact Counted Values, where `null` and the empty string are distinct values.
+ */
 export const CsvFilterDescriptor = Schema.Union([
   Schema.Struct({
     column: Schema.String,
     kind: Schema.Literal('text'),
-    operator: Schema.Union([CsvTextFilterOperator, CsvBlankFilterOperator]),
-    value: Schema.optional(Schema.String),
+    operator: Schema.Literal('contains'),
+    value: Schema.String,
+  }),
+  Schema.Struct({
+    column: Schema.String,
+    kind: Schema.Literal('values'),
+    operator: CsvValuesFilterOperator,
+    values: Schema.Array(Schema.NullOr(Schema.String)),
   }),
   Schema.Struct({
     column: Schema.String,
