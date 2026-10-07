@@ -19,7 +19,7 @@ describe('desktop view export delivery through CsvViewer', () => {
     if (existing) await fixture.writeSource('output.csv', 'keep these bytes');
     const readExported = fixture.captureNextExport('output.csv');
     failWrite = true;
-    await expect(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId: csv.workingCsvId, operationId: crypto.randomUUID() })).rejects.toThrow('The export destination could not be accessed.');
+    await expect(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId: csv.workingCsvId })).rejects.toThrow('The export destination could not be accessed.');
     if (existing) await expect(readExported()).resolves.toBe('keep these bytes');
     else await expect(readExported()).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await filesystem.readdir(fixture.directory)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
@@ -32,7 +32,7 @@ describe('desktop view export delivery through CsvViewer', () => {
     fixture.prompts.holdExportPrompt = async () => { fixture.prompts.holdExportPrompt = undefined; entered.resolve(); await resume.promise; };
     fixture.prompts.exportChoices.push(fixture.file('orders.csv'));
     const readExported = fixture.captureNextExport('orders-view.csv');
-    const exported = fixture.viewer.call({ operation: 'csv.export-view', workingCsvId: csv.workingCsvId, operationId: crypto.randomUUID() });
+    const exported = fixture.viewer.call({ operation: 'csv.export-view', workingCsvId: csv.workingCsvId });
     try {
       await entered.promise;
       await fixture.writeSource('orders.csv', 'id,value\n1,after\n');

@@ -159,15 +159,11 @@ export type CsvExportRequest = typeof CsvExportRequest.Type;
 
 export const CsvViewExportRequest = Schema.Struct({
   workingCsvId: Schema.String,
-  operationId: Schema.String,
   sort: Schema.optional(Schema.Array(CsvSortDescriptor)),
   filters: Schema.optional(Schema.Array(CsvFilterDescriptor)),
   search: Schema.optional(Schema.String),
 });
 export type CsvViewExportRequest = typeof CsvViewExportRequest.Type;
-
-export const CancelViewExportRequest = Schema.Struct({ workingCsvId: Schema.String, operationId: Schema.String });
-export type CancelViewExportRequest = typeof CancelViewExportRequest.Type;
 
 export const CloseImpact = Schema.Struct({
   hasUnexportedChanges: Schema.Boolean,
@@ -261,7 +257,6 @@ export const CsvViewerRequest = Schema.Union([
   operationRequest('csv.redo', CsvEditStateRequest.fields),
   operationRequest('csv.export', CsvExportRequest.fields),
   operationRequest('csv.export-view', CsvViewExportRequest.fields),
-  operationRequest('csv.cancel-view-export', CancelViewExportRequest.fields),
   operationRequest('csv.close', CloseWorkingCsvRequest.fields),
   operationRequest('comparison.get-candidates', { baselineId: Schema.String }),
   operationRequest('comparison.open', OpenComparisonRequest.fields),

@@ -99,8 +99,6 @@ export type CsvCellEditResult = {
 export type CsvExportOutcome = { status: 'exported'; editState: CsvEditState } | { status: 'cancelled' };
 
 export type CsvViewExportOutcome = { status: 'exported'; rowCount: number } | { status: 'cancelled' | 'empty' };
-export type CancelViewExportOutcome = { status: 'requested' | 'already-finished' | 'operation-mismatch' };
-export type CsvViewExportEvent = { workingCsvId: WorkingCsvId; operationId: string; phase: 'delivering' };
 
 export type CsvEditState = {
   workingCsvId: WorkingCsvId;
@@ -349,7 +347,6 @@ export type CsvViewerOperationMap = {
   'csv.redo': CsvSchemaEditState;
   'csv.export': CsvExportOutcome;
   'csv.export-view': CsvViewExportOutcome;
-  'csv.cancel-view-export': CancelViewExportOutcome;
   'csv.close': CloseWorkingCsvOutcome;
   'comparison.get-candidates': ComparisonCandidate[];
   'comparison.open': OpenComparisonResult;
@@ -366,7 +363,6 @@ export type CsvViewerResult<Request extends CsvViewerRequest> = Request extends 
   : never;
 
 export type CsvViewerEvent =
-  | { type: 'view-export'; event: CsvViewExportEvent }
   | { type: 'comparison'; event: ComparisonEvent }
   | { type: 'intent'; intent: CsvViewerIntent }
   | { type: 'fatal-error'; message: string };

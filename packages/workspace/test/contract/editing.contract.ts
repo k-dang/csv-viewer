@@ -1734,13 +1734,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
         ['team,name', 'compiler,Ada', 'navy,Grace', 'kernel,Linus', ''].join('\n'),
       );
       const readView = fixture.captureNextExport('reordered-view.csv');
-      await expect(
-        workspace().call({
-          operation: 'csv.export-view',
-          ...request,
-          operationId: crypto.randomUUID(),
-        }),
-      ).resolves.toEqual({ status: 'exported', rowCount: 3 });
+      await expect(workspace().call({ operation: 'csv.export-view', ...request })).resolves.toEqual({ status: 'exported', rowCount: 3 });
       expect(await readView()).toBe(
         ['team,name', 'compiler,Ada', 'navy,Grace', 'kernel,Linus', ''].join('\n'),
       );

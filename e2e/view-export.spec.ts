@@ -41,54 +41,6 @@ test('reports both export preparation and worker cleanup failures', { tag: '@dev
   expect(await readFile(await download.path(), 'utf8')).toBe('id,name\n1,Ada\n');
 });
 
-test('cancels a queued view export before the preceding mutation finishes', { tag: '@dev' }, async ({ page }, testInfo) => {
-  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
-    const response = await route.fetch();
-    const source = await response.text();
-    const anchor = 'return this.calls.effect(() => this.runStatement(sql, values));';
-    expect(source).toContain(anchor);
-    await route.fulfill({ response, body: source.replace(anchor, `
-      if (sql.startsWith('INSERT INTO ') && document.body.dataset.holdMutation === 'true') {
-        delete document.body.dataset.holdMutation;
-        document.body.dataset.mutationHeld = 'true';
-        return this.calls.effect(() => new Promise((resolve) => {
-          document.addEventListener('release-mutation', () => resolve(this.runStatement(sql, values)), { once: true });
-        }));
-      }
-      ${anchor}
-    `) });
-  });
-  await page.goto('/');
-  await openCsv(page, 'queued.csv', 'id,name\n1,Ada\n2,Grace\n');
-  const downloads: string[] = [];
-  page.on('download', (download) => downloads.push(download.suggestedFilename()));
-  await page.evaluate(() => { document.body.dataset.holdMutation = 'true'; });
-  await page.getByRole('button', { name: 'Append row', exact: true }).click();
-  await expect(page.locator('body')).toHaveAttribute('data-mutation-held', 'true');
-  try {
-    await page.getByRole('button', { name: 'Export options', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Export current view · 2 rows', exact: true }).click();
-    await expect(page.getByText('Preparing export…', { exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('queued-export.png') });
-    await page.getByRole('button', { name: 'Cancel export', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Export CSV', exact: true })).toBeEnabled();
-    expect(downloads).toEqual([]);
-    // A new mutation must keep waiting on the same lock after the export leaves.
-    await page.getByRole('button', { name: 'Append row', exact: true }).click();
-    await expect(page.getByText('2 visible of 2 rows', { exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('cancelled-queued-export.png') });
-  } finally {
-    await page.evaluate(() => { document.dispatchEvent(new Event('release-mutation')); });
-  }
-  await expect(page.getByText('4 visible of 4 rows', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Export options', exact: true }).click();
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('menuitem', { name: 'Export current view · 4 rows', exact: true }).click(),
-  ]);
-  expect(await readFile(await download.path(), 'utf8')).toBe('id,name\n1,Ada\n2,Grace\n,\n,\n');
-});
-
 test('exports all matching rows beyond grid windows, commits an editor, and retains Unexported Changes', async ({ page }) => {
   await page.goto('/');
   const rows = Array.from({ length: 800 }, (_, index) => `${index + 1},keep,original`);
@@ -119,41 +71,6 @@ test('exports all matching rows beyond grid windows, commits an editor, and reta
   await page.getByRole('button', { name: 'Export options', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: 'Export current view · 0 rows', exact: true })).toBeDisabled();
   await expect(page.getByText('No matching rows to export', { exact: true })).toBeVisible();
-});
-
-test('cancels preparation while the workspace stays usable and retries the changed query', { tag: '@dev' }, async ({ page }, testInfo) => {
-  await page.route((url) => url.pathname === '/src/duckdb-wasm-database.ts', async (route) => {
-    const response = await route.fetch();
-    const source = await response.text();
-    const anchor = 'return Effect.suspend(() => {';
-    expect(source).toContain(anchor);
-    await route.fulfill({ response, body: source.replace(anchor, `
-      if (document.body.dataset.holdViewExport === 'true') {
-        delete document.body.dataset.holdViewExport;
-        return Effect.callback(() => Effect.void);
-      }
-      ${anchor}
-    `) });
-  });
-  await page.goto('/');
-  await openCsv(page, 'cancel.csv', 'id,name\n1,Ada\n2,Grace\n');
-  const downloads: string[] = [];
-  page.on('download', (download) => downloads.push(download.suggestedFilename()));
-  await page.evaluate(() => { document.body.dataset.holdViewExport = 'true'; });
-  await page.getByRole('button', { name: 'Export options', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Export current view · 2 rows', exact: true }).click();
-  await expect(page.getByText('Preparing export…', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export CSV', exact: true })).toBeDisabled();
-  await page.getByRole('searchbox', { name: 'Global search' }).fill('Grace');
-  await expect(page.getByText('1 visible of 2 rows', { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('preparing-export.png') });
-  await page.getByRole('button', { name: 'Cancel export', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Export CSV', exact: true })).toBeEnabled();
-  expect(downloads).toEqual([]);
-  await page.getByRole('button', { name: 'Export options', exact: true }).click();
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'Export current view · 1 rows', exact: true }).click()]);
-  expect(await readFile(await download.path(), 'utf8')).toBe('id,name\n2,Grace\n');
-  expect(downloads).toEqual(['cancel-view.csv']);
 });
 
 test('keeps a failed active edit open and does not export until it commits', { tag: '@dev' }, async ({ page }) => {
