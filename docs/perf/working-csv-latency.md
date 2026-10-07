@@ -4,7 +4,7 @@
 
 Cold is the first sample after a fresh app launch. Warm samples repeat in that launch after the path resets. Each path gets its own launch, so a cold sort does not include opening the file.
 
-Open starts at the file drop and stops when the first `name` cell text is in the DOM. Sort, search, insert, and rename stop when the expected cell text is in the DOM, after the status has passed through Querying. That stamp can be a frame before pixels. Filter `input-to-cell` includes the grid filter debounce, `filterDebounceMs` in `packages/ui/src/csv/csv-grid.tsx` (1500). `querying-to-ready` is only the Querying to Ready edge. Edit and delete stop on that edge and on the dirty badge. They do not stop on the cell text, which updates before `csv.edit-cell` returns.
+Open starts at the file drop and stops when the first `name` cell text is in the DOM. Sort, search, insert, and rename stop when the expected cell text is in the DOM, after the status has passed through Querying. That stamp can be a frame before pixels. Filter `input-to-cell` includes the Value Filter's search debounce, `searchDebounceMs` in `packages/ui/src/csv/csv-value-filter.tsx` (300). The baselines below were recorded with the earlier 1500 ms text filter debounce. `querying-to-ready` is only the Querying to Ready edge. Edit and delete stop on that edge and on the dirty badge. They do not stop on the cell text, which updates before `csv.edit-cell` returns.
 
 The fixtures are `fixtures/phase-2-sample.csv` (656 bytes, 5 rows, 10 columns) and `fixtures/large-phase-3-test.csv` (28,858,844 bytes, 100,000 rows, 14 columns). The harness checks each file's SHA-256 before launch. Session `local` means `CI` was unset. The viewport is 1440 by 900.
 

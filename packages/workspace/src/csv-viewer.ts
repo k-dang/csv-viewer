@@ -76,6 +76,9 @@ export type CsvColumnValueCount = {
   percentOfScope: number;
 };
 
+/** Column Value Counts list at most this many Top Counted Values. */
+export const topCountedValuesLimit = 50;
+
 export type CsvColumnValueCounts = {
   workingCsvId: WorkingCsvId;
   column: string;

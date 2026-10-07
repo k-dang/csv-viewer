@@ -151,7 +151,7 @@ export class CsvTab {
 
   /**
    * One row window under the current query. Resolves null when the query or data moved on while
-   * the request was in flight, so the caller shows nothing rather than a superseded window.
+   * the request was in flight, so the caller drops the superseded window instead of showing it.
    */
   async rows(offset: number, limit: number): Promise<CsvRowWindow | null> {
     if (this.disposed) return null;
@@ -413,16 +413,10 @@ export class CsvTab {
   private refreshStats(): void {
     this.stopStats();
     if (this.disposed || !this.state.stats.open) return;
-    const { query, stats, workingCsv } = this.state;
+    const { query, stats } = this.state;
     this.set({ stats: { ...stats, result: { status: 'loading' } } });
     this.statsFiber = Effect.runFork(Effect.tryPromise({
-      try: () => this.viewer.call({
-        operation: 'csv.get-column-value-counts',
-        workingCsvId: workingCsv.workingCsvId,
-        column: stats.column,
-        filters: query.filters,
-        search: query.search.trim(),
-      }),
+      try: () => this.valueCounts(stats.column, { filters: query.filters, search: query.search }),
       catch: (error) => error,
     }).pipe(Effect.matchEffect({
       onSuccess: (counts) => Effect.sync(() => this.settleStats({ status: 'ready', counts })),
@@ -431,6 +425,17 @@ export class CsvTab {
         message: error instanceof Error ? error.message : 'Unable to calculate column value counts.',
       })),
     })));
+  }
+
+  /** Column Value Counts for one column under `scope`. Live Stats and Value Filter lists both use it. */
+  valueCounts(column: string, scope: Pick<CsvTabQuery, 'filters' | 'search'>): Promise<CsvColumnValueCounts> {
+    return this.viewer.call({
+      operation: 'csv.get-column-value-counts',
+      workingCsvId: this.workingCsvId,
+      column,
+      filters: scope.filters,
+      search: scope.search.trim(),
+    });
   }
 
   /** Interrupts only the renderer continuation; CsvViewer's backend request still runs. */

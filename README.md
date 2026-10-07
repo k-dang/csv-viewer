@@ -45,7 +45,7 @@ An active cell editor commits first; a failed commit keeps its draft open. You c
 
 ## Search, copy, and count values
 
-**Global search** matches across all columns. Column headers sort and filter. **Clear query** resets the search, filters, and sort.
+**Global search** matches across all columns. Column headers sort and filter. On a text column, the filter lists the column's top values with their row counts: search for text, or check and uncheck values to keep or hide them. Right-click a text cell to filter to that value or exclude it. **Clear query** resets the search, filters, and sort.
 
 Press `Ctrl+C` to copy the focused cell. To copy a column, right-click its header and choose **Copy column**. The copy holds the values that match the current query, in the current sort order, one per line, without the header. Null values become empty lines.
 

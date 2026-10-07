@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/context-menu';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent } from '@/components/ui/popover';
+import { focusStillInMenu } from '@/lib/utils';
 import type { CsvTab } from './csv-tab';
 import { copyColumn, isCopyColumnShortcut } from './copy-column';
 
@@ -95,7 +96,7 @@ export function CsvColumnMenu({ tab, active, children }: { tab: CsvTab; active: 
             aria-label={`Column ${menu.column}`}
             className="min-w-56"
             // Rename moves focus into its field; returning it to the header would send Enter to sort.
-            finalFocus={() => renameAfterClose.current === null}
+            finalFocus={() => renameAfterClose.current === null && focusStillInMenu()}
           >
             <ContextMenuItem
               disabled={columnActionPending}

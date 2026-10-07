@@ -106,8 +106,8 @@ function ColumnValueCountsList({ counts }: { counts: CsvColumnValueCounts }) {
             className="grid grid-cols-[1fr_auto] gap-3 border-b px-3 py-2 last:border-b-0"
           >
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-foreground" title={formatStatsValue(value.value)}>
-                {formatStatsValue(value.value)}
+              <div className="truncate text-sm font-medium text-foreground" title={formatCellValue(value.value)}>
+                {formatCellValue(value.value)}
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
@@ -125,18 +125,6 @@ function ColumnValueCountsList({ counts }: { counts: CsvColumnValueCounts }) {
       </Card>
     </div>
   );
-}
-
-function formatStatsValue(value: string | null): string {
-  if (value === null) {
-    return '(null)';
-  }
-
-  if (value === '') {
-    return '(blank)';
-  }
-
-  return formatCellValue(value);
 }
 
 function formatPercent(value: number): string {
