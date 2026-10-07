@@ -102,8 +102,10 @@ export function defineViewExportContract(factory: WorkspaceContractFactory): voi
       const exported = fixture.viewer.call({ operation: 'csv.export-view', workingCsvId: csv.workingCsvId });
       try {
         await held.entered;
+        // Close waits for the export to settle, so its rejection must already be observed.
+        const rejected = expect(exported).rejects.toThrow('The data engine could not complete the operation.');
         await fixture.viewer.call({ operation: 'csv.close', workingCsvId: csv.workingCsvId });
-        await expect(exported).rejects.toThrow('The data engine could not complete the operation.');
+        await rejected;
         await expect(readExported()).rejects.toThrow();
         expect(closed()).toBe(false);
         await fixture.disposeWorkspace();
