@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Fiber } from 'effect';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from '@effect/vitest';
 import { DataEngineError, driverEffect, type WorkspaceDatabaseConnection } from '../database';
 import type { EngineRow } from '../query/csv-result-normalization';
 import { stubConnection } from '../../test/stub-connection';
@@ -25,7 +25,7 @@ function source(release: () => void = () => undefined) {
 const summary = [{ changed: 0n, baseline_only: 0n, candidate_only: 0n, unchanged: 0n, total: 0n, changed_count_0: 0n }];
 
 describe('DuckDbComparisonExecutor scoped lifecycle', () => {
-  it('awaits the interrupted query before releasing either its source or connection', async () => {
+  it.effect('awaits the interrupted query before releasing either its source or connection', () => Effect.gen(function* () {
     const started = Promise.withResolvers<void>();
     const cancelled = Promise.withResolvers<void>();
     const query = Promise.withResolvers<never>();
@@ -48,21 +48,22 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       connectWorker: () => Effect.succeed(connection),
       getOwnerConnection: () => Effect.die(new Error('Cancellation must not use the owner connection.')),
     });
-    const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
+    const fiber = yield* Effect.forkScoped(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.validateKey('source', ['id']);
     })));
-    await started.promise;
-    Effect.runFork(Fiber.interrupt(fiber));
-    await cancelled.promise;
+    yield* Effect.promise(() => started.promise);
+    yield* Effect.forkScoped(Fiber.interrupt(fiber), { startImmediately: true });
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.reject(new Error('Test finished.'))));
+    yield* Effect.promise(() => cancelled.promise);
     expect(released).toEqual([]);
     query.reject(new Error('interrupted'));
-    const exit = await Effect.runPromise(Fiber.await(fiber));
+    const exit = yield* Fiber.await(fiber);
     expect(Exit.hasInterrupts(exit)).toBe(true);
     expect(released).toEqual(['source', 'connection']);
-  });
+  }));
 
-  it('fails an unknown key column as a request failure, not a defect, and releases the source', async () => {
+  it.effect('fails an unknown key column as a request failure, not a defect, and releases the source', () => Effect.gen(function* () {
     const released: string[] = [];
     let queried = false;
     const executor = new DuckDbComparisonExecutor({
@@ -80,7 +81,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       })),
       getOwnerConnection: () => Effect.succeed(stubConnection()),
     });
-    const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
+    const exit = yield* Effect.exit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.validateKey('source', ['id', 'missing']);
     })));
@@ -89,9 +90,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       .toEqual(['Unknown CSV column: missing']);
     expect(queried).toBe(false);
     expect(released).toEqual(['source', 'connection']);
-  });
+  }));
 
-  it('releases an eventual connection without starting queries when interrupted during acquisition', async () => {
+  it.effect('releases an eventual connection without starting queries when interrupted during acquisition', () => Effect.gen(function* () {
     const requested = Promise.withResolvers<void>();
     const connection = Promise.withResolvers<WorkspaceDatabaseConnection>();
     let closed = false;
@@ -107,23 +108,24 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       }),
       getOwnerConnection: () => Effect.succeed(stubConnection()),
     });
-    const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
+    const fiber = yield* Effect.forkScoped(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.validateKey('source', ['id']);
     })));
-    await requested.promise;
-    Effect.runFork(Fiber.interrupt(fiber));
+    yield* Effect.promise(() => requested.promise);
+    yield* Effect.forkScoped(Fiber.interrupt(fiber), { startImmediately: true });
+    yield* Effect.addFinalizer(() => Effect.sync(() => connection.resolve(stubConnection())));
     connection.resolve(stubConnection({
       close: () => Effect.sync(() => {
         closed = true;
       }),
     }));
-    expect(Exit.hasInterrupts(await Effect.runPromise(Fiber.await(fiber)))).toBe(true);
+    expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
     expect(closed).toBe(true);
     expect(queried).toBe(false);
-  });
+  }));
 
-  it('releases the baseline and connection when candidate acquisition fails', async () => {
+  it.effect('releases the baseline and connection when candidate acquisition fails', () => Effect.gen(function* () {
     const released: string[] = [];
     const connection = stubConnection({
       close: () => Effect.sync(() => {
@@ -139,7 +141,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
           released.push('baseline');
         }),
     });
-    const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
+    const exit = yield* Effect.exit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.createSnapshot(snapshotRequest);
     })));
@@ -148,9 +150,9 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     expect(exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)).toMatchObject([
       { cause: { message: 'candidate unavailable' } },
     ]);
-  });
+  }));
 
-  it('retains typed query and cleanup causes and retries cleanup', async () => {
+  it.effect('retains typed query and cleanup causes and retries cleanup', () => Effect.gen(function* () {
     const queryFailure = new Error('query failed');
     let closeFails = true;
     let workerClosed = false;
@@ -165,7 +167,7 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       getOwnerConnection: () => Effect.succeed(connection),
       acquireSource: () => source(),
     });
-    const exit = await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
+    const exit = yield* Effect.exit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.validateKey('source', ['id']);
     })));
@@ -177,11 +179,11 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       { name: 'ComparisonCleanupError', cause: { name: 'DataEngineError', cause: { message: 'close failed' } } },
     ]);
     closeFails = false;
-    await Effect.runPromise(executor.dispose());
+    yield* executor.dispose();
     expect(workerClosed).toBe(true);
-  });
+  }));
 
-  it('continues independent disposal after a failed worker close', async () => {
+  it.effect('continues independent disposal after a failed worker close', () => Effect.gen(function* () {
     const dropped: string[] = [];
     const owner = stubConnection({
       run: (sql) => Effect.sync(() => {
@@ -197,16 +199,17 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
-    await Effect.runPromiseExit(Effect.scoped(Effect.gen(function* () {
+    yield* Effect.exit(Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.createSnapshot(snapshotRequest);
       executor.activateSnapshot('attempt');
     })));
-    await expect(Effect.runPromise(executor.dispose())).rejects.toThrow('The data engine could not complete the operation.');
+    const disposed = yield* Effect.exit(executor.dispose());
+    expect(Exit.isFailure(disposed) && Cause.squash(disposed.cause)).toMatchObject({ message: 'The data engine could not complete the operation.' });
     expect(dropped).toHaveLength(1);
-  });
+  }));
 
-  it('keeps a published snapshot until all its active readers complete', async () => {
+  it.effect('keeps a published snapshot until all its active readers complete', () => Effect.gen(function* () {
     const readStarted = Promise.withResolvers<void>();
     const reads = [Promise.withResolvers<EngineRow[]>(), Promise.withResolvers<EngineRow[]>()];
     let readCount = 0;
@@ -235,13 +238,13 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
-    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    yield* Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.createSnapshot(snapshotRequest);
       executor.activateSnapshot('attempt');
-    })));
+    }));
     expect(workerClosed).toBe(true);
-    const windows = reads.map(() => Effect.runPromise(executor.readWindow({
+    const windows = yield* Effect.forEach(reads, () => Effect.forkScoped(executor.readWindow({
       artifactId: 'attempt',
       keyCount: 1,
       columnIndexes: [0],
@@ -250,20 +253,21 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       differencesOnly: false,
       swapped: false,
     })));
-    await readStarted.promise;
-    const retirement = Effect.runPromise(executor.dropSnapshot('attempt'));
+    yield* Effect.promise(() => readStarted.promise);
+    const retirement = yield* Effect.forkScoped(executor.dropSnapshot('attempt'), { startImmediately: true });
+    yield* Effect.addFinalizer(() => Effect.sync(() => reads.forEach((read) => read.resolve([{ count: 0n }]))));
     expect(dropped).toBe(false);
     reads[0].resolve([{ count: 0n }]);
-    await expect(windows[0]).resolves.toEqual({ totalRowCount: 0, rows: [] });
+    expect(yield* Fiber.join(windows[0])).toEqual({ totalRowCount: 0, rows: [] });
     expect(dropped).toBe(false);
     reads[1].resolve([{ count: 0n }]);
-    await expect(windows[1]).resolves.toEqual({ totalRowCount: 0, rows: [] });
-    await retirement;
+    expect(yield* Fiber.join(windows[1])).toEqual({ totalRowCount: 0, rows: [] });
+    yield* Fiber.join(retirement);
     expect(dropped).toBe(true);
-    await Effect.runPromise(executor.dispose());
-  });
+    yield* executor.dispose();
+  }));
 
-  it('settles a non-cancellable result read before interruption can release its snapshot', async () => {
+  it.effect('settles a non-cancellable result read before interruption can release its snapshot', () => Effect.gen(function* () {
     const readStarted = Promise.withResolvers<void>();
     const read = Promise.withResolvers<EngineRow[]>();
     let settled = false;
@@ -281,28 +285,26 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       getOwnerConnection: () => Effect.succeed(owner),
       acquireSource: () => source(),
     });
-    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    yield* Effect.scoped(Effect.gen(function* () {
       const attempt = yield* executor.openAttempt();
       yield* attempt.createSnapshot(snapshotRequest);
       executor.activateSnapshot('attempt');
-    })));
-    const reading = Effect.runFork(executor.readWindow({
+    }));
+    const reading = yield* Effect.forkScoped(executor.readWindow({
       artifactId: 'attempt', keyCount: 1, columnIndexes: [0], offset: 0, limit: 10,
       differencesOnly: false, swapped: false,
     }).pipe(Effect.ensuring(Effect.sync(() => { settled = true; }))));
-    await readStarted.promise;
-    const interruption = Effect.runPromise(Fiber.interrupt(reading));
-    const retirement = Effect.runPromise(executor.dropSnapshot('attempt'));
-    try {
-      await Effect.runPromise(Effect.yieldNow);
-      expect(settled).toBe(false);
-      expect(dropped).toBe(false);
-    } finally {
-      read.resolve([{ count: 0n }]);
-      await Promise.all([interruption, retirement]);
-      await Effect.runPromise(executor.dispose());
-    }
+    yield* Effect.promise(() => readStarted.promise);
+    const interruption = yield* Effect.forkScoped(Fiber.interrupt(reading), { startImmediately: true });
+    const retirement = yield* Effect.forkScoped(executor.dropSnapshot('attempt'), { startImmediately: true });
+    yield* Effect.addFinalizer(() => Effect.sync(() => read.resolve([{ count: 0n }])));
+    expect(settled).toBe(false);
+    expect(dropped).toBe(false);
+    read.resolve([{ count: 0n }]);
+    yield* Fiber.join(interruption);
+    yield* Fiber.join(retirement);
+    yield* executor.dispose();
     expect(settled).toBe(true);
     expect(dropped).toBe(true);
-  });
+  }));
 });

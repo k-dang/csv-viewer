@@ -145,22 +145,18 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     });
   }
   failNextDescribeSource(): void {
-    const describeSource = this.host.describeSource.bind(this.host);
-    this.host.describeSource = () => {
-      this.host.describeSource = describeSource;
+    vi.spyOn(this.host, 'describeSource').mockImplementationOnce(() => {
       return Effect.die(new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
       }));
-    };
+    });
   }
   failNextRecentSources(): void {
-    const recentSources = this.host.recentSources.bind(this.host);
-    this.host.recentSources = () => {
-      this.host.recentSources = recentSources;
+    vi.spyOn(this.host, 'recentSources').mockImplementationOnce(() => {
       throw new Error('PRIVATE SQL SELECT * FROM secrets at C:\\PRIVATE.csv', {
         cause: new Error('PRIVATE nested driver detail'),
       });
-    };
+    });
   }
 
   failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void> { return failNextSnapshotDrop(this.database, mode); }
