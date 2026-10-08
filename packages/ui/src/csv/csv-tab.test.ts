@@ -245,7 +245,6 @@ describe('CsvTab', () => {
     await expect(tab.copyFocusedColumn()).resolves.toBeUndefined();
     await tab.export();
     await tab.exportView();
-    await tab.cancelExport();
 
     expect(call).not.toHaveBeenCalled();
     expect(tab.snapshot()).toBe(state);
@@ -316,18 +315,18 @@ describe('CsvTab', () => {
     const exportView = vi.fn(async () => ({ status: 'exported' as const, rowCount: 12 }));
     const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.export': exportCsv, 'csv.export-view': exportView } }), workingCsv);
     const completion = tab.export();
-    expect(tab.snapshot().exportOperation?.phase).toBe('delivering');
+    expect(tab.snapshot().exporting).toBe(true);
 
     await tab.exportView();
     expect(exportView).not.toHaveBeenCalled();
     pending.reject(new Error('Export destination unavailable.'));
     await completion;
-    expect(tab.snapshot().exportOperation).toBeNull();
+    expect(tab.snapshot().exporting).toBe(false);
     expect(tab.snapshot().editError).toBe('Export destination unavailable.');
 
     await tab.exportView();
     expect(exportView).toHaveBeenCalledOnce();
-    expect(tab.snapshot().exportOperation).toBeNull();
+    expect(tab.snapshot().exporting).toBe(false);
     expect(tab.snapshot().exportConfirmation).toBe('Export complete · 12 rows');
     expect(tab.snapshot().revision).toBe(0);
     expect(tab.snapshot().editState).toEqual(workingCsv.editState);

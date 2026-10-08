@@ -17,9 +17,6 @@ import type {
   CsvExportOutcome,
   CsvViewExportRequest,
   CsvViewExportOutcome,
-  CsvViewExportEvent,
-  CancelViewExportRequest,
-  CancelViewExportOutcome,
   CsvEditStateRequest,
   CsvInsertColumnRequest,
   CsvInsertRowRequest,
@@ -130,8 +127,6 @@ export interface WorkingCsvs {
   redo(workingCsvId: WorkingCsvId): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError>;
   exportCsv(workingCsvId: WorkingCsvId): Effect.Effect<CsvExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
   exportView(request: CsvViewExportRequest): Effect.Effect<CsvViewExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError>;
-  cancelViewExport(request: CancelViewExportRequest): Effect.Effect<CancelViewExportOutcome>;
-  subscribeToViewExports(listener: (event: CsvViewExportEvent) => void): () => void;
 }
 
 export const WorkingCsvs = Context.Service<WorkingCsvs>('csv-viewer/WorkingCsvs');
@@ -159,8 +154,8 @@ class WorkingCsvStore implements WorkingCsvs {
   /** Export workers whose close failed. Disposal retries them before the database is released. */
   private readonly unreleasedExportWorkers = new Set<WorkspaceDatabaseConnection>();
   private readonly busyExports = new Set<WorkingCsvId>();
-  private readonly viewExports = new Map<WorkingCsvId, { operationId: string; cancel: Deferred.Deferred<void>; preparing: boolean }>();
-  private readonly viewExportListeners = new Set<(event: CsvViewExportEvent) => void>();
+  /** View exports still preparing. Close, reopen, and disposal cancel them. */
+  private readonly viewExports = new Map<WorkingCsvId, { cancel: Deferred.Deferred<void>; preparing: boolean }>();
   private admittedWork = 0;
   /** Open while no admitted open, reopen, or worker connection setup is running. */
   private readonly workSettled = Latch.makeUnsafe(true);
@@ -741,7 +736,7 @@ class WorkingCsvStore implements WorkingCsvs {
     this: WorkingCsvStore,
     request: CsvViewExportRequest,
   ): Effect.fn.Return<CsvViewExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError> {
-    const operation = { operationId: request.operationId, cancel: Deferred.makeUnsafe<void>(), preparing: true };
+    const operation = { cancel: Deferred.makeUnsafe<void>(), preparing: true };
     this.viewExports.set(request.workingCsvId, operation);
     let releaseFailure: DataEngineError | undefined;
     const preparation = Effect.gen({ self: this }, function* () {
@@ -781,9 +776,6 @@ class WorkingCsvStore implements WorkingCsvs {
     const prepared = result.value;
     if (prepared.rowCount === 0) return { status: 'empty' } satisfies CsvViewExportOutcome;
     operation.preparing = false;
-    yield* Effect.forEach([...this.viewExportListeners], (listener) => Effect.sync(() => listener({
-      workingCsvId: request.workingCsvId, operationId: request.operationId, phase: 'delivering',
-    })).pipe(Effect.catchCause((cause) => reportFailure('csv.notify-export', cause))), { discard: true });
     const delivery = yield* observeStage('csv.deliver-view-export', this.host.deliverExport({ ...prepared, kind: 'view' }));
     return delivery.status === 'cancelled'
       ? { status: 'cancelled' } satisfies CsvViewExportOutcome
@@ -791,21 +783,6 @@ class WorkingCsvStore implements WorkingCsvs {
   }, (effect, request) => this.withExportSlot(request.workingCsvId, effect.pipe(
     Effect.ensuring(Effect.sync(() => { this.viewExports.delete(request.workingCsvId); })),
   )));
-
-  cancelViewExport(request: CancelViewExportRequest): Effect.Effect<CancelViewExportOutcome> {
-    return Effect.sync(() => {
-      const operation = this.viewExports.get(request.workingCsvId);
-      if (!operation?.preparing) return { status: 'already-finished' };
-      if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
-      this.cancelPreparation(request.workingCsvId);
-      return { status: 'requested' };
-    });
-  }
-
-  subscribeToViewExports(listener: (event: CsvViewExportEvent) => void): () => void {
-    this.viewExportListeners.add(listener);
-    return () => { this.viewExportListeners.delete(listener); };
-  }
 
   private cancelPreparation(workingCsvId: WorkingCsvId): void {
     const operation = this.viewExports.get(workingCsvId);

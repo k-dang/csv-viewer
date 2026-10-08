@@ -41,7 +41,7 @@ To save your edits, click **Export CSV**. The export contains the whole working 
 
 To extract matching rows, open **Export options** beside Export and choose **Export current view**. It includes every matching row in the current sort order, even beyond the loaded grid. All columns keep their working-copy order, regardless of row selection or dragged headers. The menu shows the matching count and disables the action while the count is unresolved or zero.
 
-An active cell editor commits first; a failed commit keeps its draft open. You can **Cancel** while the app prepares the output. Delivery suggests a `-view` filename and keeps the current delimiter and header settings. View export preserves **Unexported Changes** and undo/redo history, even when every row matches.
+An active cell editor commits first; a failed commit keeps its draft open. Delivery suggests a `-view` filename and keeps the current delimiter and header settings. View export preserves **Unexported Changes** and undo/redo history, even when every row matches.
 
 ## Search, copy, and count values
 

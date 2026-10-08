@@ -99,6 +99,7 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
     editState,
     editError,
     exportConfirmation,
+    exporting,
     query,
     hasActiveQuery,
     selectedRowIds,
@@ -520,7 +521,9 @@ export function CsvGrid({ tab, fileActions, active, DataGrid = AgGridReact }: Cs
             {editError}
           </span>
         ) : null}
-        {exportConfirmation ? (
+        {exporting ? (
+          <span className="shrink-0 font-medium text-muted-foreground" role="status">Exporting…</span>
+        ) : exportConfirmation ? (
           <span className="shrink-0 font-medium text-emerald-700 dark:text-emerald-400" role="status">
             {exportConfirmation}
           </span>

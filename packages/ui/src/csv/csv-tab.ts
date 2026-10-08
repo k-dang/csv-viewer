@@ -11,7 +11,6 @@ import type {
   CsvSchemaEditState,
   CsvSortDescriptor,
   CsvViewer,
-  CsvViewExportEvent,
   WorkingCsvView,
 } from '@csv-viewer/workspace/csv-viewer';
 
@@ -40,7 +39,8 @@ export type CsvTabState = {
   editError: string | null;
   /** The runtime's own wording after a successful Export CSV. Cleared by the next change. */
   exportConfirmation: string | null;
-  exportOperation: { operationId: string; phase: 'preparing' | 'delivering' } | null;
+  /** True from an export's admission until it settles; a second export is refused meanwhile. */
+  exporting: boolean;
   query: CsvTabQuery;
   /** True while sort, filters, or search shape the row window. Appending is blocked then. */
   hasActiveQuery: boolean;
@@ -98,7 +98,7 @@ export class CsvTab {
   replaceWorkingCsv(workingCsv: WorkingCsvView): void {
     this.queryVersion += 1;
     this.stopStats();
-    this.set({ ...freshState(workingCsv), exportOperation: this.state.exportOperation, revision: this.state.revision + 1 });
+    this.set({ ...freshState(workingCsv), exporting: this.state.exporting, revision: this.state.revision + 1 });
   }
 
   setSearch(search: string): void {
@@ -311,37 +311,23 @@ export class CsvTab {
 
   /** Export CSV changes no data, so the grid keeps its rows; only the edit state moves. */
   export(): Promise<void> {
-    return this.withExport('delivering', 'Unable to export CSV.', async () => {
+    return this.withExport('Unable to export CSV.', async () => {
       const result = await this.viewer.call({ operation: 'csv.export', workingCsvId: this.workingCsvId });
       if (this.disposed || result.status === 'cancelled') return;
       this.set({ editState: result.editState, exportConfirmation: this.viewer.capabilities.exportCsvSuccessMessage });
     });
   }
 
-  receiveExport(event: CsvViewExportEvent): void {
-    if (this.state.exportOperation?.operationId === event.operationId) {
-      this.set({ exportOperation: { operationId: event.operationId, phase: event.phase } });
-    }
-  }
-
   exportView(): Promise<void> {
-    return this.withExport('preparing', 'Unable to export current view.', async (operationId) => {
+    return this.withExport('Unable to export current view.', async () => {
       const { query } = this.state;
       const result = await this.viewer.call({ operation: 'csv.export-view', workingCsvId: this.workingCsvId,
-        operationId, sort: query.sort, filters: query.filters, search: query.search.trim() });
+        sort: query.sort, filters: query.filters, search: query.search.trim() });
       if (this.disposed) return;
       if (result.status === 'empty') this.set({ exportConfirmation: 'No matching rows to export' });
       else if (result.status === 'exported') this.set({ exportConfirmation:
         `${this.viewer.capabilities.exportCsvSuccessMessage} · ${result.rowCount.toLocaleString()} rows` });
     });
-  }
-
-  async cancelExport(): Promise<void> {
-    const operation = this.state.exportOperation;
-    if (this.disposed || !operation || operation.phase !== 'preparing') return;
-    try {
-      await this.viewer.call({ operation: 'csv.cancel-view-export', workingCsvId: this.workingCsvId, operationId: operation.operationId });
-    } catch (error) { this.fail(error, 'Unable to cancel export.'); }
   }
 
   dispose(): void {
@@ -351,20 +337,15 @@ export class CsvTab {
   }
 
   /** Export admission and cleanup are shared; completion preserves each export's edit semantics. */
-  private async withExport(
-    phase: 'preparing' | 'delivering',
-    fallback: string,
-    operation: (operationId: string) => Promise<void>,
-  ): Promise<void> {
-    if (this.disposed || this.state.exportOperation) return;
-    const operationId = crypto.randomUUID();
-    this.set({ editError: null, exportConfirmation: null, exportOperation: { operationId, phase } });
+  private async withExport(fallback: string, operation: () => Promise<void>): Promise<void> {
+    if (this.disposed || this.state.exporting) return;
+    this.set({ editError: null, exportConfirmation: null, exporting: true });
     try {
-      await operation(operationId);
+      await operation();
     } catch (error) {
       this.fail(error, fallback);
     } finally {
-      if (!this.disposed && this.snapshot().exportOperation?.operationId === operationId) this.set({ exportOperation: null });
+      if (!this.disposed) this.set({ exporting: false });
     }
   }
 
@@ -466,7 +447,7 @@ function freshState(workingCsv: WorkingCsvView): CsvTabState {
     editState: workingCsv.editState,
     editError: null,
     exportConfirmation: null,
-    exportOperation: null,
+    exporting: false,
     query: emptyQuery,
     hasActiveQuery: false,
     queryStatus: 'idle',

@@ -28,10 +28,10 @@ import type {
 } from './csv-viewer';
 
 type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
-type ExportRequest = Extract<CsvViewerRequest, { operation: 'csv.export' | 'csv.export-view' | 'csv.cancel-view-export' }>;
+type ExportRequest = Extract<CsvViewerRequest, { operation: 'csv.export' | 'csv.export-view' }>;
 
 function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
-  return request.operation === 'csv.export' || request.operation === 'csv.export-view' || request.operation === 'csv.cancel-view-export';
+  return request.operation === 'csv.export' || request.operation === 'csv.export-view';
 }
 type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>>;
 
@@ -194,8 +194,6 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
           : Effect.succeed({ status: 'cancelled' } satisfies CsvExportOutcome));
       case 'csv.export-view':
         return this.workingCsvs.exportView(request);
-      case 'csv.cancel-view-export':
-        return this.workingCsvs.cancelViewExport(request);
     }
   }
 
@@ -266,12 +264,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     const stopComparisons = this.comparisons.subscribe((event) => {
       if (!this.engineStopped) listener({ type: 'comparison', event });
     });
-    const stopExports = this.workingCsvs.subscribeToViewExports((event) => {
-      if (!this.engineStopped) listener({ type: 'view-export', event });
-    });
     return () => {
       stopComparisons();
-      stopExports();
       this.listeners.delete(listener);
     };
   }

@@ -63,7 +63,8 @@ describe('CsvGrid', () => {
     expect(screen.getByText('1 scoped rows')).toBeDefined();
   });
 
-  it('presents the runtime-specific confirmation after Export CSV succeeds', async () => {
+  it('announces Exporting… and then the runtime-specific confirmation in one status region', async () => {
+    let finishExport!: () => void;
     const workingCsv = workingCsvFixture({
       editState: { workingCsvId: 'working-csv-1', hasUnexportedChanges: true, canUndo: true, canRedo: false },
     });
@@ -71,10 +72,13 @@ describe('CsvGrid', () => {
       createTestCsvViewer({
         capabilities: { exportCsvSuccessMessage: 'Download started' },
         handlers: {
-          'csv.export': async () => ({
-            status: 'exported',
-            editState: { ...workingCsv.editState, hasUnexportedChanges: false },
-          }),
+          'csv.export': async () => {
+            await new Promise<void>((resolve) => { finishExport = resolve; });
+            return {
+              status: 'exported',
+              editState: { ...workingCsv.editState, hasUnexportedChanges: false },
+            };
+          },
         },
       }),
       workingCsv,
@@ -86,7 +90,11 @@ describe('CsvGrid', () => {
       screen.getByRole('button', { name: 'Export CSV' }).click();
     });
 
-    expect(screen.getByRole('status').textContent).toBe('Download started');
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('Exporting…');
+    await act(async () => { finishExport(); });
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toBe('Download started');
   });
 
   it('keeps grid column fields in Working CSV order after renaming a middle header', async () => {

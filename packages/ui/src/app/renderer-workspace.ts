@@ -292,7 +292,6 @@ export class RendererWorkspace {
   private receive(event: CsvViewerEvent): void {
     if (this.stopped) return;
     if (event.type === 'comparison') this.comparisonEvent(event.event);
-    else if (event.type === 'view-export') this.csvEntry(event.event.workingCsvId)?.tab.receiveExport(event.event);
     else if (event.type === 'intent') this.intent(event.intent);
     else {
       this.stop();
