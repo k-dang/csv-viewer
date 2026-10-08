@@ -3,14 +3,12 @@ import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react';
 
 export type QueryState = 'idle' | 'querying' | 'ready' | 'failed';
 
-/** A query that settles faster than this never shows Querying, so typing a search does not blink the status bar. */
 export const QUERYING_LABEL_DELAY_MS = 250;
 
 /**
  * The query state of one CSV Tab, as a compact label for its status bar. Querying shows only once a
- * query outlasts `QUERYING_LABEL_DELAY_MS`; `data-query-status` always carries the current state.
- * Every branch renders the same polite live region at a fixed width, so screen readers hear each
- * shown change, including a failed query, and the text after it never shifts.
+ * query outlasts `QUERYING_LABEL_DELAY_MS`, so typing a search does not blink; `data-query-status`
+ * always carries the current state. Every branch renders the same fixed-width polite live region.
  */
 export function QueryStatusIndicator({ state }: { state: QueryState }) {
   const [slow, setSlow] = useState(false);
