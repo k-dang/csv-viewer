@@ -160,7 +160,7 @@ Stable handles from this renderer:
 | Close tab | button `Close phase-2-sample.csv` |
 | File heading | `#metadata-title` text, e.g. `phase-2-sample.csv` |
 | Row counts | `5 visible of 5 rows` (locale-formatted) |
-| Query status | `Ready`, `Querying`, or `Query failed`, at the start of the status bar below the grid |
+| Query status | `Ready`, `Querying`, or `Query failed`, at the start of the status bar below the grid. `Querying` shows only once a query runs past 250 ms, so a fast search stays on `Ready` throughout |
 | Global search | searchbox `Global search` (`#global-search`) |
 | Clear query | button `Clear query` |
 | Insert / append / delete | buttons `Insert row above`, `Insert row below`, `Append row`, `Delete selected rows` |
