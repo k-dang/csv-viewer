@@ -17,10 +17,10 @@ Open a CSV, optionally search/filter/sort, then open Export options beside Expor
 
 Preconditions: launch the desired runtime and open `fixtures/phase-2-sample.csv` using [Open a CSV](./open-csv.md). Desktop delivery requires a human destination choice; web downloads into the launcher's session download directory.
 
-- **Draft.** Run `click --role gridcell --name "Ada Lovelace" --double`, then `fill --focused --value "Ada Lovelace Edited"`. Leave the editor open.
-- **Search.** Run `fill --role searchbox --name "Global search" --value "Ada"`. Wait for `1 visible of 5 rows`. Opening Export options commits any remaining active editor.
-- **Scope.** Run `click --role button --name "Export options"`. Wait for `Export current view · 1 rows`. The trigger also opens with Enter for keyboard access.
-- **Deliver.** Run `click --role menuitem --name "Export current view · 1 rows"`. On web, wait for `Download started · 1 rows`, read the newest `phase-2-sample-view.csv`, and confirm one data row containing the edited name and every column. On desktop, choose a separate destination and wait for `Export complete · 1 rows`. Re-read the source fixture to prove it remains unchanged.
+- **Search.** Run `fill --role searchbox --name "Global search" --value "Ada"`. Wait for `1 visible of 5 rows`.
+- **Draft.** Run `click --role gridcell --name "Ada Lovelace" --double`, then `type --text "Ada Lovelace Edited"` (the old value is selected, so typing replaces it). Do not press Enter. Leave the editor open.
+- **Scope.** Run `click --role button --name "Export options"`. Opening it commits the open editor. Wait for `Export current view · 1 rows`. The trigger also opens with Enter for keyboard access.
+- **Deliver.** Run `click --role menuitem --name "Export current view · 1 rows"`. The status bar reads `Exporting…` while it runs; these fixtures finish too fast to catch it. On web, wait for `Download started · 1 rows`, read the newest `phase-2-sample-view.csv`, and confirm one data row containing the edited name and every column. On desktop, choose a separate destination and wait for `Export complete · 1 rows`. Re-read the source fixture to prove it remains unchanged.
 - **History.** Confirm Unexported Changes remains visible after delivery. Run `click --role button --name "Undo edit"`; the original name returns. Redo remains available.
 - **Empty.** Search for `no-matching-value`, wait for `0 visible of 5 rows`, and open Export options. `click --role menuitem --name "Export current view · 0 rows"` reports `"disabled": true`. The caption under that item reads `No matching rows to export`. The caption is not the menu item's name. The menu stays open. Run `press --key Escape` before the next click, or that click only dismisses the menu.
 
@@ -32,6 +32,7 @@ Web confirms download initiation rather than disk completion. Read downloaded by
 
 - Selection and the visible window do not change which rows are exported. A dragged header order does change column order in the file. Use a fixture larger than the grid cache to prove complete matching membership.
 - View export never clears Unexported Changes, even without a query. Undo edits back to clean before closing a dirty web tab through the helper, or finish with complete Export CSV.
-- An unresolved query disables the view menu item. Wait for the current count before choosing it.
+- Changing Global search while a cell editor is open closes that editor and drops its draft, so a draft-then-search order never reaches the commit. Set the query first, then open the editor.
+- An unresolved query disables the view menu item, named just `Export current view` with the caption `Waiting for the current query`. Wait for the current count before choosing it.
 - A disabled Export current view item stays open after the click that reads `"disabled": true`. Press Escape before the next command.
 - Closing or reopening cancels preparation; a desktop dialog already holding prepared output can finish using its captured contents.
