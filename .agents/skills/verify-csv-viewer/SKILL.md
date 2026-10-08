@@ -190,7 +190,7 @@ AG Grid cells are driveable with `--role gridcell --name <visible value>` and `-
 
 `wait` and `text` read `innerText`, which applies CSS `text-transform`. Eyebrow labels therefore read uppercase: the Recent list heading is `RECENT CSV SOURCES` and the candidate picker header is `BASELINE · PHASE-2-SAMPLE.CSV`. A mixed-case `wait --text` on either times out. `--name` matching uses accessible names, which keep the source case.
 
-Wait for observable text. After search or filter, wait for the visible-row line and `Ready`. After opening a file, wait for `#metadata-title` and `Ready`. After Apply key, wait for `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `, or for `This draft is not a Valid Comparison Key.`
+Wait for observable text. After search or filter, wait for the visible-row line and `Ready`. After opening a file, wait for `#metadata-title` and `Ready`. After Apply key, wait for `Match rows by` and a selected key such as `id 4` for the comparison fixtures, or for `This draft is not a Valid Comparison Key.`
 
 ## Evidence
 

@@ -247,10 +247,10 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
     const windows = yield* Effect.forEach(reads, () => Effect.forkScoped(executor.readWindow({
       artifactId: 'attempt',
       keyCount: 1,
-      columnIndexes: [0],
+      valueCount: 1,
       offset: 0,
       limit: 10,
-      differencesOnly: false,
+      rows: 'all', search: '', order: 'csv-order',
       swapped: false,
     })));
     yield* Effect.promise(() => readStarted.promise);
@@ -291,8 +291,8 @@ describe('DuckDbComparisonExecutor scoped lifecycle', () => {
       executor.activateSnapshot('attempt');
     }));
     const reading = yield* Effect.forkScoped(executor.readWindow({
-      artifactId: 'attempt', keyCount: 1, columnIndexes: [0], offset: 0, limit: 10,
-      differencesOnly: false, swapped: false,
+      artifactId: 'attempt', keyCount: 1, valueCount: 1, offset: 0, limit: 10,
+      rows: 'all', search: '', order: 'csv-order', swapped: false,
     }).pipe(Effect.ensuring(Effect.sync(() => { settled = true; }))));
     yield* Effect.promise(() => readStarted.promise);
     const interruption = yield* Effect.forkScoped(Fiber.interrupt(reading), { startImmediately: true });

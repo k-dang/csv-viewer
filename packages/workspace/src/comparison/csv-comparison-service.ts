@@ -25,7 +25,6 @@ import type {
   OpenComparisonResult,
   OpenComparisonRequest,
 } from '../csv-viewer';
-import { orderComparisonValueColumns } from './comparison-presentation';
 import { isValidRowWindow } from '../query/csv-query';
 import { ComparisonExecutor } from './comparison-executor';
 import {
@@ -52,7 +51,6 @@ type Snapshot = {
   artifactId: ComparisonOperationId;
   resultToken: ComparisonResultToken;
   key: string[];
-  valueColumns: string[];
   summary: ComparisonSummary;
   swapped: boolean;
   revisions: { baseline: number; candidate: number };
@@ -339,25 +337,15 @@ class CsvComparisonService implements Comparisons {
       );
     }
 
-    const baseline = this.csvs.getState(entity.baselineId);
-    if (!baseline) return { status: 'comparison-not-found' };
-    const valueColumns = orderComparisonValueColumns(
-      baseline.columns,
-      snapshot.key,
-      snapshot.summary.changedColumns,
-      request.columns,
-    );
-    const changedCounts = new Map(
-      snapshot.summary.changedColumns.map((column) => [column.name, column.changedRowCount]),
-    );
-    const indexes = valueColumns.map((column) => snapshot.valueColumns.indexOf(column));
     const read = yield* Effect.exit(this.executor.readWindow({
         artifactId: snapshot.artifactId,
         keyCount: snapshot.key.length,
-        columnIndexes: indexes,
+        valueCount: snapshot.summary.changedColumns.length,
         offset: request.offset,
         limit: request.limit,
-        differencesOnly: request.rows === 'differences',
+        rows: request.rows,
+        search: request.search,
+        order: request.order,
         swapped: snapshot.swapped,
       }));
     const current = this.entities.get(request.comparisonId)?.snapshot;
@@ -375,10 +363,6 @@ class CsvComparisonService implements Comparisons {
         offset: request.offset,
         totalRowCount: stored.totalRowCount,
         keyColumns: [...snapshot.key],
-        valueColumns: valueColumns.map((name) => ({
-          name,
-          changedRowCount: changedCounts.get(name) ?? 0,
-        })),
         rows: stored.rows,
       },
     };
@@ -637,7 +621,6 @@ class CsvComparisonService implements Comparisons {
         artifactId: operation.operationId,
         resultToken: operation.operationId,
         key,
-        valueColumns,
         swapped: false,
         summary,
         revisions: captured,

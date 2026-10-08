@@ -66,8 +66,7 @@
         ]
       }
     },
-    // Shared UI reaches its runtime only through CsvViewer. The comparison presentation helper is
-    // also part of the product interface; every other workspace implementation module stays hidden.
+    // Shared UI reaches its runtime only through CsvViewer.
     {
       "files": ["packages/ui/src/**/*.ts", "packages/ui/src/**/*.tsx"],
       "rules": {
@@ -76,7 +75,7 @@
           {
             "patterns": [
               {
-                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|^@csv-viewer/(desktop|web)(/|$)|^@csv-viewer/workspace/(?!csv-viewer$|comparison-presentation$)",
+                "regex": "^(node:)?(fs|path|os|child_process|worker_threads)(/|$)|^electron(/|$)|^@csv-viewer/(desktop|web)(/|$)|^@csv-viewer/workspace/(?!csv-viewer$)",
                 "message": "Shared UI reaches runtime behavior through CsvViewer, never through an application or workspace implementation module."
               }
             ]

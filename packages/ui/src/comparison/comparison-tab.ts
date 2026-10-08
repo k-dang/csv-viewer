@@ -1,17 +1,29 @@
 import type {
-  ComparisonColumnsMode,
+  ComparisonRow,
+  ComparisonRowOrder,
   ComparisonRowsMode,
   ComparisonView,
   ComparisonWindow,
   CsvViewer,
 } from '@csv-viewer/workspace/csv-viewer';
 
+export const comparisonPageSize = 100;
+
 export type ComparisonTabState = {
   comparison: ComparisonView;
   /** The Draft Comparison Key: chosen columns in key order, not yet applied. */
   draftKey: string[];
   rows: ComparisonRowsMode;
-  columns: ComparisonColumnsMode;
+  view: 'grid' | 'inspector';
+  order: ComparisonRowOrder;
+  search: string;
+  /** Grid hides globally unchanged columns; Inspector hides unchanged fields of its selected row. */
+  changedOnly: boolean;
+  queryVersion: number;
+  totalRows: number | null;
+  selection: { row: ComparisonRow; index: number } | null;
+  selectionLoading: boolean;
+  rowsError: string | null;
   /** The failure of the last command, cleared by the next command. */
   actionError: string | null;
   /** The attempt whose feedback the user already acted on: a dismissed banner or an edited draft. */
@@ -25,12 +37,15 @@ export type ComparisonTabState = {
  * Rules kept here so they cannot drift: commands read their inputs from this state and are no-ops
  * without them; a rejected outcome or a failed call becomes `actionError`; editing the draft hides
  * the current invalid-key diagnostics; `receive` ignores older projections; a row window from a
- * superseded result or view mode is dropped; late requests never update state after `dispose`.
+ * superseded result or query is dropped; late requests never update state after `dispose`.
  */
 export class ComparisonTab {
   private state: ComparisonTabState;
   private readonly listeners = new Set<() => void>();
   private disposed = false;
+  private selectionRequest = 0;
+  private searchTimer: ReturnType<typeof setTimeout> | undefined;
+  private committedSearch = '';
 
   constructor(
     private readonly viewer: Pick<CsvViewer, 'call'>,
@@ -40,7 +55,15 @@ export class ComparisonTab {
       comparison,
       draftKey: comparison.applied?.key ?? [],
       rows: 'differences',
-      columns: 'changed-first',
+      view: 'inspector',
+      order: 'changed-first',
+      search: '',
+      changedOnly: true,
+      queryVersion: 0,
+      totalRows: null,
+      selection: null,
+      selectionLoading: false,
+      rowsError: null,
       actionError: null,
       acknowledgedAttemptId: null,
     };
@@ -62,7 +85,9 @@ export class ComparisonTab {
   /** A newer projection of this Comparison. Older or equal versions are ignored. */
   receive(comparison: ComparisonView): void {
     if (this.disposed || comparison.version <= this.state.comparison.version) return;
-    this.set({ comparison });
+    if (comparison.applied?.resultToken !== this.state.comparison.applied?.resultToken) {
+      this.resetQuery({ comparison });
+    } else this.set({ comparison });
   }
 
   toggleKeyColumn(column: string, included: boolean): void {
@@ -80,11 +105,64 @@ export class ComparisonTab {
   }
 
   setRowsMode(rows: ComparisonRowsMode): void {
-    if (rows !== this.state.rows) this.set({ rows });
+    if (rows !== this.state.rows) this.resetQuery({ rows });
   }
 
-  setColumnsMode(columns: ComparisonColumnsMode): void {
-    if (columns !== this.state.columns) this.set({ columns });
+  setOrder(order: ComparisonRowOrder): void {
+    if (order !== this.state.order) this.resetQuery({ order });
+  }
+
+  setSearch(search: string): void {
+    if (this.disposed || search === this.state.search) return;
+    this.set({ search });
+    clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = undefined;
+      if (this.committedSearch === this.state.search) return;
+      this.committedSearch = this.state.search;
+      this.resetQuery({});
+    }, 150);
+  }
+
+  setView(view: ComparisonTabState['view']): void {
+    if (view !== this.state.view) this.set({ view });
+  }
+
+  setChangedOnly(changedOnly: boolean): void {
+    if (changedOnly !== this.state.changedOnly) this.set({ changedOnly });
+  }
+
+  retryRows(): void {
+    this.resetQuery({});
+  }
+
+  selectRow(row: ComparisonRow, index: number): void {
+    this.selectionRequest += 1;
+    this.set({ selection: { row, index }, selectionLoading: false });
+  }
+
+  inspectRow(row: ComparisonRow, index: number): void {
+    this.selectRow(row, index);
+    this.setView('inspector');
+  }
+
+  /** Previous/next reads the containing page, preserving a newer row choice while it loads. */
+  async selectIndex(index: number): Promise<void> {
+    if (index < 0 || this.state.totalRows === null || index >= this.state.totalRows) return;
+    const request = ++this.selectionRequest;
+    const version = this.state.queryVersion;
+    this.set({ selectionLoading: true });
+    try {
+      const offset = Math.floor(index / comparisonPageSize) * comparisonPageSize;
+      const window = await this.rows(offset, comparisonPageSize);
+      if (this.disposed || request !== this.selectionRequest) return;
+      const row = window?.rows[index - offset];
+      if (window && row) this.set({ selection: { row, index }, rowsError: null });
+    } catch {
+      this.rowsFailed(version);
+    } finally {
+      if (!this.disposed && request === this.selectionRequest) this.set({ selectionLoading: false });
+    }
   }
 
   /** Hides the cancelled-attempt banner for the current attempt. */
@@ -127,12 +205,12 @@ export class ComparisonTab {
   }
 
   /**
-   * One window of the applied result under the current view mode. Resolves null when there is no
-   * applied result, or when the result or the view mode moved on while the request was in flight,
+   * One window of the applied result under the current row query. Resolves null when there is no
+   * applied result, or when the result or query moved on while the request was in flight,
    * so the caller shows nothing rather than a superseded window.
    */
   async rows(offset: number, limit: number): Promise<ComparisonWindow | null> {
-    const { comparison, rows, columns } = this.state;
+    const { comparison, rows, order, queryVersion } = this.state;
     const applied = comparison.applied;
     if (this.disposed || !applied) return null;
     const outcome = await this.viewer.call({
@@ -142,21 +220,46 @@ export class ComparisonTab {
       offset,
       limit,
       rows,
-      columns,
+      search: this.committedSearch,
+      order,
     });
-    const current = this.state;
-    const stale =
-      this.disposed ||
-      current.comparison.applied?.resultToken !== applied.resultToken ||
-      current.rows !== rows ||
-      current.columns !== columns;
-    if (stale || outcome.status !== 'ready') return null;
-    return outcome.window;
+    if (this.disposed || this.state.queryVersion !== queryVersion) return null;
+    if (outcome.status === 'rejected') throw new Error(outcome.fault.message);
+    return outcome.status === 'ready' ? outcome.window : null;
+  }
+
+  /** Publishes a loaded page's count and selects its first row only when no row is chosen. */
+  receiveRows(window: ComparisonWindow, version: number): void {
+    if (this.disposed || version !== this.state.queryVersion) return;
+    const first = window.rows[0];
+    const selection = this.state.selection ?? (window.offset === 0 && first && !this.state.selectionLoading
+      ? { row: first, index: 0 }
+      : null);
+    this.set({ totalRows: window.totalRowCount, selection, rowsError: null });
+  }
+
+  rowsFailed(version: number): void {
+    if (!this.disposed && version === this.state.queryVersion) {
+      this.set({ rowsError: 'Unable to load comparison rows. Try again.' });
+    }
+  }
+
+  private resetQuery(patch: Partial<ComparisonTabState>): void {
+    this.selectionRequest += 1;
+    this.set({
+      ...patch,
+      queryVersion: this.state.queryVersion + 1,
+      totalRows: null,
+      selection: null,
+      selectionLoading: false,
+      rowsError: null,
+    });
   }
 
   dispose(): void {
     this.disposed = true;
     this.listeners.clear();
+    clearTimeout(this.searchTimer);
   }
 
   private begin(request: { kind: 'apply-key'; key: string[] } | { kind: 'refresh' }): Promise<void> {

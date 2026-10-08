@@ -611,7 +611,7 @@ describe('Comparisons interaction contract', () => {
         offset: 0,
         limit: 100,
         rows: 'all',
-        columns: 'csv-order',
+        search: '', order: 'csv-order',
       }),
     ).rejects.toThrow('The data engine could not complete the operation.');
     await service.dispose();
@@ -672,7 +672,7 @@ describe('Comparisons interaction contract', () => {
         expect(service.getState(comparisonId)?.applied?.resultToken).toBe(snapshot.resultToken);
         await expect(service.getWindow({
           comparisonId, resultToken: snapshot.resultToken, offset: 0, limit: 100,
-          rows: 'all', columns: 'csv-order',
+          rows: 'all', search: '', order: 'csv-order',
         })).resolves.toMatchObject({ status: 'ready' });
       } finally {
         validate.mockRestore();

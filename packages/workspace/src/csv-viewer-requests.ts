@@ -207,11 +207,11 @@ export const CancelComparisonRequest = Schema.Struct({
 });
 export type CancelComparisonRequest = typeof CancelComparisonRequest.Type;
 
-export const ComparisonRowsMode = Schema.Literals(['differences', 'all']);
+export const ComparisonRowsMode = Schema.Literals(['differences', 'all', 'changed', 'baseline-only', 'candidate-only', 'unchanged']);
 export type ComparisonRowsMode = typeof ComparisonRowsMode.Type;
 
-export const ComparisonColumnsMode = Schema.Literals(['changed-first', 'csv-order']);
-export type ComparisonColumnsMode = typeof ComparisonColumnsMode.Type;
+export const ComparisonRowOrder = Schema.Literals(['changed-first', 'csv-order']);
+export type ComparisonRowOrder = typeof ComparisonRowOrder.Type;
 
 /**
  * `offset` and `limit` decode as any number. The Comparison service reports an invalid window
@@ -223,7 +223,8 @@ export const ComparisonWindowRequest = Schema.Struct({
   offset: Schema.Number,
   limit: Schema.Number,
   rows: ComparisonRowsMode,
-  columns: ComparisonColumnsMode,
+  search: Schema.String,
+  order: ComparisonRowOrder,
 });
 export type ComparisonWindowRequest = typeof ComparisonWindowRequest.Type;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ComparisonMutationOutcome, ComparisonView, ComparisonWindowOutcome } from '@csv-viewer/workspace/csv-viewer';
+import type { ComparisonMutationOutcome, ComparisonRow, ComparisonView, ComparisonWindowOutcome } from '@csv-viewer/workspace/csv-viewer';
 import { ComparisonTab } from './comparison-tab';
 import { comparisonFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer } from '../test-helpers/csv-viewer';
@@ -26,7 +26,7 @@ const applied = (resultToken: string): NonNullable<ComparisonView['applied']> =>
 
 const window = (resultToken: string): ComparisonWindowOutcome => ({
   status: 'ready',
-  window: { comparisonId: 'comparison-1', resultToken, offset: 0, totalRowCount: 0, keyColumns: ['id'], valueColumns: [], rows: [] },
+  window: { comparisonId: 'comparison-1', resultToken, offset: 0, totalRowCount: 0, keyColumns: ['id'], rows: [] },
 });
 
 describe('ComparisonTab', () => {
@@ -124,11 +124,13 @@ describe('ComparisonTab', () => {
       offset: 0,
       limit: 100,
       rows: 'all',
-      columns: 'changed-first',
+
+      search: '',
+      order: 'changed-first',
     });
 
     const pendingMode = tab.rows(0, 100);
-    tab.setColumnsMode('csv-order');
+    tab.setOrder('csv-order');
     expect(await pendingMode).toBeNull();
 
     const pendingResult = tab.rows(0, 100);
@@ -155,6 +157,40 @@ describe('ComparisonTab', () => {
     expect(swap).not.toHaveBeenCalled();
   });
 
+  it('keeps selection across views and a later row choice when page navigation finishes', async () => {
+    const row = (id: string): ComparisonRow => ({
+      keyValues: [id], classification: 'unchanged', baseline: { rowId: id, values: [] },
+      candidate: { rowId: id, values: [] }, changed: [],
+    });
+    const nextPage = Promise.withResolvers<ComparisonWindowOutcome>();
+    const getWindow = vi.fn().mockResolvedValueOnce({
+      status: 'ready', window: { comparisonId: 'comparison-1', resultToken: 'result-1',
+        offset: 0, totalRowCount: 205, keyColumns: ['id'], rows: [row('1')] },
+    }).mockReturnValueOnce(nextPage.promise);
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': getWindow,
+    } }), comparisonFixture({ applied: applied('result-1') }));
+    const firstPage = await tab.rows(0, 100);
+    if (!firstPage) throw new Error('Missing first page.');
+    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    expect(getWindow).toHaveBeenCalledTimes(1);
+    tab.setView('grid');
+    tab.setChangedOnly(false);
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['1']);
+    const selecting = tab.selectIndex(100);
+    tab.inspectRow(row('50'), 49);
+    nextPage.resolve({ status: 'ready', window: {
+      comparisonId: 'comparison-1', resultToken: 'result-1', offset: 100,
+      totalRowCount: 205, keyColumns: ['id'], rows: [row('101')],
+    } });
+    await selecting;
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
+    expect(tab.snapshot().selectionLoading).toBe(false);
+    expect(tab.snapshot().view).toBe('inspector');
+    tab.setRowsMode('all');
+    expect(tab.snapshot().selection).toBeNull();
+  });
+
   it('keeps the original row-window rejection for the caller', async () => {
     const failure = new Error('The row request failed.');
     const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
@@ -163,6 +199,47 @@ describe('ComparisonTab', () => {
 
     await expect(tab.rows(0, 100)).rejects.toBe(failure);
     expect(tab.snapshot().actionError).toBeNull();
+  });
+
+  it('commits search once after typing pauses and cancels the timer on disposal', async () => {
+    vi.useFakeTimers();
+    try {
+      const getWindow = vi.fn(async () => window('result-1'));
+      const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+        'comparison.get-window': getWindow,
+      } }), comparisonFixture({ applied: applied('result-1') }));
+      const version = tab.snapshot().queryVersion;
+      tab.setSearch('N');
+      await vi.advanceTimersByTimeAsync(100);
+      tab.setSearch('New');
+      await vi.advanceTimersByTimeAsync(149);
+      expect(tab.snapshot()).toMatchObject({ search: 'New', queryVersion: version });
+      await tab.rows(0, 100);
+      expect(getWindow).toHaveBeenLastCalledWith(expect.objectContaining({ search: '' }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tab.snapshot().queryVersion).toBe(version + 1);
+      await tab.rows(0, 100);
+      expect(getWindow).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'New' }));
+      tab.setSearch('Other');
+      tab.dispose();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(tab.snapshot().queryVersion).toBe(version + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { status: 'result-replaced', currentResultToken: 'result-2' },
+    { status: 'comparison-not-found' },
+  ] as const)('silently discards $status instead of reporting a read failure', async outcome => {
+    const getWindow = vi.fn().mockResolvedValueOnce(outcome).mockResolvedValueOnce(window('result-1'));
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': getWindow,
+    } }), comparisonFixture({ applied: applied('result-1') }));
+    expect(await tab.rows(0, 100)).toBeNull();
+    expect(tab.snapshot().rowsError).toBeNull();
+    expect(await tab.rows(0, 100)).not.toBeNull();
   });
 
   it('keeps a newer projection when a pending swap completes with an older one', async () => {

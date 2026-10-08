@@ -1,6 +1,6 @@
 # Compare two CSVs
 
-Compare opens a Comparison Tab against a second open Working CSV, asks for a Comparison Key, and then shows aligned Changed, Baseline-only, Candidate-only, and Unchanged counts. Comparison uses complete Working CSVs, including Unexported Changes.
+Compare opens a Comparison Tab against a second open Working CSV, asks for a Comparison Key, and then opens Inspector with a virtual row list and full Baseline/Candidate values. Grid scans many rows with inline changes. Both views share search, classification filters, row order, changed-field visibility, and selection. Comparison uses complete Working CSVs, including Unexported Changes.
 
 ## Sub-features
 
@@ -8,6 +8,9 @@ Compare opens a Comparison Tab against a second open Working CSV, asks for a Com
 - `compare-choose` creates a Comparison Tab titled with both file names.
 - `compare-apply` computes results for a valid key such as `id`.
 - `compare-invalid` surfaces key diagnostics for a key column whose values are blank or non-unique.
+- `compare-review` switches Grid/Inspector, selects rows, and uses Previous/Next across page boundaries.
+- `compare-filter` searches the complete snapshot and filters by classification.
+- `compare-edit-key` opens Edit key on an applied result.
 - `compare-swap` swaps Baseline and Candidate labels without requiring a new picker.
 - `compare-cancel` closes the picker with Cancel, Escape, Close Candidate picker, or the dimmed overlay.
 
@@ -16,7 +19,9 @@ Compare opens a Comparison Tab against a second open Working CSV, asks for a Com
 - With a CSV tab active and at least one other CSV open, choose `Compare…`.
 - In `Choose a Candidate`, choose a Comparison-Compatible file.
 - Check one or more Comparison Key columns, then `Apply key`.
-- Choose `Swap sides` or `Refresh comparison` on an applied comparison.
+- Switch `Grid`/`Inspector`; click a grid row or press Enter to inspect it. Use `Previous row` and `Next row` in Inspector.
+- Choose a result filter, search for a key or either side’s value, toggle `Changed fields only`, or choose `Row order`.
+- Choose `Edit key`, `Swap sides`, or `Refresh comparison` on an applied comparison.
 - Close the picker with `Cancel`, the `Close Candidate picker` button, Escape, or the overlay.
 
 ## Driving it with control-csv-viewer
@@ -32,9 +37,11 @@ Open both fixtures on either runtime with `drop --files '["fixtures/phase-2-samp
 - **Open picker.** Run `click --role button --name "Compare…"`. Wait for `Choose a Candidate` and `BASELINE · PHASE-2-SAMPLE.CSV` (the header is CSS-uppercased, so `wait` must match the uppercase form). Candidate `phase-2-sample-edited.csv` shows `Comparison-Compatible`.
 - **Cancel once.** Run `click --role button --name "Cancel"`. The dialog is gone. CSV tabs remain.
 - **Choose candidate.** Open the picker again, then click the candidate by its subtitle: `click --role button --name "This browser session"` on web, or the source path on desktop. The bare file name also matches the tab and its close button. Wait for heading `Choose a Comparison Key`. Tab label contains `phase-2-sample.csv ⇄ phase-2-sample-edited.csv`.
-- **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait for `Applied key: id` and the badges `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `. For these fixtures expect `Changed 1`, `Baseline-only 0`, `Candidate-only 0`, `Unchanged 4`: the only difference is row `id` 4, whose `total_spend` is `1.5` in the baseline and `1.0` in the candidate.
+- **Apply id.** Run `click --role checkbox --name "id"`, then `click --role button --name "Apply key"`. Wait for `Match rows by`, `id 4`, and the result filters `Changed `, `Baseline-only `, `Candidate-only `, and `Unchanged `. For these fixtures expect `Changed 1`, `Baseline-only 0`, `Candidate-only 0`, `Unchanged 4`: the only difference is row `id` 4, whose `total_spend` is `1.5` in the baseline and `1.0` in the candidate.
 - **Swap.** Run `click --role button --name "Swap sides"`. Baseline and Candidate trade places and the tab title flips to `phase-2-sample-edited.csv ⇄ phase-2-sample.csv`. Badges refresh in place with no re-apply. Swap does not show `Outdated Comparison`; that banner appears only after a source Working CSV changes.
-- **Proof.** Snapshot and screenshot `evidence/compare-csvs/applied.aria.txt` and `applied.png` after Apply key, showing `CSV Viewer`, both file names, `Applied key: id`, and the four count badges.
+- **Inspect and scan.** Inspector initially selects `id 4` and shows only `total_spend`. Toggle `Changed fields only` to reveal all fields. Click `Grid`, then `All rows 5`; five rows appear, with `id 4` first. Click its Row cell to return to Inspector. Search with `fill --role searchbox --name "Find a comparison row or value" --value "dorothy"`; the full snapshot is searched even when `name` is hidden. Clear the search before continuing.
+- **Edit key.** Click `Edit key` to open `Edit Comparison Key`. `Apply key` is inside that dialog; a valid replacement closes it, while invalid-key diagnostics remain there.
+- **Proof.** Capture `evidence/compare-csvs/inspector.png` and `grid.png`, showing both file names, the applied key, result counts, and the corresponding values.
 
 ## Web differences
 

@@ -1,16 +1,20 @@
-import { useCallback, useSyncExternalStore, type HTMLAttributes } from 'react';
-import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
+import { Dialog } from '@base-ui/react/dialog';
+import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3, Grid2X2, PanelLeft, KeyRound, Search, FileSpreadsheet, ArrowRight } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import type {
   ComparisonKeyDiagnostics,
   ComparisonPhase,
   ComparisonSummary,
+  ComparisonRowsMode,
   ComparisonView,
   SourceKeyDiagnostics,
 } from '@csv-viewer/workspace/csv-viewer';
 import type { ComparisonTab } from './comparison-tab';
 import { ComparisonGrid } from './comparison-grid';
+import { ComparisonInspector } from './comparison-inspector';
+import type { ComparisonRowsViewState } from './comparison-rows';
 
 /**
  * The header, status banners, and result body of one Comparison Tab. Every part reads the Tab
@@ -27,113 +31,140 @@ export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
+  const { comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const [editingKey, setEditingKey] = useState(false);
+  const token = comparison.applied?.resultToken;
+  useEffect(() => {
+    setEditingKey(false);
+  }, [token]);
+  return (
+    <div className="border-b bg-card px-4 py-3">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="mr-auto text-base font-semibold">Compare CSVs</h2>
+        <Button type="button" size="sm" variant="outline" onClick={() => void tab.swap()} disabled={Boolean(comparison.operation)}>
+          <ArrowLeftRight />
+          Swap sides
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!comparison.applied || Boolean(comparison.operation)}
+          onClick={() => void tab.refresh()}
+        >
+          <RefreshCw />
+          Refresh comparison
+        </Button>
+      </div>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <SourceCard label="Baseline" name={comparison.baseline.source.name} location={comparison.baseline.source.location} />
+        <ArrowRight className="size-4 text-muted-foreground" />
+        <SourceCard label="Candidate" name={comparison.candidate.source.name} location={comparison.candidate.source.location} />
+      </div>
+      {comparison.applied ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <KeyRound className="size-3.5 text-muted-foreground" />
+          <span className="text-muted-foreground">Match rows by</span>
+          <code className="rounded border bg-muted px-2 py-1" aria-label={`Applied key: ${comparison.applied.key.join(' + ')}`}>
+            {comparison.applied.key.join(' + ')}
+          </code>
+          <Dialog.Root open={editingKey} onOpenChange={setEditingKey}>
+            <Dialog.Trigger disabled={Boolean(comparison.operation)} render={<Button variant="ghost" size="sm" className="text-primary" />}>
+              Edit key
+            </Dialog.Trigger>
+            <Dialog.Portal>
+              <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/50" />
+              <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[calc(100%_-_2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border bg-background p-5 shadow-xl">
+                <Dialog.Title className="text-lg font-semibold">Edit Comparison Key</Dialog.Title>
+                <Dialog.Description className="mt-1 text-sm text-muted-foreground">Choose shared columns whose combined values identify each row in both complete Working CSVs.</Dialog.Description>
+                <ComparisonKeyEditor tab={tab} />
+                <div className="mt-3 text-right">
+                  <Dialog.Close render={<Button variant="outline" size="sm" />}>Cancel</Dialog.Close>
+                </div>
+              </Dialog.Popup>
+            </Dialog.Portal>
+          </Dialog.Root>
+          <span className="ml-auto text-muted-foreground">✓ Unique in both files</span>
+        </div>
+      ) : <ComparisonKeyEditor tab={tab} />}
+    </div>
+  );
+}
+
+function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
   const { comparison, draftKey, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const attempt = comparison.lastAttempt;
-  const diagnostics =
-    attempt?.status === 'invalid-key' && acknowledgedAttemptId !== attempt.attemptId ? attempt.diagnostics : null;
+  const diagnostics = attempt?.status === 'invalid-key' && acknowledgedAttemptId !== attempt.attemptId ? attempt.diagnostics : null;
   const operation = comparison.operation;
-
   const focusDiagnostics = useCallback((node: HTMLDivElement | null) => {
     node?.focus();
   }, [attempt?.attemptId]);
-
   return (
-    <div className="border-b bg-card px-4 py-3">
-      <div className="flex flex-wrap items-stretch gap-3">
-        <SourceCard
-          label="Baseline"
-          name={comparison.baseline.source.name}
-          location={comparison.baseline.source.location}
-        />
-        <div className="flex items-center">
-          <Button type="button" variant="outline" onClick={() => void tab.swap()} disabled={Boolean(operation)}>
-            <ArrowLeftRight />
-            Swap sides
-          </Button>
-        </div>
-        <SourceCard
-          label="Candidate"
-          name={comparison.candidate.source.name}
-          location={comparison.candidate.source.location}
-        />
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!comparison.applied || Boolean(operation)}
-            onClick={() => void tab.refresh()}
-          >
-            <RefreshCw />
-            Refresh comparison
-          </Button>
-        </div>
+    <fieldset className="mt-3 rounded-lg border bg-muted/25 p-3">
+      <legend className="px-1 text-sm font-semibold">Comparison Key</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {comparison.availableKeyColumns.map((column, index) => (
+          <label key={column} className="flex items-center gap-2 text-sm">
+            <input
+              autoFocus={index === 0 && !comparison.applied && !operation && !attempt}
+              type="checkbox"
+              checked={draftKey.includes(column)}
+              disabled={Boolean(operation)}
+              onChange={(event) => tab.toggleKeyColumn(column, event.target.checked)}
+            />
+            {column}
+          </label>
+        ))}
       </div>
-      <fieldset className="mt-3 rounded-lg border bg-muted/25 p-3">
-        <legend className="px-1 text-sm font-semibold">Comparison Key</legend>
-        <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {comparison.availableKeyColumns.map((column, index) => (
-            <label key={column} className="flex items-center gap-2 text-sm">
-              <input
-                autoFocus={index === 0 && !comparison.applied && !operation && !attempt}
-                type="checkbox"
-                checked={draftKey.includes(column)}
-                disabled={Boolean(operation)}
-                onChange={(event) => tab.toggleKeyColumn(column, event.target.checked)}
-              />
-              {column}
-            </label>
+      {draftKey.length > 0 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="Composite key order">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Key order</span>
+          {draftKey.map((column, index) => (
+            <span
+              key={column}
+              className="inline-flex items-center rounded-md border bg-background pl-2 text-sm font-medium"
+            >
+              {index + 1}. {column}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Move ${column} earlier`}
+                disabled={index === 0 || Boolean(operation)}
+                onClick={() => tab.moveKeyColumn(index, -1)}
+              >
+                <ArrowUp />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Move ${column} later`}
+                disabled={index === draftKey.length - 1 || Boolean(operation)}
+                onClick={() => tab.moveKeyColumn(index, 1)}
+              >
+                <ArrowDown />
+              </Button>
+            </span>
           ))}
         </div>
-        {draftKey.length > 0 ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="Composite key order">
-            <span className="text-xs font-semibold uppercase text-muted-foreground">Key order</span>
-            {draftKey.map((column, index) => (
-              <span
-                key={column}
-                className="inline-flex items-center rounded-md border bg-background pl-2 text-sm font-medium"
-              >
-                {index + 1}. {column}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Move ${column} earlier`}
-                  disabled={index === 0 || Boolean(operation)}
-                  onClick={() => tab.moveKeyColumn(index, -1)}
-                >
-                  <ArrowUp />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Move ${column} later`}
-                  disabled={index === draftKey.length - 1 || Boolean(operation)}
-                  onClick={() => tab.moveKeyColumn(index, 1)}
-                >
-                  <ArrowDown />
-                </Button>
-              </span>
-            ))}
-          </div>
+      ) : null}
+      <div className="mt-3 flex items-center gap-3">
+        <Button
+          type="button"
+          disabled={draftKey.length === 0 || Boolean(operation)}
+          onClick={() => void tab.applyKey()}
+        >
+          Apply key
+        </Button>
+        {comparison.applied ? (
+          <span className="text-xs text-muted-foreground">Applied key: {comparison.applied.key.join(' + ')}</span>
         ) : null}
-        <div className="mt-3 flex items-center gap-3">
-          <Button
-            type="button"
-            disabled={draftKey.length === 0 || Boolean(operation)}
-            onClick={() => void tab.applyKey()}
-          >
-            Apply key
-          </Button>
-          {comparison.applied ? (
-            <span className="text-xs text-muted-foreground">Applied key: {comparison.applied.key.join(' + ')}</span>
-          ) : null}
-        </div>
-        {diagnostics ? (
-          <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={focusDiagnostics} />
-        ) : null}
-      </fieldset>
-    </div>
+      </div>
+      {diagnostics ? (
+        <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={focusDiagnostics} />
+      ) : null}
+    </fieldset>
   );
 }
 
@@ -194,17 +225,64 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
   );
 }
 
+function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonNullable<ComparisonView['applied']> }) {
+  const { view, rows, search, totalRows, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const gridState = useRef<ComparisonRowsViewState>({});
+  const inspectorState = useRef<ComparisonRowsViewState>({});
+  const previousView = useRef(view);
+  const focusDetail = previousView.current === 'grid';
+  useEffect(() => { previousView.current = view; }, [view]);
+  const empty = totalRows === 0;
+  const unchanged = applied.summary.rows.unchanged;
+  return (
+    <div className="comparison-result-body">
+      <ComparisonSummaryBar tab={tab} summary={applied.summary} />
+      {rowsError ? (
+        <StatusBanner tone="error" role="alert">
+          {rowsError}
+          <Button size="sm" variant="outline" onClick={() => tab.retryRows()}>Retry rows</Button>
+        </StatusBanner>
+      ) : null}
+      <div className="relative min-h-0 min-w-0">
+        <div className={!empty ? 'h-full min-h-0' : 'hidden'}>
+          {view === 'grid'
+            ? <ComparisonGrid tab={tab} applied={applied} viewState={gridState.current} />
+            : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} focusDetail={focusDetail} />}
+        </div>
+        {empty ? (
+          <EmptyState
+            icon={<Rows3 className="mx-auto mb-3 size-8 text-muted-foreground" />}
+            title={rows === 'differences' && !search ? 'No differences' : 'No matching rows'}
+          >
+            <p className="mt-2 text-sm text-muted-foreground">
+              {search ? 'Try another search or show all rows.' : 'Choose another result filter to see more rows.'}
+            </p>
+            <Button className="mt-3" size="sm" variant="outline" onClick={() => {
+              tab.setSearch('');
+              tab.setRowsMode('all');
+            }}>
+              Show all rows
+            </Button>
+          </EmptyState>
+        ) : null}
+      </div>
+      <footer className="flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
+        <span>{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} of ${applied.summary.rows.total.toLocaleString()} rows`}</span>
+        {rows === 'differences' && unchanged > 0 && !search ? (
+          <>
+            <span className="ml-auto">{unchanged.toLocaleString()} unchanged rows hidden</span>
+            <Button size="xs" variant="ghost" onClick={() => tab.setRowsMode('all')}>Show all rows</Button>
+          </>
+        ) : <span className="ml-auto">Read-only comparison</span>}
+      </footer>
+    </div>
+  );
+}
+
 function ComparisonBody({ tab }: { tab: ComparisonTab }) {
   const { comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const attempt = comparison.lastAttempt;
-  if (comparison.applied) {
-    return (
-      <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr]">
-        <ComparisonSummaryBar tab={tab} summary={comparison.applied.summary} />
-        <ComparisonGrid tab={tab} applied={comparison.applied} />
-      </div>
-    );
-  }
+  if (comparison.applied) return <ComparisonResults tab={tab} applied={comparison.applied} />;
   if (comparison.operation) {
     return (
       <EmptyState
@@ -260,10 +338,12 @@ function EmptyState({ icon, title, children }: { icon: React.ReactNode; title: s
 
 function SourceCard({ label, name, location }: { label: string; name: string; location: string }) {
   return (
-    <div className="min-w-48 flex-1 rounded-lg border bg-background px-3 py-2">
-      <p className="text-[11px] font-bold uppercase text-muted-foreground">{label}</p>
-      <p className="truncate font-semibold">{name}</p>
-      <p className="truncate text-xs text-muted-foreground">{location}</p>
+    <div className="flex min-w-0 items-center gap-2" title={location}>
+      <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{name}</p>
+        <p className={`text-xs ${label === 'Baseline' ? 'comparison-baseline-label' : 'comparison-candidate-label'}`}>{label}</p>
+      </div>
     </div>
   );
 }
@@ -352,61 +432,74 @@ function DiagnosticSide({ summary, value }: { summary: string; value: SourceKeyD
 
 function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: ComparisonSummary }) {
   const state = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const rows = summary.rows;
+  const filters: Array<[ComparisonRowsMode, string, number]> = [
+    ['differences', 'Differences', summary.rows.total - summary.rows.unchanged],
+    ['all', 'All rows', summary.rows.total],
+    ['changed', 'Changed', summary.rows.changed],
+    ['baseline-only', 'Baseline-only', summary.rows.baselineOnly],
+    ['candidate-only', 'Candidate-only', summary.rows.candidateOnly],
+    ['unchanged', 'Unchanged', summary.rows.unchanged],
+  ];
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-4 py-2">
-      <Badge variant="secondary">Changed {rows.changed}</Badge>
-      <Badge variant="outline">Baseline-only {rows.baselineOnly}</Badge>
-      <Badge variant="outline">Candidate-only {rows.candidateOnly}</Badge>
-      <Badge variant="outline">Unchanged {rows.unchanged}</Badge>
-      <span className="mr-auto text-xs text-muted-foreground">{rows.total} total rows</span>
-      <Toggle
-        label="Rows"
-        value={state.rows}
-        options={[
-          ['differences', 'Differences'],
-          ['all', 'All rows'],
-        ]}
-        onChange={(rows) => tab.setRowsMode(rows)}
-      />
-      <Toggle
-        label="Columns"
-        value={state.columns}
-        options={[
-          ['changed-first', 'Changed first'],
-          ['csv-order', 'All in CSV order'],
-        ]}
-        onChange={(columns) => tab.setColumnsMode(columns)}
-      />
-    </div>
-  );
-}
-
-function Toggle<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: Array<[Value, string]>;
-  onChange: (value: Value) => void;
-}) {
-  return (
-    <div className="inline-flex items-center rounded-md border bg-background p-0.5" aria-label={label}>
-      {options.map(([option, text]) => (
-        <Button
-          key={option}
-          type="button"
-          size="sm"
-          variant={value === option ? 'secondary' : 'ghost'}
-          aria-pressed={value === option}
-          onClick={() => onChange(option)}
-        >
-          {text}
-        </Button>
-      ))}
+    <div className="comparison-controls">
+      <div role="group" aria-label="Filter results" className="flex flex-wrap items-center gap-1 border-b pb-2">
+        {filters.map(([value, label, count]) => (
+          <Button
+            key={value}
+            size="sm"
+            variant={state.rows === value ? 'secondary' : 'ghost'}
+            aria-pressed={state.rows === value}
+            onClick={() => tab.setRowsMode(value)}
+          >
+            {label} <span className="tabular-nums">{count.toLocaleString()}</span>
+          </Button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 pt-3">
+        <div role="group" aria-label="Comparison view" className="inline-flex rounded-md border bg-background p-0.5">
+          <Button size="sm" aria-pressed={state.view === 'grid'} variant={state.view === 'grid' ? 'secondary' : 'ghost'} onClick={() => tab.setView('grid')}>
+            <Grid2X2 />
+            Grid
+          </Button>
+          <Button size="sm" aria-pressed={state.view === 'inspector'} variant={state.view === 'inspector' ? 'secondary' : 'ghost'} onClick={() => tab.setView('inspector')}>
+            <PanelLeft />
+            Inspector
+          </Button>
+        </div>
+        <span className="ml-auto text-xs text-muted-foreground">{state.view === 'grid' ? 'Select a row to inspect' : state.selection ? `Row ${state.selection.index + 1} of ${state.totalRows?.toLocaleString()}` : 'Review one row at a time'}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 py-3">
+        <label className="relative min-w-40 flex-1 sm:max-w-64">
+          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
+          <span className="sr-only">Find a comparison row or value</span>
+          <Input
+            className="h-9 pl-8 text-sm"
+            type="search"
+            value={state.search}
+            placeholder="Find a row or value…"
+            onChange={event => tab.setSearch(event.target.value)}
+          />
+        </label>
+        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={state.changedOnly} onChange={event => tab.setChangedOnly(event.target.checked)} />
+          Changed fields only
+        </label>
+        <label>
+          <span className="sr-only">Row order</span>
+          <select
+            className="rounded-md border bg-background px-2 py-2 text-xs"
+            value={state.order}
+            onChange={event => tab.setOrder(event.target.value === 'csv-order' ? 'csv-order' : 'changed-first')}
+          >
+            <option value="changed-first">Changed first</option>
+            <option value="csv-order">CSV order</option>
+          </select>
+        </label>
+      </div>
+      <div className="flex gap-4 pb-2 text-[11px] text-muted-foreground">
+        <span className="comparison-baseline-label">− Baseline value</span>
+        <span className="comparison-candidate-label">+ Candidate value</span>
+      </div>
     </div>
   );
 }
