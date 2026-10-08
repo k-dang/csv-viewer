@@ -41,7 +41,7 @@ Preconditions:
 - **Busy and failures.** `e2e/drag-and-drop.spec.ts` holds source acquisition to prove that another drop receives the busy message. It also verifies folder rejection, browser capacity, uppercase TSV parsing, and mixed-drop continuation. Renderer tests cover acquisition exceptions and parse failures.
 - **Recent source.** On the empty desktop window, run `click --role button --name "phase-2-sample.csv"`. Require a CSV Tab, metadata, and grid values. This proves the recent-source entry point separately from dropping.
 - **Picker.** On web, run `upload --role button --name "Open CSV" --nth 0 --file fixtures/phase-2-sample.csv`. Desktop picker and menu dialogs require a human; leave those paths explicitly unverified in unattended runs.
-- **Reopen and close.** Reopen a clean active tab. Close clean tabs with their Close buttons, then require No CSV open. Desktop Recent CSV Sources return. A dirty reopen or close requires confirmation.
+- **Reopen and close.** Reopen a clean active tab. Close clean tabs with their Close buttons, then require No CSV open. Desktop Recent CSV Sources return. A dirty reopen or close requires confirmation; closing a dirty tab uses `window.confirm` on both runtimes.
 - **Source preservation.** Compare fixture bytes with their pre-run contents. On desktop, the isolated recent-files.json must still list successfully opened fixture paths.
 
 ## Web differences
@@ -60,7 +60,7 @@ Preconditions:
 - Wait for grid values after metadata appears. The row count can paint before the cells.
 - The helper's tab name is the file name. The dirty marker is a separate image named `Unexported Changes`. `--role tab --name "Unexported Changes"` matches nothing. Two tabs with the same file name are ambiguous. Pass `--nth`.
 - A drop during loading is declined, not queued. Retry after loading completes.
-- A drop while any dialog is open is declined silently, and the Copy column toast counts as one (`role="dialog"`). Close toasts with `click --role button --name "Close toast" --nth 0` before dropping.
+- A drop while any dialog is open is declined silently, and every toast counts as one (`role="dialog"`), including Copy column confirmations and the busy toast `Files are still opening. Try again when finished.` Close toasts with `click --role button --name "Close toast" --nth 0` before dropping.
 - Folders are rejected even when their names end in .csv. Text and in-app grid drags must retain their normal behavior.
 - Mixed-drop errors remain visible after successful files open. The last successful open receives focus, including an already-open desktop source.
 - Desktop dirty reopen uses a native confirmation. Web dirty reopen uses `window.confirm` (`Unexported Changes will be lost.`), and the helper cannot answer it. Reopen only a clean tab. Finish verification before invoking a dirty reopen without a human.

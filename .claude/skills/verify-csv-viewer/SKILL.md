@@ -164,9 +164,10 @@ Stable handles from this renderer:
 | Global search | searchbox `Global search` (`#global-search`) |
 | Clear query | button `Clear query` |
 | Insert / append / delete | buttons `Insert row above`, `Insert row below`, `Append row`, `Delete selected rows` |
-| Column Menu | `click --right --role columnheader --name "email"` opens it at the pointer. Items are `--role menuitem`: `Rename column`, `Copy column`, `Insert column left`, `Insert column right`, `Delete column`. A disabled item reports `"disabled": true`. A right-click on a cell keeps the browser menu |
+| Column Menu | `click --right --role columnheader --name "email"` opens it at the pointer. Items are `--role menuitem`: `Rename column`, `Copy column`, `Insert column left`, `Insert column right`, `Delete column`. A disabled item reports `"disabled": true` |
+| Cell Menu | `click --right --role gridcell --name "inactive" --exact` opens it. Items are `--role menuitem`: `Copy value`, `Filter to this value`, `Exclude this value`. Every column loads as text, so every cell has it; only a right-click over selected text keeps the browser menu |
 | Column name | textbox `Column name` in a popover under the header, from `Rename column` or F2 on a focused header |
-| Export | button `Export CSV`. Never disabled, dirty or not. On desktop this is a native OS dialog: do not click it. On web it downloads into the run's `downloads/` directory and the status line reads `Download started` |
+| Export | button `Export CSV` (visible label `Export`). Enabled on clean and dirty tabs; disabled only while that tab has an export in progress, when the status bar reads `Exporting…`. On desktop this is a native OS dialog: do not click it. On web it downloads into the run's `downloads/` directory and the status line reads `Download started` |
 | Undo / redo | buttons `Undo edit`, `Redo edit` |
 | Dirty marker | text `Unexported Changes` |
 | Grid | `aria-label="CSV row grid"` |
@@ -186,7 +187,7 @@ On **desktop**, native File dialogs (`Open CSV`, menu `File → Open CSV...`, `E
 
 On **web** there are no native dialogs. `upload --file` answers the file input, so a second CSV, the comparison feature, and the Export CSV round trip are all provable unattended. Exported bytes land in `runs/<id>/downloads/` (`doctor` prints `downloadDir`); read them to prove the export really contains the edit. Chrome uniquifies repeated downloads of one name (`phase-2-sample.csv`, then `phase-2-sample (1).csv`), so read the newest file by modification time, not the fixture name, and copy anything you need into `evidence/` before cleanup.
 
-AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `fill --focused` and `press --key Enter`. The row-count line paints before the rows do, so after opening a file or switching tabs wait for a cell value such as `Ada Lovelace`, not just `5 visible of 5 rows`, before addressing a gridcell. Text column header filters open the Value Filter (`Search values` with a 300ms debounce, and a `Values` checkbox list); number and date filters are AG Grid's own widgets with a 1500ms debounce. Global search is the stable query path. Search is a case-insensitive substring: `active` also matches `inactive`.
+AG Grid cells are driveable with `--role gridcell --name <visible value>` and `--double` for edit mode, then `fill --focused` and `press --key Enter`. The row-count line paints before the rows do, so after opening a file or switching tabs wait for a cell value such as `Ada Lovelace`, not just `5 visible of 5 rows`, before addressing a gridcell. Every column loads as text, so every header filter is the Value Filter (`Search values` with a 300ms debounce, and a `Values` checkbox list). Its header icon has no role; open it from the keyboard: click a first-row cell in that column, `press --key ArrowUp`, then `press --key "Control+Enter"`. Global search is the stable query path. Search is a case-insensitive substring: `active` also matches `inactive`.
 
 `wait` and `text` read `innerText`, which applies CSS `text-transform`. Eyebrow labels therefore read uppercase: the Recent list heading is `RECENT CSV SOURCES` and the candidate picker header is `BASELINE · PHASE-2-SAMPLE.CSV`. A mixed-case `wait --text` on either times out. `--name` matching uses accessible names, which keep the source case.
 
