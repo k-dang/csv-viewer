@@ -6,6 +6,8 @@ import type {
   ComparisonOperationId,
   ComparisonRow,
   ComparisonSummary,
+  ComparisonRowsMode,
+  ComparisonRowOrder,
   SourceKeyDiagnostics,
   WorkingCsvId,
 } from '../csv-viewer';
@@ -22,10 +24,12 @@ export type CreateComparisonSnapshotRequest = {
 export type ReadComparisonSnapshotWindowRequest = {
   artifactId: ComparisonOperationId;
   keyCount: number;
-  columnIndexes: number[];
+  valueCount: number;
   offset: number;
   limit: number;
-  differencesOnly: boolean;
+  rows: ComparisonRowsMode;
+  search: string;
+  order: ComparisonRowOrder;
   swapped: boolean;
 };
 

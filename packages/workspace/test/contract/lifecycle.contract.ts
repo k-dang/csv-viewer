@@ -163,7 +163,7 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         offset: 0,
         limit: 10,
         rows: 'differences',
-        columns: 'changed-first',
+        search: '', order: 'csv-order',
       });
       expect(window.status).toBe('ready');
       if (window.status !== 'ready')
@@ -171,8 +171,8 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
       expect(window.window.rows.map((row) => [row.keyValues[0], row.classification])).toEqual([
         ['1', 'changed'],
         ['3', 'baseline-only'],
-        ['4', 'candidate-only'],
         ['5', 'baseline-only'],
+        ['4', 'candidate-only'],
       ]);
 
       await fixture.writeSource('baseline.csv', 'id,replacement\n1,x\n');
@@ -196,14 +196,11 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         offset: 0,
         limit: 10,
         rows: 'differences',
-        columns: 'csv-order',
+        search: '', order: 'csv-order',
       });
       expect(staleWindow.status).toBe('ready');
       if (staleWindow.status !== 'ready')
         throw new Error('Stale comparison window was not ready.');
-      expect(staleWindow.window.valueColumns).toEqual([
-        { name: 'value', changedRowCount: 1 },
-      ]);
 
       const swapped = await workspace.call({
         operation: 'comparison.swap',
@@ -571,7 +568,7 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
       })).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
       await expect(workspace.call({
         operation: 'comparison.get-window', comparisonId: 'closed', resultToken: 'old',
-        offset: 0, limit: 10, rows: 'all', columns: 'csv-order',
+        offset: 0, limit: 10, rows: 'all', search: '', order: 'csv-order',
       })).resolves.toMatchObject({ status: 'rejected', fault: { code: 'source-not-found' } });
       await expect(workspace.call({ operation: 'csv.open-recent', sourceId: lateSourceId, })).resolves.toMatchObject({
         status: 'failed',

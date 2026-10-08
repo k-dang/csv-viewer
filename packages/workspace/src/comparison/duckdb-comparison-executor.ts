@@ -172,6 +172,8 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       ),
       `b.${quoteIdentifier(csvInternalRowIdField)} AS baseline_row_id`,
       `c.${quoteIdentifier(csvInternalRowIdField)} AS candidate_row_id`,
+      `b.${quoteIdentifier(csvSourceOrderField)} AS baseline_order`,
+      `c.${quoteIdentifier(csvSourceOrderField)} AS candidate_order`,
       ...request.valueColumns.flatMap((column, index) => [
         `b.${quoteIdentifier(column)} AS ${quoteIdentifier(`baseline_${index}`)}`,
         `c.${quoteIdentifier(column)} AS ${quoteIdentifier(`candidate_${index}`)}`,
@@ -244,16 +246,17 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     );
     const connection = yield* this.database.getOwnerConnection();
     const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
-    const where = request.differencesOnly ? ` WHERE classification <> 'unchanged'` : '';
-    const order = Array.from({ length: request.keyCount }, (_value, index) =>
-      `${quoteIdentifier(`key_${index}`)} COLLATE "binary"`,
-    ).join(', ');
+    const { where, parameters } = comparisonWhere(request);
+    const order = comparisonOrder(request);
     const countRows = yield* connection.readObjects(
       `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
+      parameters,
     );
     const resultRows = yield* connection.readObjects(
-      `SELECT * FROM ${table}${where}${order ? ` ORDER BY ${order} ASC` : ''} LIMIT ${request.limit} OFFSET ${request.offset}`,
+      `SELECT * FROM ${table}${where} ORDER BY ${order} LIMIT ${request.limit} OFFSET ${request.offset}`,
+      parameters,
     );
+    const columnIndexes = Array.from({ length: request.valueCount }, (_value, index) => index);
     const rows = resultRows.map((row): ComparisonRow => {
       const classification = parseClassification(row.classification);
       const baselineSide =
@@ -261,7 +264,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
           ? null
           : {
               rowId: String(row.baseline_row_id),
-              values: request.columnIndexes.map((index) =>
+              values: columnIndexes.map((index) =>
                 normalizeCellValue(row[`baseline_${index}`]),
               ),
             };
@@ -270,7 +273,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
           ? null
           : {
               rowId: String(row.candidate_row_id),
-              values: request.columnIndexes.map((index) =>
+              values: columnIndexes.map((index) =>
                 normalizeCellValue(row[`candidate_${index}`]),
               ),
             };
@@ -281,7 +284,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
         ),
         baseline: request.swapped ? candidateSide : baselineSide,
         candidate: request.swapped ? baselineSide : candidateSide,
-        changed: request.columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
+        changed: columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
       };
     });
     return { totalRowCount: normalizeCount(countRows[0].count), rows };
@@ -396,4 +399,36 @@ function flipClassification(
   if (classification === 'baseline-only') return 'candidate-only';
   if (classification === 'candidate-only') return 'baseline-only';
   return classification;
+}
+
+/** Search keys and values on both sides, using literal substring matching and bound parameters. */
+function comparisonWhere(request: ReadComparisonSnapshotWindowRequest) {
+  const conditions: string[] = [];
+  const parameters: string[] = [];
+  if (request.rows === 'differences') conditions.push("classification <> 'unchanged'");
+  else if (request.rows !== 'all') {
+    conditions.push('classification = ?');
+    parameters.push(request.swapped ? flipClassification(request.rows) : request.rows);
+  }
+  if (request.search) {
+    const fields = [
+      ...Array.from({ length: request.keyCount }, (_value, index) => `key_${index}`),
+      ...Array.from({ length: request.valueCount }, (_value, index) => [`baseline_${index}`, `candidate_${index}`]).flat(),
+    ];
+    conditions.push(`(${fields.map((field) => {
+      parameters.push(request.search);
+      return `contains(lower(coalesce(CAST(${quoteIdentifier(field)} AS VARCHAR), '')), lower(?))`;
+    }).join(' OR ')})`);
+  }
+  return { where: conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '', parameters };
+}
+
+/** CSV order follows the current Baseline, then appends Candidate-only rows in Candidate order. */
+function comparisonOrder(request: ReadComparisonSnapshotWindowRequest): string {
+  const baseline = request.swapped ? 'candidate_order' : 'baseline_order';
+  const candidate = request.swapped ? 'baseline_order' : 'candidate_order';
+  const csvOrder = `${baseline} ASC NULLS LAST, ${candidate} ASC NULLS LAST`;
+  if (request.order === 'csv-order') return csvOrder;
+  const baselineOnly = request.swapped ? 'candidate-only' : 'baseline-only';
+  return `CASE classification WHEN 'changed' THEN 0 WHEN '${baselineOnly}' THEN 1 WHEN 'unchanged' THEN 3 ELSE 2 END, ${csvOrder}`;
 }

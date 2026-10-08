@@ -279,6 +279,7 @@ export type CancelComparisonResult =
 export type ComparisonRow = {
   classification: 'changed' | 'baseline-only' | 'candidate-only' | 'unchanged';
   keyValues: string[];
+  /** Values and change flags follow the applied summary's changedColumns order. */
   baseline: { rowId: string; values: Array<string | null> } | null;
   candidate: { rowId: string; values: Array<string | null> } | null;
   changed: boolean[];
@@ -290,7 +291,6 @@ export type ComparisonWindow = {
   offset: number;
   totalRowCount: number;
   keyColumns: string[];
-  valueColumns: Array<{ name: string; changedRowCount: number }>;
   rows: ComparisonRow[];
 };
 

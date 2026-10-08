@@ -21,7 +21,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe('web CsvViewer capacity', () => {
+// These cases compile a real Wasm engine; cold startup can exceed the unit-test budget.
+describe('web CsvViewer capacity', { timeout: 15_000 }, () => {
   it('completes Aligned Comparison and Export CSV at the workspace limit', async () => {
     const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     viewer = await capacityViewer([csvFile(8), csvFile(8), csvFile(8)], { sourceBytes: 8, workspaceBytes: 16 });

@@ -73,8 +73,9 @@ async function readWindow(
   options: {
     offset?: number;
     limit?: number;
-    rows?: 'differences' | 'all';
-    columns?: 'changed-first' | 'csv-order';
+    rows?: import('../../src/csv-viewer').ComparisonRowsMode;
+    search?: string;
+    order?: import('../../src/csv-viewer').ComparisonRowOrder;
   } = {},
 ): Promise<ComparisonWindow> {
   if (!comparison.applied) throw new Error('Comparison has no applied result.');
@@ -85,7 +86,8 @@ async function readWindow(
     offset: options.offset ?? 0,
     limit: options.limit ?? 100,
     rows: options.rows ?? 'all',
-    columns: options.columns ?? 'csv-order',
+    search: options.search ?? '',
+    order: options.order ?? 'csv-order',
   });
   if (outcome.status !== 'ready')
     throw new Error(`Window completed as ${outcome.status}.`);
@@ -179,7 +181,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       },
     );
 
-    it('aligns a composite key with exact cells, all classifications, binary ordering, and a final partial window', async () => {
+    it('aligns a composite key with exact cells, all classifications, CSV ordering, and a final partial window', async () => {
       const baseline = await value.openSource(
         'baseline.csv',
         [
@@ -226,13 +228,8 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
 
       const first = await readWindow(value, applied, {
         limit: 4,
-        columns: 'changed-first',
+        search: '', order: 'csv-order',
       });
-      expect(first.valueColumns).toEqual([
-        { name: 'status', changedRowCount: 1 },
-        { name: 'code', changedRowCount: 1 },
-        { name: 'note', changedRowCount: 0 },
-      ]);
       expect(first.totalRowCount).toBe(5);
       expect(first.rows.map(observableRow)).toEqual([
         {
@@ -286,32 +283,62 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       expect(swapped.comparison.baseline.workingCsvId).toBe(candidate.workingCsvId);
       const swappedWindow = await readWindow(value, swapped.comparison, {
         rows: 'all',
-        columns: 'changed-first',
+        search: '', order: 'csv-order',
       });
-      expect(swappedWindow.valueColumns).toEqual([
-        { name: 'code', changedRowCount: 1 },
-        { name: 'status', changedRowCount: 1 },
-        { name: 'note', changedRowCount: 0 },
-      ]);
       expect(swappedWindow.rows[0]).toMatchObject({
         classification: 'changed',
         keyValues: ['A', '10'],
-        baseline: { rowId: '1', values: ['1', 'Same', 'quoted, value'] },
-        candidate: { rowId: '1', values: ['001', 'Same', 'quoted, value'] },
-        changed: [true, false, false],
+        baseline: { rowId: '1', values: ['Same', '1', 'quoted, value'] },
+        candidate: { rowId: '1', values: ['Same', '001', 'quoted, value'] },
+        changed: [false, true, false],
       });
-      expect(swappedWindow.rows[3]).toMatchObject({
+      expect(swappedWindow.rows[4]).toMatchObject({
         classification: 'candidate-only',
         keyValues: ['a', '1'],
         baseline: null,
-        candidate: { values: ['004', 'baseline-only', 'only here'] },
+        candidate: { values: ['baseline-only', '004', 'only here'] },
       });
-      expect(swappedWindow.rows[4]).toMatchObject({
+      expect(swappedWindow.rows[3]).toMatchObject({
         classification: 'baseline-only',
         keyValues: ['b', '1'],
-        baseline: { values: ['005', 'candidate-only', 'only there'] },
+        baseline: { values: ['candidate-only', '005', 'only there'] },
         candidate: null,
       });
+    });
+
+    it('filters and pages the complete snapshot with literal search and ordering relative to the current sides', async () => {
+      const baseline = await value.openSource('baseline.csv', 'id,value,note\n9,Same,Keep\n7,Old,50%_O\'Brien\n2,Removed,Elsewhere\n');
+      const candidate = await value.openSource('candidate.csv', 'id,value,note\n3,Added,Elsewhere\n7,New,50%_O\'Brien\n9,Same,Keep\n');
+      const opened = await openComparison(value, baseline, candidate);
+      const applied = await applyKey(value, opened.comparisonId, ['id']);
+      const originalOrder = await readWindow(value, applied);
+      expect(originalOrder.rows.map(row => row.keyValues[0])).toEqual(['9', '7', '2', '3']);
+      const page = await readWindow(value, applied, { order: 'changed-first', offset: 1, limit: 2 });
+      expect(page.totalRowCount).toBe(4);
+      expect(page.rows.map(row => row.keyValues[0])).toEqual(['2', '3']);
+      for (const [rows, expected] of [
+        ['changed', ['7']], ['baseline-only', ['2']], ['candidate-only', ['3']],
+        ['unchanged', ['9']], ['differences', ['7', '2', '3']],
+      ] satisfies [import('../../src/csv-viewer').ComparisonRowsMode, string[]][]) {
+        const filtered = await readWindow(value, applied, { rows });
+        expect(filtered.totalRowCount).toBe(expected.length);
+        expect(filtered.rows.map(row => row.keyValues[0])).toEqual(expected);
+      }
+      // Search includes keys and both sides, including fields with no changes. SQL wildcard
+      // characters and quotes are literal text, and search cannot bypass the row filter.
+      for (const search of ['7', 'oLD', 'NEW', "50%_o'brien"]) {
+        const found = await readWindow(value, applied, { search });
+        expect(found.totalRowCount).toBe(1);
+        expect(found.rows[0].keyValues).toEqual(['7']);
+      }
+      expect((await readWindow(value, applied, { search: 'Keep', rows: 'differences' })).totalRowCount).toBe(0);
+      expect((await readWindow(value, applied, { search: '%missing' })).rows).toEqual([]);
+      const swapped = await value.viewer.call({ operation: 'comparison.swap', comparisonId: opened.comparisonId });
+      if (swapped.status !== 'changed') throw new Error('Comparison did not swap.');
+      expect((await readWindow(value, swapped.comparison)).rows.map(row => row.keyValues[0])).toEqual(['3', '7', '9', '2']);
+      expect((await readWindow(value, swapped.comparison, { order: 'changed-first' })).rows.map(row => row.keyValues[0])).toEqual(['7', '3', '2', '9']);
+      expect((await readWindow(value, swapped.comparison, { rows: 'baseline-only', search: 'added' })).rows[0].keyValues).toEqual(['3']);
+      expect((await readWindow(value, swapped.comparison, { rows: 'candidate-only', search: 'removed' })).rows[0].keyValues).toEqual(['2']);
     });
 
     it('returns complete invalid-key counts with bounded non-overlapping evidence', async () => {
@@ -761,7 +788,6 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       });
       expect(await readWindow(value, applied, { limit: 0 })).toMatchObject({
         totalRowCount: 3,
-        valueColumns: [],
         rows: [],
       });
       expect(
@@ -772,7 +798,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
           offset: 0,
           limit: 1_001,
           rows: 'all',
-          columns: 'csv-order',
+          search: '', order: 'csv-order',
         }),
       ).toMatchObject({
         status: 'rejected',
@@ -825,7 +851,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
           offset: 0,
           limit: 100,
           rows: 'all',
-          columns: 'csv-order',
+          search: '', order: 'csv-order',
         }),
       ).toEqual({
         status: 'result-replaced',
@@ -834,17 +860,17 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       expect(( await readWindow(value, swapped.comparison, { rows: 'differences' })).rows.map(observableRow),
       ).toEqual([
         {
-          classification: 'candidate-only',
-          keyValues: ['2'],
-          baseline: null,
-          candidate: [],
-          changed: [],
-        },
-        {
           classification: 'baseline-only',
           keyValues: ['3'],
           baseline: [],
           candidate: null,
+          changed: [],
+        },
+        {
+          classification: 'candidate-only',
+          keyValues: ['2'],
+          baseline: null,
+          candidate: [],
           changed: [],
         },
       ]);
@@ -888,7 +914,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
           offset: 0,
           limit: 100,
           rows: 'all',
-          columns: 'csv-order',
+          search: '', order: 'csv-order',
         }),
       ).resolves.toEqual({ status: 'comparison-not-found' });
     });
@@ -1064,7 +1090,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       });
     });
 
-    it('lists comparison columns in the baseline order after a reorder', async () => {
+    it('keeps snapshot value indexes after source reorders and renames', async () => {
       const baseline = await value.openSource(
         'baseline.csv',
         ['id,left,right', '1,a,b', '2,c,d', ''].join('\n'),
@@ -1086,8 +1112,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
         { name: 'right', changedRowCount: 1 },
         { name: 'left', changedRowCount: 0 },
       ]);
-      const window = await readWindow(value, applied, { columns: 'csv-order' });
-      expect(window.valueColumns.map((column) => column.name)).toEqual(['right', 'left']);
+      const window = await readWindow(value, applied);
       expect(window.rows.map(observableRow)).toEqual([
         {
           classification: 'changed',
@@ -1104,6 +1129,20 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
           changed: [false, false],
         },
       ]);
+      await value.viewer.call({
+        operation: 'csv.reorder-columns',
+        workingCsvId: baseline.workingCsvId,
+        columns: ['id', 'left', 'right'],
+      });
+      await value.viewer.call({
+        operation: 'csv.rename-column',
+        workingCsvId: baseline.workingCsvId,
+        column: 'left',
+        name: 'renamed',
+      });
+      const outdated = await comparisonState(value, comparison.comparisonId);
+      expect(outdated.applied?.summary).toEqual(applied.applied?.summary);
+      expect((await readWindow(value, outdated)).rows).toEqual(window.rows);
     });
   });
 }
