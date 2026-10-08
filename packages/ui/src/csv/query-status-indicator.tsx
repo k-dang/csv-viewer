@@ -1,24 +1,43 @@
+import { useEffect, useState } from 'react';
 import { CheckCircle2, CircleAlert, Loader2 } from 'lucide-react';
 
 export type QueryState = 'idle' | 'querying' | 'ready' | 'failed';
 
+/** A query that settles faster than this never shows Querying, so typing a search does not blink the status bar. */
+export const QUERYING_LABEL_DELAY_MS = 250;
+
 /**
- * The query state of one CSV Tab, as a compact label for its status bar. Every branch renders the
- * same polite live region, so screen readers hear each change, including a failed query.
+ * The query state of one CSV Tab, as a compact label for its status bar. Querying shows only once a
+ * query outlasts `QUERYING_LABEL_DELAY_MS`; `data-query-status` always carries the current state.
+ * Every branch renders the same polite live region at a fixed width, so screen readers hear each
+ * shown change, including a failed query, and the text after it never shifts.
  */
 export function QueryStatusIndicator({ state }: { state: QueryState }) {
-  if (state === 'querying') {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (state !== 'querying') return;
+    const timer = setTimeout(() => setSlow(true), QUERYING_LABEL_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      setSlow(false);
+    };
+  }, [state]);
+
+  const shown = state === 'querying' && !slow ? 'ready' : state;
+  const className = 'flex w-24 shrink-0 items-center gap-1.5 font-medium';
+
+  if (shown === 'querying') {
     return (
-      <span aria-live="polite" className="flex shrink-0 items-center gap-1.5 font-medium text-sky-700 dark:text-sky-300">
+      <span aria-live="polite" data-query-status={state} className={`${className} text-sky-700 dark:text-sky-300`}>
         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
         Querying
       </span>
     );
   }
 
-  if (state === 'failed') {
+  if (shown === 'failed') {
     return (
-      <span aria-live="polite" className="flex shrink-0 items-center gap-1.5 font-medium text-destructive">
+      <span aria-live="polite" data-query-status={state} className={`${className} text-destructive`}>
         <CircleAlert className="size-3.5" aria-hidden="true" />
         Query failed
       </span>
@@ -26,7 +45,7 @@ export function QueryStatusIndicator({ state }: { state: QueryState }) {
   }
 
   return (
-    <span aria-live="polite" className="flex shrink-0 items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
+    <span aria-live="polite" data-query-status={state} className={`${className} text-emerald-700 dark:text-emerald-400`}>
       <CheckCircle2 className="size-3.5" aria-hidden="true" />
       Ready
     </span>

@@ -686,8 +686,9 @@ function installProbe(globalName) {
     return document.querySelector('.csv-view > :last-child > [aria-live="polite"]');
   }
 
-  function statusText() {
-    return textOf(statusNode());
+  function queryStatus() {
+    const node = statusNode();
+    return node ? node.getAttribute('data-query-status') : null;
   }
 
   function countLine() {
@@ -760,8 +761,8 @@ function installProbe(globalName) {
   }
 
   function markHolds(mark) {
-    if (mark.kind === 'querying') return statusText() === 'Querying';
-    if (mark.kind === 'ready') return statusText() === 'Ready';
+    if (mark.kind === 'querying') return queryStatus() === 'querying';
+    if (mark.kind === 'ready') return queryStatus() === 'ready';
     if (mark.kind === 'dirty') {
       const badge = document.querySelector('[role="img"][aria-label="Unexported Changes"]');
       const undo = document.querySelector('button[aria-label="Undo edit"]');
@@ -823,20 +824,20 @@ function installProbe(globalName) {
 
   function inspect(sample) {
     if (current !== sample || sample.state === 'complete') return;
-    const status = statusText();
-    if (status === 'Query failed') {
+    const status = queryStatus();
+    if (status === 'failed') {
       sample.failed = 'Query failed';
       sample.state = 'complete';
       finish(sample);
       return;
     }
     if (sample.state === 'armed') return;
-    if (sample.state === 'started' && status === 'Querying') sample.state = 'querying';
+    if (sample.state === 'started' && status === 'querying') sample.state = 'querying';
     for (let index = 0; index < sample.marks.length; index += 1) {
       if (sample.times[index] !== null) continue;
       const mark = sample.marks[index];
       if (mark.kind === 'ready') {
-        if (sample.state !== 'querying' || status !== 'Ready') continue;
+        if (sample.state !== 'querying' || status !== 'ready') continue;
         sample.times[index] = performance.now();
         continue;
       }
