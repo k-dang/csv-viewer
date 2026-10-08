@@ -23,7 +23,9 @@ describe('QueryStatusIndicator', () => {
     expect(status()?.textContent).toBe('Ready');
 
     rerender(<QueryStatusIndicator state="querying" />);
-    act(() => vi.advanceTimersByTime(QUERYING_LABEL_DELAY_MS));
+    act(() => vi.advanceTimersByTime(QUERYING_LABEL_DELAY_MS - 1));
+    expect(status()?.textContent).toBe('Ready');
+    act(() => vi.advanceTimersByTime(1));
     expect(status()?.textContent).toBe('Querying');
 
     rerender(<QueryStatusIndicator state="ready" />);
