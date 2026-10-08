@@ -682,12 +682,8 @@ function installProbe(globalName) {
     return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   }
 
-  function statusNode() {
-    return document.querySelector('.csv-view > :last-child > [aria-live="polite"]');
-  }
-
   function queryStatus() {
-    const node = statusNode();
+    const node = document.querySelector('.csv-view [data-query-status]');
     return node ? node.getAttribute('data-query-status') : null;
   }
 
