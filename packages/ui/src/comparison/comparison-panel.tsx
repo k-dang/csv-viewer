@@ -235,7 +235,7 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
   const empty = totalRows === 0;
   const unchanged = applied.summary.rows.unchanged;
   return (
-    <div className="comparison-result-body">
+    <div className="comparison-result-body" aria-busy={rowsLoading}>
       <ComparisonSummaryBar tab={tab} summary={applied.summary} />
       {rowsError ? (
         <StatusBanner tone="error" role="alert">
@@ -269,7 +269,7 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
         ) : null}
       </div>
       <footer className="flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
-        <span>{rowsLoading || totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} of ${applied.summary.rows.total.toLocaleString()} rows`}</span>
+        <span>{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} of ${applied.summary.rows.total.toLocaleString()} rows`}</span>
         {rows === 'differences' && unchanged > 0 && !search ? (
           <>
             <span className="ml-auto">{unchanged.toLocaleString()} unchanged rows hidden</span>
@@ -468,7 +468,7 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
             Inspector
           </Button>
         </div>
-        <span className="ml-auto text-xs text-muted-foreground">{state.view === 'grid' ? 'Select a row to inspect' : state.rowsLoading || state.totalRows === null ? 'Loading rows…' : state.selection ? `Row ${state.selection.index + 1} of ${state.totalRows.toLocaleString()}` : 'Review one row at a time'}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{state.view === 'grid' ? 'Select a row to inspect' : state.totalRows === null ? 'Loading rows…' : state.selection ? `Row ${state.selection.index + 1} of ${state.totalRows.toLocaleString()}` : 'Review one row at a time'}</span>
       </div>
       <div className="flex flex-wrap items-center gap-3 py-3">
         <label className="relative min-w-40 flex-1 sm:max-w-64">

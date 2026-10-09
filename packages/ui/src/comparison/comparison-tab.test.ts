@@ -194,6 +194,9 @@ describe('ComparisonTab', () => {
     tab.setRowsMode('unchanged');
     tab.receiveRows(firstPage, previousVersion);
     expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
+    tab.receiveRows({ ...firstPage, offset: 100, rows: [], totalRowCount: 1 }, tab.snapshot().queryVersion);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
     tab.receiveRows({ ...firstPage, rows: [row('2')], totalRowCount: 1 }, tab.snapshot().queryVersion);
     expect(tab.snapshot().selection?.row.keyValues).toEqual(['2']);
     expect(tab.snapshot().selection?.index).toBe(0);

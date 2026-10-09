@@ -22,7 +22,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
   return (
     <div className="comparison-inspector">
       <aside aria-label="Choose a comparison row" className="comparison-inspector-list">
-        <p className="border-b px-3 py-2 text-xs text-muted-foreground">{rowsLoading || totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} ${totalRows === 1 ? 'row' : 'rows'} · select to inspect`}</p>
+        <p className="border-b px-3 py-2 text-xs text-muted-foreground">{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} ${totalRows === 1 ? 'row' : 'rows'} · select to inspect`}</p>
         <ComparisonRowList tab={tab} applied={applied} viewState={viewState} />
       </aside>
       <section ref={element => { if (focusDetail) element?.focus(); }} tabIndex={-1} aria-label="Selected comparison row" aria-busy={rowsLoading || selectionLoading} className="comparison-detail outline-none">
@@ -33,8 +33,8 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
                 <h2 className="break-words font-mono text-sm font-semibold">{comparisonKeyLabel(applied.key, selection.row.keyValues)}</h2>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <ComparisonClassification classification={selection.row.classification} />
-                  <span className="text-xs text-muted-foreground">{rowsLoading || totalRows === null ? 'Loading rows…' : `Row ${selection.index + 1} of ${totalRows.toLocaleString()}`}</span>
-                  {selectionLoading || rowsLoading ? <Loader2 aria-label="Loading selected row" className="size-3 animate-spin" /> : null}
+                  <span className="text-xs text-muted-foreground">{totalRows === null ? 'Loading rows…' : `Row ${selection.index + 1} of ${totalRows.toLocaleString()}`}</span>
+                  {selectionLoading ? <Loader2 aria-label="Loading selected row" className="size-3 animate-spin" /> : null}
                 </div>
               </div>
               <div className="ml-auto flex shrink-0 gap-1">

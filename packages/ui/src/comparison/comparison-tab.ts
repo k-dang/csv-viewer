@@ -234,6 +234,8 @@ export class ComparisonTab {
   /** Replaces the previous query's selection with its first row, then preserves later choices. */
   receiveRows(window: ComparisonWindow, version: number): void {
     if (this.disposed || version !== this.state.queryVersion) return;
+    // A refreshed grid may finish a later cached page before the new query's first page.
+    if (this.state.rowsLoading && window.offset !== 0) return;
     const first = window.rows[0];
     const previousSelection = this.state.rowsLoading ? null : this.state.selection;
     const selection = previousSelection ?? (window.offset === 0 && first && !this.state.selectionLoading

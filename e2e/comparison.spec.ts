@@ -34,6 +34,10 @@ test('keeps the settled comparison visible while populated and empty filters loa
   await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
   await expect(page.locator('body')).toHaveAttribute('data-comparison-rows-held', 'true');
   await page.screenshot({ path: testInfo.outputPath('pending-comparison-filter.png') });
+  await expect(comparison.getByRole('grid', { name: 'Comparison rows' }).getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+  await expect(comparison.getByText('1 row · select to inspect', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Row 1 of 1', { exact: true })).toBeVisible();
+  await expect(comparison.getByText('Loading rows…', { exact: true })).toHaveCount(0);
   await expect(detail.getByRole('cell', { name: /candidate changed value: New/ })).toBeVisible();
   await expect(detail.getByText('Loading a row to inspect…', { exact: true })).toHaveCount(0);
   await expect(comparison.getByRole('button', { name: 'Previous row', exact: true })).toBeDisabled();
@@ -65,8 +69,23 @@ test('keeps the settled comparison visible while populated and empty filters loa
       await expect(comparison.getByText(`${filter === 'Changed 1' ? 1 : 0} of 2 rows`, { exact: true })).toBeVisible();
     }
   }
+  await page.evaluate(() => {
+    delete document.body.dataset.comparisonRowsHeld;
+    document.body.dataset.holdComparisonRows = 'true';
+  });
+  await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-comparison-rows-held', 'true');
+  await expect(comparison.getByRole('grid', { name: 'Aligned comparison results' }).getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+  await comparison.getByRole('grid', { name: 'Aligned comparison results' }).getByRole('gridcell', { name: /id 1/ }).click();
+  await expect(comparison.getByRole('button', { name: 'Grid', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(comparison.getByText('Loading rows…', { exact: true })).toHaveCount(0);
+  await page.evaluate(() => {
+    delete document.body.dataset.holdComparisonRows;
+    window.dispatchEvent(new Event('release-comparison-rows'));
+  });
+  await expect(comparison.getByRole('gridcell', { name: /id 2/ })).toBeVisible();
   await comparison.getByRole('button', { name: 'Inspector', exact: true }).click();
-  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await expect(detail.getByRole('heading', { name: 'id 2', exact: true })).toBeVisible();
 });
 
 test('centers Inspector copy buttons beside single-line and multiline values', async ({ page, context }) => {

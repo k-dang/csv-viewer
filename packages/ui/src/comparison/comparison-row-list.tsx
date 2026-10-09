@@ -11,6 +11,7 @@ export function ComparisonRowList({ tab, applied, viewState }: {
 }) {
   return (
     <ComparisonRows
+      key={applied.resultToken}
       tab={tab}
       viewState={viewState}
       columnDefs={[{

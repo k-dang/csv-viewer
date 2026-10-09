@@ -60,6 +60,7 @@ export function ComparisonGrid({ tab, applied, viewState }: {
   }, [applied.key, applied.summary, changedOnly]);
   return (
     <ComparisonRows
+      key={applied.resultToken}
       tab={tab}
       viewState={viewState}
       columnDefs={columns}
