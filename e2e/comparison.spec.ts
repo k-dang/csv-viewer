@@ -340,6 +340,7 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   const width = await valueHeader.evaluate(element => element.getBoundingClientRect().width);
   expect(width).toBeGreaterThan(300);
   await grid.locator('.ag-body-horizontal-scroll-viewport').evaluate(element => { element.scrollLeft = 140; });
+  await expect.poll(() => grid.locator('.ag-center-cols-viewport').evaluate(element => element.scrollLeft)).toBe(140);
   await grid.locator('.ag-body-viewport').evaluate(element => { element.scrollTop = 98 * 44; });
   await expect(grid.getByRole('gridcell', { name: /^id 100 Press Enter/ })).toBeVisible();
   const scrollTop = await grid.locator('.ag-body-viewport').evaluate(element => element.scrollTop);
@@ -357,6 +358,8 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   await expect(page.getByRole('region', { name: 'CSV comparison' }).locator('.ag-root-wrapper')).toHaveCount(1);
   await expect.poll(() => grid.locator('.ag-body-viewport').evaluate(element => element.scrollTop)).toBe(scrollTop);
   await expect.poll(() => grid.locator('.ag-body-horizontal-scroll-viewport').evaluate(element => element.scrollLeft)).toBe(140);
+  await expect.poll(() => grid.locator('.ag-center-cols-viewport').evaluate(element => element.scrollLeft)).toBe(140);
+  await expect.poll(() => grid.locator('.ag-header-viewport').evaluate(element => element.scrollLeft)).toBe(140);
   expect(await valueHeader.evaluate(element => element.getBoundingClientRect().width)).toBe(width);
   await page.getByRole('searchbox', { name: 'Find a comparison row or value' }).fill('New 10');
   await expect(page.getByText('11 of 205 rows', { exact: true })).toBeVisible();

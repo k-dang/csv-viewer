@@ -99,8 +99,11 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
           const scroll = savedScroll.current;
           if (scroll) {
             const vertical = frameRef.current?.querySelector('.ag-body-viewport');
+            const center = frameRef.current?.querySelector('.ag-center-cols-viewport');
             const horizontal = frameRef.current?.querySelector('.ag-body-horizontal-scroll-viewport');
             if (vertical) vertical.scrollTop = scroll.top;
+            // Restore both before layout can sync the scrollbar from the row viewport.
+            if (center) center.scrollLeft = scroll.left;
             if (horizontal) horizontal.scrollLeft = scroll.left;
           }
           const current = tab.snapshot().selection;
