@@ -235,7 +235,7 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
   const empty = totalRows === 0;
   const unchanged = applied.summary.rows.unchanged;
   return (
-    <div className="comparison-result-body" aria-busy={rowsLoading}>
+    <div className="comparison-result-body">
       <ComparisonSummaryBar tab={tab} summary={applied.summary} />
       {rowsError ? (
         <StatusBanner tone="error" role="alert">
@@ -243,7 +243,7 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
           <Button size="sm" variant="outline" onClick={() => tab.retryRows()}>Retry rows</Button>
         </StatusBanner>
       ) : null}
-      <div className="relative min-h-0 min-w-0">
+      <div className="relative min-h-0 min-w-0" aria-busy={rowsLoading}>
         <div className={`h-full min-h-0${empty ? ' invisible' : ''}`} aria-hidden={empty}>
           {view === 'grid'
             ? <ComparisonGrid tab={tab} applied={applied} viewState={gridState.current} />

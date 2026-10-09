@@ -88,6 +88,44 @@ test('keeps the settled comparison visible while populated and empty filters loa
   await expect(detail.getByRole('heading', { name: 'id 2', exact: true })).toBeVisible();
 });
 
+test('exposes row failures outside busy content and retries without allowing stale selection', { tag: '@dev' }, async ({ page }, testInfo) => {
+  await beforeWorkspaceStarts(page, `
+    const call = started.viewer.call.bind(started.viewer);
+    started.viewer.call = async (request) => {
+      const outcome = await call(request);
+      if (request.operation === 'comparison.get-window' && document.body.dataset.failComparisonRows === 'true') {
+        delete document.body.dataset.failComparisonRows;
+        throw new Error('Injected row delivery failure');
+      }
+      return outcome;
+    };
+  `);
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,value\n1,Old\n2,Before\n3,Same\n');
+  await openCsv(page, 'candidate.csv', 'id,value\n1,New\n2,After\n3,Same\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const comparison = page.getByRole('region', { name: 'CSV comparison', exact: true });
+  const detail = comparison.getByRole('region', { name: 'Selected comparison row' });
+  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await expect(comparison.getByRole('button', { name: 'Next row', exact: true })).toBeEnabled();
+  await page.evaluate(() => { document.body.dataset.failComparisonRows = 'true'; });
+  await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
+  const alert = comparison.getByRole('alert');
+  await expect(alert).toContainText('Unable to load comparison rows. Try again.');
+  await page.screenshot({ path: testInfo.outputPath('comparison-row-failure.png') });
+  expect(await alert.evaluate(element => element.closest('[aria-busy="true"]') !== null)).toBe(false);
+  await expect(detail).toHaveAttribute('aria-busy', 'true');
+  await expect(comparison.getByRole('button', { name: 'Next row', exact: true })).toBeDisabled();
+  await comparison.getByRole('grid', { name: 'Comparison rows' }).getByRole('gridcell', { name: /id 2/ }).click();
+  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await alert.getByRole('button', { name: 'Retry rows', exact: true }).click();
+  await expect(detail.getByRole('heading', { name: 'id 3', exact: true })).toBeVisible();
+  await expect(detail).toHaveAttribute('aria-busy', 'false');
+  await expect(alert).toHaveCount(0);
+});
+
 test('centers Inspector copy buttons beside single-line and multiline values', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto('/');
