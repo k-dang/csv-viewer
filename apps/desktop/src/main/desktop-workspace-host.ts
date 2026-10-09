@@ -145,7 +145,8 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   });
 
   readonly recentSources = Effect.fnUntraced(function* (this: DesktopWorkspaceHost) {
-    const entries = yield* this.readRecentEntries();
+    // Writers truncate before replacing the JSON, so readers share their lock.
+    const entries = yield* this.recentEntriesLock.withPermit(this.readRecentEntries());
     const gone = new Set<string>();
     const hidden = new Set<string>();
     for (const entry of entries) {

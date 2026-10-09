@@ -12,7 +12,7 @@ ModuleRegistry.registerModules([
   ColumnApiModule, InfiniteRowModelModule, RenderApiModule, ScrollApiModule, RowStyleModule,
 ]);
 
-export type GridComparisonRow = { row: ComparisonRow; index: number };
+export type GridComparisonRow = { row: ComparisonRow; index: number; queryVersion: number };
 
 /** View presentation survives unmounting; row pages belong only to the active grid. */
 export type ComparisonRowsViewState = {
@@ -38,21 +38,33 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
   const selectedKeyRef = useRef(selectedKey);
   selectedKeyRef.current = selectedKey;
   const savedScroll = useRef(viewState.scroll?.queryVersion === queryVersion ? viewState.scroll : undefined);
+  const previousQueryVersion = useRef(queryVersion);
   const datasource = useMemo<IDatasource>(() => ({
     getRows: params => {
+      const version = tab.snapshot().queryVersion;
       tab.rows(params.startRow, params.endRow - params.startRow).then(window => {
-        if (!window || tab.snapshot().queryVersion !== queryVersion) {
+        if (!window || tab.snapshot().queryVersion !== version) {
           params.failCallback();
           return;
         }
-        tab.receiveRows(window, queryVersion);
-        params.successCallback(window.rows.map((row, index) => ({ row, index: window.offset + index })), window.totalRowCount);
+        tab.receiveRows(window, version);
+        params.successCallback(window.rows.map((row, index) => ({ row, index: window.offset + index, queryVersion: version })), window.totalRowCount);
       }).catch(() => {
-        tab.rowsFailed(queryVersion);
+        tab.rowsFailed(version);
         params.failCallback();
       });
     },
-  }), [tab, queryVersion]);
+  }), [tab]);
+
+  useEffect(() => {
+    if (previousQueryVersion.current === queryVersion) return;
+    previousQueryVersion.current = queryVersion;
+    const api = apiRef.current;
+    if (!api || api.isDestroyed()) return;
+    api.ensureIndexVisible(0, 'top');
+    // Refresh retains displayed rows until their replacements arrive; a new datasource purges them.
+    api.refreshInfiniteCache();
+  }, [queryVersion]);
 
   useEffect(() => {
     const api = apiRef.current;
@@ -99,17 +111,24 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
           const scroll = savedScroll.current;
           if (scroll) {
             const vertical = frameRef.current?.querySelector('.ag-body-viewport');
-            const horizontal = frameRef.current?.querySelector('.ag-center-cols-viewport');
+            const center = frameRef.current?.querySelector('.ag-center-cols-viewport');
+            const horizontal = frameRef.current?.querySelector('.ag-body-horizontal-scroll-viewport');
             if (vertical) vertical.scrollTop = scroll.top;
+            // Restore both before layout can sync the scrollbar from the row viewport.
+            if (center) center.scrollLeft = scroll.left;
             if (horizontal) horizontal.scrollLeft = scroll.left;
           }
           const current = tab.snapshot().selection;
           if (current && (!scroll || scroll.selectedKey !== selectedKeyRef.current)) event.api.ensureIndexVisible(current.index);
         }}
-        onRowClicked={event => { if (event.data) onChoose(event.data); }}
+        onRowClicked={event => {
+          const current = tab.snapshot();
+          if (event.data && !current.rowsLoading && event.data.queryVersion === current.queryVersion) onChoose(event.data);
+        }}
         onCellKeyDown={params => {
           const event = params.event;
-          if (!(event instanceof KeyboardEvent) || event.key !== 'Enter' || !params.data) return;
+          const current = tab.snapshot();
+          if (!(event instanceof KeyboardEvent) || event.key !== 'Enter' || !params.data || current.rowsLoading || params.data.queryVersion !== current.queryVersion) return;
           event.preventDefault();
           onChoose(params.data);
         }}

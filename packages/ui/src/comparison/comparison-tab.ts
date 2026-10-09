@@ -20,7 +20,9 @@ export type ComparisonTabState = {
   /** Grid hides globally unchanged columns; Inspector hides unchanged fields of its selected row. */
   changedOnly: boolean;
   queryVersion: number;
+  /** The settled row count stays visible while the next query loads. */
   totalRows: number | null;
+  rowsLoading: boolean;
   selection: { row: ComparisonRow; index: number } | null;
   selectionLoading: boolean;
   rowsError: string | null;
@@ -61,6 +63,7 @@ export class ComparisonTab {
       changedOnly: true,
       queryVersion: 0,
       totalRows: null,
+      rowsLoading: true,
       selection: null,
       selectionLoading: false,
       rowsError: null,
@@ -148,7 +151,7 @@ export class ComparisonTab {
 
   /** Previous/next reads the containing page, preserving a newer row choice while it loads. */
   async selectIndex(index: number): Promise<void> {
-    if (index < 0 || this.state.totalRows === null || index >= this.state.totalRows) return;
+    if (index < 0 || this.state.rowsLoading || this.state.totalRows === null || index >= this.state.totalRows) return;
     const request = ++this.selectionRequest;
     const version = this.state.queryVersion;
     this.set({ selectionLoading: true });
@@ -228,14 +231,17 @@ export class ComparisonTab {
     return outcome.status === 'ready' ? outcome.window : null;
   }
 
-  /** Publishes a loaded page's count and selects its first row only when no row is chosen. */
+  /** Replaces the previous query's selection with its first row, then preserves later choices. */
   receiveRows(window: ComparisonWindow, version: number): void {
     if (this.disposed || version !== this.state.queryVersion) return;
+    // A refreshed grid may finish a later cached page before the new query's first page.
+    if (this.state.rowsLoading && window.offset !== 0) return;
     const first = window.rows[0];
-    const selection = this.state.selection ?? (window.offset === 0 && first && !this.state.selectionLoading
+    const previousSelection = this.state.rowsLoading ? null : this.state.selection;
+    const selection = previousSelection ?? (window.offset === 0 && first && !this.state.selectionLoading
       ? { row: first, index: 0 }
       : null);
-    this.set({ totalRows: window.totalRowCount, selection, rowsError: null });
+    this.set({ totalRows: window.totalRowCount, rowsLoading: false, selection, rowsError: null });
   }
 
   rowsFailed(version: number): void {
@@ -249,8 +255,11 @@ export class ComparisonTab {
     this.set({
       ...patch,
       queryVersion: this.state.queryVersion + 1,
-      totalRows: null,
-      selection: null,
+      // Keep the settled result readable while a filter loads, including its empty state.
+      totalRows: patch.comparison ? null : this.state.totalRows,
+      rowsLoading: true,
+      // A new applied result must discard old values.
+      selection: patch.comparison ? null : this.state.selection,
       selectionLoading: false,
       rowsError: null,
     });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { editCell, openCsv } from './helpers/csv';
+import { beforeWorkspaceStarts, editCell, openCsv } from './helpers/csv';
 
 async function compare(page: Page): Promise<void> {
   await page.getByRole('tab', { name: 'baseline.csv', exact: true }).click();
@@ -7,6 +7,124 @@ async function compare(page: Page): Promise<void> {
   await page.getByRole('dialog', { name: 'Choose a Candidate' }).getByRole('button', { name: /candidate.csv/ }).click();
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
+
+test('keeps the settled comparison visible while populated and empty filters load', { tag: '@dev' }, async ({ page }, testInfo) => {
+  // Hold delivery of a real row window so the intermediate UI is observable on every machine.
+  await beforeWorkspaceStarts(page, `
+    const call = started.viewer.call.bind(started.viewer);
+    started.viewer.call = async (request) => {
+      const outcome = await call(request);
+      if (request.operation === 'comparison.get-window' && document.body.dataset.holdComparisonRows === 'true') {
+        document.body.dataset.comparisonRowsHeld = 'true';
+        await new Promise(resolve => window.addEventListener('release-comparison-rows', resolve, { once: true }));
+      }
+      return outcome;
+    };
+  `);
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,value\n1,Old\n2,Same\n');
+  await openCsv(page, 'candidate.csv', 'id,value\n1,New\n2,Same\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const comparison = page.getByRole('region', { name: 'CSV comparison', exact: true });
+  const detail = comparison.getByRole('region', { name: 'Selected comparison row' });
+  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await page.evaluate(() => { document.body.dataset.holdComparisonRows = 'true'; });
+  await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-comparison-rows-held', 'true');
+  await page.screenshot({ path: testInfo.outputPath('pending-comparison-filter.png') });
+  await expect(comparison.getByRole('grid', { name: 'Comparison rows' }).getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+  await expect(comparison.getByText('1 row · select to inspect', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Row 1 of 1', { exact: true })).toBeVisible();
+  await expect(comparison.getByText('Loading rows…', { exact: true })).toHaveCount(0);
+  await expect(detail.getByRole('cell', { name: /candidate changed value: New/ })).toBeVisible();
+  await expect(detail.getByText('Loading a row to inspect…', { exact: true })).toHaveCount(0);
+  await expect(comparison.getByRole('button', { name: 'Previous row', exact: true })).toBeDisabled();
+  await expect(comparison.getByRole('button', { name: 'Next row', exact: true })).toBeDisabled();
+  await page.evaluate(() => {
+    delete document.body.dataset.holdComparisonRows;
+    window.dispatchEvent(new Event('release-comparison-rows'));
+  });
+  await expect(detail.getByRole('heading', { name: 'id 2', exact: true })).toBeVisible();
+  await expect(detail.getByRole('cell', { name: /^Same/ })).toHaveCount(2);
+  for (const view of ['Inspector', 'Grid']) {
+    await comparison.getByRole('button', { name: view, exact: true }).click();
+    await comparison.getByRole('button', { name: 'Baseline-only 0', exact: true }).click();
+    await expect(comparison.getByRole('heading', { name: 'No matching rows', exact: true })).toBeVisible();
+    for (const filter of ['Candidate-only 0', 'Changed 1']) {
+      await page.evaluate(() => {
+        delete document.body.dataset.comparisonRowsHeld;
+        document.body.dataset.holdComparisonRows = 'true';
+      });
+      await comparison.getByRole('button', { name: filter, exact: true }).click();
+      await expect(page.locator('body')).toHaveAttribute('data-comparison-rows-held', 'true');
+      await page.screenshot({ path: testInfo.outputPath(`pending-${view}-${filter.split(' ')[0]}.png`) });
+      await expect(comparison.getByRole('heading', { name: 'No matching rows', exact: true })).toBeVisible();
+      await expect(detail.getByText('Loading a row to inspect…', { exact: true })).toBeHidden();
+      await page.evaluate(() => {
+        delete document.body.dataset.holdComparisonRows;
+        window.dispatchEvent(new Event('release-comparison-rows'));
+      });
+      await expect(comparison.getByText(`${filter === 'Changed 1' ? 1 : 0} of 2 rows`, { exact: true })).toBeVisible();
+    }
+  }
+  await page.evaluate(() => {
+    delete document.body.dataset.comparisonRowsHeld;
+    document.body.dataset.holdComparisonRows = 'true';
+  });
+  await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-comparison-rows-held', 'true');
+  await expect(comparison.getByRole('grid', { name: 'Aligned comparison results' }).getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+  await comparison.getByRole('grid', { name: 'Aligned comparison results' }).getByRole('gridcell', { name: /id 1/ }).click();
+  await expect(comparison.getByRole('button', { name: 'Grid', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(comparison.getByText('Loading rows…', { exact: true })).toHaveCount(0);
+  await page.evaluate(() => {
+    delete document.body.dataset.holdComparisonRows;
+    window.dispatchEvent(new Event('release-comparison-rows'));
+  });
+  await expect(comparison.getByRole('gridcell', { name: /id 2/ })).toBeVisible();
+  await comparison.getByRole('button', { name: 'Inspector', exact: true }).click();
+  await expect(detail.getByRole('heading', { name: 'id 2', exact: true })).toBeVisible();
+});
+
+test('exposes row failures outside busy content and retries without allowing stale selection', { tag: '@dev' }, async ({ page }, testInfo) => {
+  await beforeWorkspaceStarts(page, `
+    const call = started.viewer.call.bind(started.viewer);
+    started.viewer.call = async (request) => {
+      const outcome = await call(request);
+      if (request.operation === 'comparison.get-window' && document.body.dataset.failComparisonRows === 'true') {
+        delete document.body.dataset.failComparisonRows;
+        throw new Error('Injected row delivery failure');
+      }
+      return outcome;
+    };
+  `);
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,value\n1,Old\n2,Before\n3,Same\n');
+  await openCsv(page, 'candidate.csv', 'id,value\n1,New\n2,After\n3,Same\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const comparison = page.getByRole('region', { name: 'CSV comparison', exact: true });
+  const detail = comparison.getByRole('region', { name: 'Selected comparison row' });
+  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await expect(comparison.getByRole('button', { name: 'Next row', exact: true })).toBeEnabled();
+  await page.evaluate(() => { document.body.dataset.failComparisonRows = 'true'; });
+  await comparison.getByRole('button', { name: 'Unchanged 1', exact: true }).click();
+  const alert = comparison.getByRole('alert');
+  await expect(alert).toContainText('Unable to load comparison rows. Try again.');
+  await page.screenshot({ path: testInfo.outputPath('comparison-row-failure.png') });
+  expect(await alert.evaluate(element => element.closest('[aria-busy="true"]') !== null)).toBe(false);
+  await expect(detail).toHaveAttribute('aria-busy', 'true');
+  await expect(comparison.getByRole('button', { name: 'Next row', exact: true })).toBeDisabled();
+  await comparison.getByRole('grid', { name: 'Comparison rows' }).getByRole('gridcell', { name: /id 2/ }).click();
+  await expect(detail.getByRole('heading', { name: 'id 1', exact: true })).toBeVisible();
+  await alert.getByRole('button', { name: 'Retry rows', exact: true }).click();
+  await expect(detail.getByRole('heading', { name: 'id 3', exact: true })).toBeVisible();
+  await expect(detail).toHaveAttribute('aria-busy', 'false');
+  await expect(alert).toHaveCount(0);
+});
 
 test('centers Inspector copy buttons beside single-line and multiline values', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
@@ -279,6 +397,7 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   const width = await valueHeader.evaluate(element => element.getBoundingClientRect().width);
   expect(width).toBeGreaterThan(300);
   await grid.locator('.ag-body-horizontal-scroll-viewport').evaluate(element => { element.scrollLeft = 140; });
+  await expect.poll(() => grid.locator('.ag-center-cols-viewport').evaluate(element => element.scrollLeft)).toBe(140);
   await grid.locator('.ag-body-viewport').evaluate(element => { element.scrollTop = 98 * 44; });
   await expect(grid.getByRole('gridcell', { name: /^id 100 Press Enter/ })).toBeVisible();
   const scrollTop = await grid.locator('.ag-body-viewport').evaluate(element => element.scrollTop);
@@ -296,6 +415,8 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   await expect(page.getByRole('region', { name: 'CSV comparison' }).locator('.ag-root-wrapper')).toHaveCount(1);
   await expect.poll(() => grid.locator('.ag-body-viewport').evaluate(element => element.scrollTop)).toBe(scrollTop);
   await expect.poll(() => grid.locator('.ag-body-horizontal-scroll-viewport').evaluate(element => element.scrollLeft)).toBe(140);
+  await expect.poll(() => grid.locator('.ag-center-cols-viewport').evaluate(element => element.scrollLeft)).toBe(140);
+  await expect.poll(() => grid.locator('.ag-header-viewport').evaluate(element => element.scrollLeft)).toBe(140);
   expect(await valueHeader.evaluate(element => element.getBoundingClientRect().width)).toBe(width);
   await page.getByRole('searchbox', { name: 'Find a comparison row or value' }).fill('New 10');
   await expect(page.getByText('11 of 205 rows', { exact: true })).toBeVisible();

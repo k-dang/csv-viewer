@@ -14,7 +14,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
   viewState: ComparisonRowsViewState;
   focusDetail: boolean;
 }) {
-  const { selection, selectionLoading, totalRows, changedOnly } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { selection, selectionLoading, totalRows, rowsLoading, changedOnly } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const fields = comparisonFields(applied.summary);
   const visibleFields = changedOnly && selection?.row.changed.some(Boolean)
     ? fields.filter(field => selection.row.changed[field.index]) : fields;
@@ -25,7 +25,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
         <p className="border-b px-3 py-2 text-xs text-muted-foreground">{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} ${totalRows === 1 ? 'row' : 'rows'} · select to inspect`}</p>
         <ComparisonRowList tab={tab} applied={applied} viewState={viewState} />
       </aside>
-      <section ref={element => { if (focusDetail) element?.focus(); }} tabIndex={-1} aria-label="Selected comparison row" className="comparison-detail outline-none">
+      <section ref={element => { if (focusDetail) element?.focus(); }} tabIndex={-1} aria-label="Selected comparison row" aria-busy={rowsLoading || selectionLoading} className="comparison-detail outline-none">
         {selection ? (
           <>
             <header className="comparison-detail-header">
@@ -33,7 +33,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
                 <h2 className="break-words font-mono text-sm font-semibold">{comparisonKeyLabel(applied.key, selection.row.keyValues)}</h2>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <ComparisonClassification classification={selection.row.classification} />
-                  <span className="text-xs text-muted-foreground">Row {selection.index + 1} of {totalRows?.toLocaleString()}</span>
+                  <span className="text-xs text-muted-foreground">{totalRows === null ? 'Loading rows…' : `Row ${selection.index + 1} of ${totalRows.toLocaleString()}`}</span>
                   {selectionLoading ? <Loader2 aria-label="Loading selected row" className="size-3 animate-spin" /> : null}
                 </div>
               </div>
@@ -42,7 +42,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
                   variant="outline"
                   size="icon-sm"
                   aria-label="Previous row"
-                  disabled={selection.index === 0 || selectionLoading}
+                  disabled={rowsLoading || selection.index === 0 || selectionLoading}
                   onClick={() => void tab.selectIndex(selection.index - 1)}
                 >
                   <ArrowLeft />
@@ -51,7 +51,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
                   variant="outline"
                   size="icon-sm"
                   aria-label="Next row"
-                  disabled={totalRows === null || selection.index + 1 >= totalRows || selectionLoading}
+                  disabled={rowsLoading || totalRows === null || selection.index + 1 >= totalRows || selectionLoading}
                   onClick={() => void tab.selectIndex(selection.index + 1)}
                 >
                   <ArrowRight />
