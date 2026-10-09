@@ -226,7 +226,7 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonNullable<ComparisonView['applied']> }) {
-  const { view, rows, search, totalRows, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { view, rows, search, totalRows, rowsLoading, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const gridState = useRef<ComparisonRowsViewState>({});
   const inspectorState = useRef<ComparisonRowsViewState>({});
   const previousView = useRef(view);
@@ -244,30 +244,32 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
         </StatusBanner>
       ) : null}
       <div className="relative min-h-0 min-w-0">
-        <div className={!empty ? 'h-full min-h-0' : 'hidden'}>
+        <div className={`h-full min-h-0${empty ? ' invisible' : ''}`} aria-hidden={empty}>
           {view === 'grid'
             ? <ComparisonGrid tab={tab} applied={applied} viewState={gridState.current} />
             : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} focusDetail={focusDetail} />}
         </div>
         {empty ? (
-          <EmptyState
-            icon={<Rows3 className="mx-auto mb-3 size-8 text-muted-foreground" />}
-            title={rows === 'differences' && !search ? 'No differences' : 'No matching rows'}
-          >
-            <p className="mt-2 text-sm text-muted-foreground">
-              {search ? 'Try another search or show all rows.' : 'Choose another result filter to see more rows.'}
-            </p>
-            <Button className="mt-3" size="sm" variant="outline" onClick={() => {
-              tab.setSearch('');
-              tab.setRowsMode('all');
-            }}>
-              Show all rows
-            </Button>
-          </EmptyState>
+          <div className="absolute inset-0 overflow-auto bg-background">
+            <EmptyState
+              icon={<Rows3 className="mx-auto mb-3 size-8 text-muted-foreground" />}
+              title={rows === 'differences' && !search ? 'No differences' : 'No matching rows'}
+            >
+              <p className="mt-2 text-sm text-muted-foreground">
+                {search ? 'Try another search or show all rows.' : 'Choose another result filter to see more rows.'}
+              </p>
+              <Button className="mt-3" size="sm" variant="outline" onClick={() => {
+                tab.setSearch('');
+                tab.setRowsMode('all');
+              }}>
+                Show all rows
+              </Button>
+            </EmptyState>
+          </div>
         ) : null}
       </div>
       <footer className="flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
-        <span>{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} of ${applied.summary.rows.total.toLocaleString()} rows`}</span>
+        <span>{rowsLoading || totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} of ${applied.summary.rows.total.toLocaleString()} rows`}</span>
         {rows === 'differences' && unchanged > 0 && !search ? (
           <>
             <span className="ml-auto">{unchanged.toLocaleString()} unchanged rows hidden</span>
@@ -466,7 +468,7 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
             Inspector
           </Button>
         </div>
-        <span className="ml-auto text-xs text-muted-foreground">{state.view === 'grid' ? 'Select a row to inspect' : state.selection ? `Row ${state.selection.index + 1} of ${state.totalRows?.toLocaleString()}` : 'Review one row at a time'}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{state.view === 'grid' ? 'Select a row to inspect' : state.rowsLoading || state.totalRows === null ? 'Loading rows…' : state.selection ? `Row ${state.selection.index + 1} of ${state.totalRows.toLocaleString()}` : 'Review one row at a time'}</span>
       </div>
       <div className="flex flex-wrap items-center gap-3 py-3">
         <label className="relative min-w-40 flex-1 sm:max-w-64">

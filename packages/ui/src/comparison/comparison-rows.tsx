@@ -99,7 +99,7 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
           const scroll = savedScroll.current;
           if (scroll) {
             const vertical = frameRef.current?.querySelector('.ag-body-viewport');
-            const horizontal = frameRef.current?.querySelector('.ag-center-cols-viewport');
+            const horizontal = frameRef.current?.querySelector('.ag-body-horizontal-scroll-viewport');
             if (vertical) vertical.scrollTop = scroll.top;
             if (horizontal) horizontal.scrollLeft = scroll.left;
           }

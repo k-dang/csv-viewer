@@ -188,6 +188,22 @@ describe('ComparisonTab', () => {
     expect(tab.snapshot().selectionLoading).toBe(false);
     expect(tab.snapshot().view).toBe('inspector');
     tab.setRowsMode('all');
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
+    const previousVersion = tab.snapshot().queryVersion;
+    tab.setRowsMode('unchanged');
+    tab.receiveRows(firstPage, previousVersion);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
+    tab.receiveRows({ ...firstPage, rows: [row('2')], totalRowCount: 1 }, tab.snapshot().queryVersion);
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['2']);
+    expect(tab.snapshot().selection?.index).toBe(0);
+    tab.setRowsMode('baseline-only');
+    tab.receiveRows({ ...firstPage, rows: [], totalRowCount: 0 }, tab.snapshot().queryVersion);
+    expect(tab.snapshot().selection).toBeNull();
+    tab.setRowsMode('all');
+    expect(tab.snapshot()).toMatchObject({ totalRows: 0, rowsLoading: true });
+    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    tab.receive(comparisonFixture({ version: 2, applied: applied('result-2') }));
     expect(tab.snapshot().selection).toBeNull();
   });
 
