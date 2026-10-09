@@ -8,6 +8,31 @@ async function compare(page: Page): Promise<void> {
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
 
+test('centers Inspector copy buttons beside single-line and multiline values', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,total_spend,note\n1,1.0,"First line\nSecond line\nThird line"\n');
+  await openCsv(page, 'candidate.csv', 'id,total_spend,note\n1,1.5,"Updated first line\nUpdated second line"\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const detail = page.getByRole('region', { name: 'Selected comparison row' });
+  const buttons = detail.getByRole('button', { name: /^Copy (baseline|candidate) value for / });
+  await expect(buttons).toHaveCount(4);
+  for (const button of await buttons.all()) {
+    const offset = await button.evaluate(element => {
+      const value = element.previousElementSibling!.getBoundingClientRect();
+      const icon = element.querySelector('svg')!.getBoundingClientRect();
+      return Math.abs(icon.y + icon.height / 2 - value.y - value.height / 2);
+    });
+    expect(offset, await button.getAttribute('aria-label') ?? 'Copy value').toBeLessThanOrEqual(1);
+  }
+  await detail.getByRole('button', { name: 'Copy baseline value for total_spend', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('1.0');
+  await detail.getByRole('button', { name: 'Copy candidate value for note', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replaceAll('\r\n', '\n'))).toBe('Updated first line\nUpdated second line');
+});
+
 test('preserves cleanup defects when closing a source and permits a successful retry', { tag: '@dev' }, async ({ page }, testInfo) => {
   const diagnostics: string[] = [];
   page.on('console', (message) => {
