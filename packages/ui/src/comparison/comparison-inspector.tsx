@@ -77,7 +77,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
                           return (
                             <td key={side}>
                               {data ? (
-                                <div className="flex items-start gap-1">
+                                <div className="flex items-center gap-1">
                                   <ComparisonValue
                                     value={data.values[field.index]}
                                     side={side}
