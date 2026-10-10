@@ -154,7 +154,7 @@ export type ConfirmWorkspaceCloseOutcome =
   | { status: 'confirmation-required'; impact: WorkspaceCloseImpact };
 
 export type ComparisonSide = 'baseline' | 'candidate';
-export type ComparisonPhase = 'validating' | 'comparing' | 'summarizing';
+export type ComparisonPhase = 'validating' | 'comparing';
 
 export type ComparisonFault = {
   code:
