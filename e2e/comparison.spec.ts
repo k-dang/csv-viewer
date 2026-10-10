@@ -392,7 +392,8 @@ test('shares filters, search, and row selection between scanning and inspection'
   await expect(grid.getByRole('columnheader', { name: 'note', exact: true })).toHaveCount(0);
   await comparison.getByRole('checkbox', { name: 'Changed fields only' }).uncheck();
   await expect(grid.getByRole('columnheader', { name: 'note', exact: true })).toBeVisible();
-  await comparison.getByRole('combobox', { name: 'Row order' }).selectOption('csv-order');
+  await comparison.getByRole('combobox', { name: 'Row order' }).click();
+  await page.getByRole('option', { name: 'CSV order', exact: true }).click();
   await comparison.getByRole('button', { name: /^All rows / }).click();
   const keyCell = grid.getByRole('gridcell', { name: /^id 9 Press Enter/ });
   await keyCell.focus();

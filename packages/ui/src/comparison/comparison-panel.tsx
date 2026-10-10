@@ -3,8 +3,10 @@ import { Dialog } from '@base-ui/react/dialog';
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3, Grid2X2, PanelLeft, KeyRound, Search, FileSpreadsheet, ArrowRight } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type {
   ComparisonKeyDiagnostics,
+  ComparisonRowOrder,
   ComparisonSummary,
   ComparisonRowsMode,
   ComparisonView,
@@ -14,6 +16,11 @@ import type { ComparisonTab } from './comparison-tab';
 import { ComparisonGrid } from './comparison-grid';
 import { ComparisonInspector } from './comparison-inspector';
 import type { ComparisonRowsViewState } from './comparison-rows';
+
+const rowOrderLabels = {
+  'changed-first': 'Changed first',
+  'csv-order': 'CSV order',
+} satisfies Record<ComparisonRowOrder, string>;
 
 /**
  * The header, status banners, and result body of one Comparison Tab. Every part reads the Tab
@@ -492,18 +499,21 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
           <input type="checkbox" disabled={state.preparingResult} checked={state.changedOnly} onChange={event => tab.setChangedOnly(event.target.checked)} />
           Changed fields only
         </label>
-        <label>
-          <span className="sr-only">Row order</span>
-          <select
-            className="rounded-md border bg-background px-2 py-2 text-xs"
-            value={state.order}
-            disabled={state.preparingResult}
-            onChange={event => tab.setOrder(event.target.value === 'csv-order' ? 'csv-order' : 'changed-first')}
-          >
-            <option value="changed-first">Changed first</option>
-            <option value="csv-order">CSV order</option>
-          </select>
-        </label>
+        <Select
+          value={state.order}
+          disabled={state.preparingResult}
+          onValueChange={value => {
+            if (value !== null) tab.setOrder(value);
+          }}
+        >
+          <SelectTrigger aria-label="Row order" className="w-36 bg-background">
+            <SelectValue>{rowOrderLabels[state.order]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="changed-first">{rowOrderLabels['changed-first']}</SelectItem>
+            <SelectItem value="csv-order">{rowOrderLabels['csv-order']}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="flex gap-4 pb-2 text-[11px] text-muted-foreground">
         <span className="comparison-baseline-label">− Baseline value</span>
