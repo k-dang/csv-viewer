@@ -484,6 +484,8 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   await page.getByRole('button', { name: 'Apply key', exact: true }).click();
   await page.getByRole('button', { name: 'Grid', exact: true }).click();
   const grid = page.getByRole('grid', { name: 'Aligned comparison results' });
+  // Headers mount before the first row; wait for the usable grid before resizing and scrolling.
+  await expect(grid.getByRole('gridcell', { name: /^id 1 Press Enter/ })).toBeVisible();
   const valueHeader = grid.locator('.ag-header-cell[col-id="value:value"]');
   const resize = await valueHeader.locator('.ag-header-cell-resize').boundingBox();
   if (!resize) throw new Error('Missing value column resize handle.');
