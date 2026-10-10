@@ -8,11 +8,10 @@ import type { ComparisonRowsViewState } from './comparison-rows';
 import { ComparisonValue, ComparisonClassification, comparisonKeyLabel, comparisonFields } from './comparison-values';
 import type { ComparisonTab } from './comparison-tab';
 
-export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
+export function ComparisonInspector({ tab, applied, viewState }: {
   tab: ComparisonTab;
   applied: NonNullable<ComparisonView['applied']>;
   viewState: ComparisonRowsViewState;
-  focusDetail: boolean;
 }) {
   const { selection, selectionLoading, totalRows, rowsLoading, changedOnly } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const fields = comparisonFields(applied.summary);
@@ -25,7 +24,7 @@ export function ComparisonInspector({ tab, applied, viewState, focusDetail }: {
         <p className="border-b px-3 py-2 text-xs text-muted-foreground">{totalRows === null ? 'Loading rows…' : `${totalRows.toLocaleString()} ${totalRows === 1 ? 'row' : 'rows'} · select to inspect`}</p>
         <ComparisonRowList tab={tab} applied={applied} viewState={viewState} />
       </aside>
-      <section ref={element => { if (focusDetail) element?.focus(); }} tabIndex={-1} aria-label="Selected comparison row" aria-busy={rowsLoading || selectionLoading} className="comparison-detail outline-none">
+      <section tabIndex={-1} aria-label="Selected comparison row" aria-busy={rowsLoading || selectionLoading} className="comparison-detail outline-none">
         {selection ? (
           <>
             <header className="comparison-detail-header">

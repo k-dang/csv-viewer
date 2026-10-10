@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3, Grid2X2, PanelLeft, KeyRound, Search, FileSpreadsheet, ArrowRight } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import type {
   ComparisonKeyDiagnostics,
-  ComparisonPhase,
   ComparisonSummary,
   ComparisonRowsMode,
   ComparisonView,
@@ -31,17 +30,17 @@ export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
-  const { comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const [editingKey, setEditingKey] = useState(false);
+  const { comparison: current, presentedComparison: comparison, preparingResult } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const busy = Boolean(current.operation) || preparingResult;
+  const [editingKeyToken, setEditingKeyToken] = useState<string | null>(null);
   const token = comparison.applied?.resultToken;
-  useEffect(() => {
-    setEditingKey(false);
-  }, [token]);
+  const editingKey = editingKeyToken !== null && editingKeyToken === token;
   return (
     <div className="border-b bg-card px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h2 className="mr-auto text-base font-semibold">Compare CSVs</h2>
-        <Button type="button" size="sm" variant="outline" onClick={() => void tab.swap()} disabled={Boolean(comparison.operation)}>
+        <ComparisonProgress tab={tab} hidden={!comparison.applied || editingKey} />
+        <Button type="button" size="sm" variant="outline" onClick={() => void tab.swap()} disabled={busy}>
           <ArrowLeftRight />
           Swap sides
         </Button>
@@ -49,7 +48,7 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
           type="button"
           size="sm"
           variant="outline"
-          disabled={!comparison.applied || Boolean(comparison.operation)}
+          disabled={!comparison.applied || busy}
           onClick={() => void tab.refresh()}
         >
           <RefreshCw />
@@ -68,8 +67,8 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
           <code className="rounded border bg-muted px-2 py-1" aria-label={`Applied key: ${comparison.applied.key.join(' + ')}`}>
             {comparison.applied.key.join(' + ')}
           </code>
-          <Dialog.Root open={editingKey} onOpenChange={setEditingKey}>
-            <Dialog.Trigger disabled={Boolean(comparison.operation)} render={<Button variant="ghost" size="sm" className="text-primary" />}>
+          <Dialog.Root open={editingKey} onOpenChange={open => setEditingKeyToken(open ? token ?? null : null)}>
+            <Dialog.Trigger disabled={busy} render={<Button variant="ghost" size="sm" className="text-primary" />}>
               Edit key
             </Dialog.Trigger>
             <Dialog.Portal>
@@ -77,9 +76,9 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
               <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[calc(100%_-_2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border bg-background p-5 shadow-xl">
                 <Dialog.Title className="text-lg font-semibold">Edit Comparison Key</Dialog.Title>
                 <Dialog.Description className="mt-1 text-sm text-muted-foreground">Choose shared columns whose combined values identify each row in both complete Working CSVs.</Dialog.Description>
-                <ComparisonKeyEditor tab={tab} />
+                <ComparisonKeyEditor tab={tab} inDialog />
                 <div className="mt-3 text-right">
-                  <Dialog.Close render={<Button variant="outline" size="sm" />}>Cancel</Dialog.Close>
+                  <Dialog.Close render={<Button variant="outline" size="sm" />}>{busy ? 'Close' : 'Cancel'}</Dialog.Close>
                 </div>
               </Dialog.Popup>
             </Dialog.Portal>
@@ -91,11 +90,12 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
   );
 }
 
-function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
-  const { comparison, draftKey, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+function ComparisonKeyEditor({ tab, inDialog = false }: { tab: ComparisonTab; inDialog?: boolean }) {
+  const { comparison, presentedComparison, preparingResult, draftKey, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const attempt = comparison.lastAttempt;
   const diagnostics = attempt?.status === 'invalid-key' && acknowledgedAttemptId !== attempt.attemptId ? attempt.diagnostics : null;
   const operation = comparison.operation;
+  const busy = Boolean(operation) || preparingResult;
   const focusDiagnostics = useCallback((node: HTMLDivElement | null) => {
     node?.focus();
   }, [attempt?.attemptId]);
@@ -106,10 +106,10 @@ function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
         {comparison.availableKeyColumns.map((column, index) => (
           <label key={column} className="flex items-center gap-2 text-sm">
             <input
-              autoFocus={index === 0 && !comparison.applied && !operation && !attempt}
+              autoFocus={index === 0 && !presentedComparison.applied && !busy && !attempt}
               type="checkbox"
               checked={draftKey.includes(column)}
-              disabled={Boolean(operation)}
+              disabled={busy}
               onChange={(event) => tab.toggleKeyColumn(column, event.target.checked)}
             />
             {column}
@@ -130,7 +130,7 @@ function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
                 variant="ghost"
                 size="icon-xs"
                 aria-label={`Move ${column} earlier`}
-                disabled={index === 0 || Boolean(operation)}
+                disabled={index === 0 || busy}
                 onClick={() => tab.moveKeyColumn(index, -1)}
               >
                 <ArrowUp />
@@ -140,7 +140,7 @@ function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
                 variant="ghost"
                 size="icon-xs"
                 aria-label={`Move ${column} later`}
-                disabled={index === draftKey.length - 1 || Boolean(operation)}
+                disabled={index === draftKey.length - 1 || busy}
                 onClick={() => tab.moveKeyColumn(index, 1)}
               >
                 <ArrowDown />
@@ -149,48 +149,64 @@ function ComparisonKeyEditor({ tab }: { tab: ComparisonTab }) {
           ))}
         </div>
       ) : null}
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button
           type="button"
-          disabled={draftKey.length === 0 || Boolean(operation)}
+          disabled={draftKey.length === 0 || busy}
           onClick={() => void tab.applyKey()}
         >
           Apply key
         </Button>
-        {comparison.applied ? (
-          <span className="text-xs text-muted-foreground">Applied key: {comparison.applied.key.join(' + ')}</span>
+        <ComparisonProgress tab={tab} />
+        {presentedComparison.applied ? (
+          <span className="text-xs text-muted-foreground">Applied key: {presentedComparison.applied.key.join(' + ')}</span>
         ) : null}
       </div>
       {diagnostics ? (
         <KeyDiagnostics comparison={comparison} diagnostics={diagnostics} focusRef={focusDiagnostics} />
       ) : null}
+      {inDialog ? <ComparisonRowsError tab={tab} /> : null}
     </fieldset>
   );
 }
 
+/** Feedback is delayed, never the result. One indicator covers computation and the first row read. */
+function ComparisonProgress({ tab, hidden = false }: { tab: ComparisonTab; hidden?: boolean }) {
+  const { comparison, progressVisible } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  if (!progressVisible || hidden) return null;
+  return (
+    <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
+      <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
+      <span>Comparing CSVs…</span>
+      {comparison.operation ? (
+        <Button type="button" size="sm" variant="ghost" onClick={() => void tab.cancel()}>
+          Cancel
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function ComparisonRowsError({ tab }: { tab: ComparisonTab }) {
+  const { rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  return rowsError ? (
+    <StatusBanner tone="error" role="alert">
+      {rowsError}
+      <Button size="sm" variant="outline" onClick={() => tab.retryRows()}>Retry rows</Button>
+    </StatusBanner>
+  ) : null;
+}
+
 function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
-  const { comparison, actionError, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const operation = comparison.operation;
+  const { comparison, presentedComparison, actionError, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const attempt = comparison.lastAttempt;
   return (
     <div>
-      {operation ? (
-        <StatusBanner tone="progress" aria-live="polite">
-          <Loader2 className="size-4 animate-spin" />
-          <span className="font-semibold">{formatOperationLabel(operation.phase)}</span>
-          <span className="text-sm">
-            {comparison.applied
-              ? 'The current result remains readable until its replacement is ready.'
-              : 'The result will appear only after the complete operation succeeds.'}
-          </span>
-          <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => void tab.cancel()}>
-            Cancel
-          </Button>
-        </StatusBanner>
-      ) : comparison.applied?.freshness.kind === 'outdated' ? (
+      <ComparisonRowsError tab={tab} />
+      {presentedComparison.applied?.freshness.kind === 'outdated' ? (
         <StatusBanner tone="warning" aria-live="polite">
           <AlertTriangle className="size-4" />
-          <strong>Outdated Comparison.</strong> {formatChangedSides(comparison)} changed. Refresh explicitly when you
+          <strong>Outdated Comparison.</strong> {formatChangedSides(presentedComparison)} changed. Refresh explicitly when you
           are ready.
         </StatusBanner>
       ) : null}
@@ -226,34 +242,32 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonNullable<ComparisonView['applied']> }) {
-  const { view, rows, search, totalRows, rowsLoading, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { view, rows, search, totalRows, rowsLoading } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const gridState = useRef<ComparisonRowsViewState>({});
   const inspectorState = useRef<ComparisonRowsViewState>({});
-  const previousView = useRef(view);
-  const focusDetail = previousView.current === 'grid';
-  useEffect(() => { previousView.current = view; }, [view]);
+  // Reattach on a result or view change; ordinary row queries leave keyboard focus alone.
+  const focusResult = useCallback((element: HTMLDivElement | null) => {
+    const emptyHeading = element?.querySelector<HTMLElement>('h2[tabindex="-1"]');
+    const detail = view === 'inspector' ? element?.querySelector<HTMLElement>('[aria-label="Selected comparison row"]') : null;
+    (emptyHeading ?? detail)?.focus();
+  }, [view, applied.resultToken]);
   const empty = totalRows === 0;
   const unchanged = applied.summary.rows.unchanged;
   return (
-    <div className="comparison-result-body">
+    <div ref={focusResult} className="comparison-result-body">
       <ComparisonSummaryBar tab={tab} summary={applied.summary} />
-      {rowsError ? (
-        <StatusBanner tone="error" role="alert">
-          {rowsError}
-          <Button size="sm" variant="outline" onClick={() => tab.retryRows()}>Retry rows</Button>
-        </StatusBanner>
-      ) : null}
       <div className="relative min-h-0 min-w-0" aria-busy={rowsLoading}>
         <div className={`h-full min-h-0${empty ? ' invisible' : ''}`} aria-hidden={empty}>
           {view === 'grid'
             ? <ComparisonGrid tab={tab} applied={applied} viewState={gridState.current} />
-            : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} focusDetail={focusDetail} />}
+            : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} />}
         </div>
         {empty ? (
           <div className="absolute inset-0 overflow-auto bg-background">
             <EmptyState
               icon={<Rows3 className="mx-auto mb-3 size-8 text-muted-foreground" />}
               title={rows === 'differences' && !search ? 'No differences' : 'No matching rows'}
+              focusable
             >
               <p className="mt-2 text-sm text-muted-foreground">
                 {search ? 'Try another search or show all rows.' : 'Choose another result filter to see more rows.'}
@@ -282,37 +296,8 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
 }
 
 function ComparisonBody({ tab }: { tab: ComparisonTab }) {
-  const { comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const attempt = comparison.lastAttempt;
+  const { presentedComparison: comparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   if (comparison.applied) return <ComparisonResults tab={tab} applied={comparison.applied} />;
-  if (comparison.operation) {
-    return (
-      <EmptyState
-        icon={<Loader2 className="mx-auto mb-3 size-9 animate-spin text-primary" />}
-        title={formatOperationLabel(comparison.operation.phase)}
-      >
-        <p className="mt-2 text-sm text-muted-foreground">No result will publish until the complete replacement is ready.</p>
-      </EmptyState>
-    );
-  }
-  if (attempt?.status === 'failed') {
-    return (
-      <EmptyState icon={<AlertTriangle className="mx-auto mb-3 size-10 text-destructive" />} title="Comparison failed">
-        <p className="mt-2 text-sm text-muted-foreground">{attempt.failure.message}</p>
-        <p className="mt-3 text-sm font-semibold">Adjust the draft if needed, then choose Apply key to retry.</p>
-      </EmptyState>
-    );
-  }
-  if (attempt?.status === 'sources-changed') {
-    return (
-      <EmptyState
-        icon={<RefreshCw className="mx-auto mb-3 size-10 text-amber-600" />}
-        title="Sources changed during comparison"
-      >
-        <p className="mt-2 text-sm text-muted-foreground">Review the current Working CSVs, then choose Apply key to retry.</p>
-      </EmptyState>
-    );
-  }
   return (
     <EmptyState icon={<Rows3 className="mx-auto mb-3 size-10 text-muted-foreground" />} title="Choose a Comparison Key">
       <p className="mt-2 text-sm text-muted-foreground">
@@ -326,12 +311,12 @@ function ComparisonBody({ tab }: { tab: ComparisonTab }) {
   );
 }
 
-function EmptyState({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function EmptyState({ icon, title, children, focusable = false }: { icon: React.ReactNode; title: string; children: React.ReactNode; focusable?: boolean }) {
   return (
     <div className="grid place-items-center p-8 text-center">
       <div className="max-w-lg">
         {icon}
-        <h2 className="text-xl font-semibold">{title}</h2>
+        <h2 tabIndex={focusable ? -1 : undefined} className="text-xl font-semibold outline-none">{title}</h2>
         {children}
       </div>
     </div>
@@ -355,7 +340,7 @@ function StatusBanner({
   children,
   ...attributes
 }: {
-  tone: 'progress' | 'warning' | 'error' | 'neutral';
+  tone: 'warning' | 'error' | 'neutral';
   children: React.ReactNode;
 } & Omit<HTMLAttributes<HTMLDivElement>, 'children'>) {
   const colors =
@@ -363,9 +348,7 @@ function StatusBanner({
       ? 'border-amber-400/50 bg-amber-100/60 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100'
       : tone === 'error'
         ? 'border-destructive/40 bg-destructive/10 text-destructive'
-        : tone === 'progress'
-          ? 'border-blue-400/40 bg-blue-100/60 dark:bg-blue-950/40'
-          : 'border-border bg-muted/40';
+        : 'border-border bg-muted/40';
   return (
     <div {...attributes} className={`flex flex-wrap items-center gap-2 border-b px-4 py-2 ${colors}`}>
       {children}
@@ -451,6 +434,7 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
             size="sm"
             variant={state.rows === value ? 'secondary' : 'ghost'}
             aria-pressed={state.rows === value}
+            disabled={state.preparingResult}
             onClick={() => tab.setRowsMode(value)}
           >
             {label} <span className="tabular-nums">{count.toLocaleString()}</span>
@@ -459,11 +443,11 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
       </div>
       <div className="flex flex-wrap items-center gap-3 pt-3">
         <div role="group" aria-label="Comparison view" className="inline-flex rounded-md border bg-background p-0.5">
-          <Button size="sm" aria-pressed={state.view === 'grid'} variant={state.view === 'grid' ? 'secondary' : 'ghost'} onClick={() => tab.setView('grid')}>
+          <Button size="sm" disabled={state.preparingResult} aria-pressed={state.view === 'grid'} variant={state.view === 'grid' ? 'secondary' : 'ghost'} onClick={() => tab.setView('grid')}>
             <Grid2X2 />
             Grid
           </Button>
-          <Button size="sm" aria-pressed={state.view === 'inspector'} variant={state.view === 'inspector' ? 'secondary' : 'ghost'} onClick={() => tab.setView('inspector')}>
+          <Button size="sm" disabled={state.preparingResult} aria-pressed={state.view === 'inspector'} variant={state.view === 'inspector' ? 'secondary' : 'ghost'} onClick={() => tab.setView('inspector')}>
             <PanelLeft />
             Inspector
           </Button>
@@ -478,12 +462,13 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
             className="h-9 pl-8 text-sm"
             type="search"
             value={state.search}
+            disabled={state.preparingResult}
             placeholder="Find a row or value…"
             onChange={event => tab.setSearch(event.target.value)}
           />
         </label>
         <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-          <input type="checkbox" checked={state.changedOnly} onChange={event => tab.setChangedOnly(event.target.checked)} />
+          <input type="checkbox" disabled={state.preparingResult} checked={state.changedOnly} onChange={event => tab.setChangedOnly(event.target.checked)} />
           Changed fields only
         </label>
         <label>
@@ -491,6 +476,7 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
           <select
             className="rounded-md border bg-background px-2 py-2 text-xs"
             value={state.order}
+            disabled={state.preparingResult}
             onChange={event => tab.setOrder(event.target.value === 'csv-order' ? 'csv-order' : 'changed-first')}
           >
             <option value="changed-first">Changed first</option>
@@ -504,17 +490,6 @@ function ComparisonSummaryBar({ tab, summary }: { tab: ComparisonTab; summary: C
       </div>
     </div>
   );
-}
-
-function formatOperationLabel(phase: ComparisonPhase): string {
-  switch (phase) {
-    case 'validating':
-      return 'Validating key…';
-    case 'comparing':
-      return 'Comparing complete CSVs…';
-    case 'summarizing':
-      return 'Publishing result…';
-  }
 }
 
 function formatChangedSides(comparison: ComparisonView) {
