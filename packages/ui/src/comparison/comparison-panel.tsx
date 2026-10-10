@@ -21,7 +21,7 @@ import type { ComparisonRowsViewState } from './comparison-rows';
  */
 export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
   return (
-    <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_1fr]" aria-label="CSV comparison">
+    <section className="relative grid min-h-0 min-w-0 grid-rows-[auto_auto_1fr]" aria-label="CSV comparison">
       <ComparisonHeader tab={tab} />
       <ComparisonStatus tab={tab} />
       <ComparisonBody tab={tab} />
@@ -30,16 +30,16 @@ export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
-  const { comparison: current, presentedComparison: comparison, preparingResult } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { comparison: current, presentedComparison: comparison, preparingResult, progressVisible } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const busy = Boolean(current.operation) || preparingResult;
   const [editingKeyToken, setEditingKeyToken] = useState<string | null>(null);
   const token = comparison.applied?.resultToken;
   const editingKey = editingKeyToken !== null && editingKeyToken === token;
+  const progress = Boolean(comparison.applied) && progressVisible && !editingKey;
   return (
     <div className="border-b bg-card px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h2 className="mr-auto text-base font-semibold">Compare CSVs</h2>
-        <ComparisonProgress tab={tab} hidden={!comparison.applied || editingKey} />
         <Button type="button" size="sm" variant="outline" onClick={() => void tab.swap()} disabled={busy}>
           <ArrowLeftRight />
           Swap sides
@@ -48,11 +48,12 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
           type="button"
           size="sm"
           variant="outline"
+          className="w-42"
           disabled={!comparison.applied || busy}
           onClick={() => void tab.refresh()}
         >
-          <RefreshCw />
-          Refresh comparison
+          <RefreshCw className={progress ? 'motion-safe:animate-spin' : undefined} />
+          {progress ? current.operation?.intent === 'apply-key' ? 'Updating…' : 'Refreshing…' : 'Refresh comparison'}
         </Button>
       </div>
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
@@ -83,7 +84,9 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
               </Dialog.Popup>
             </Dialog.Portal>
           </Dialog.Root>
-          <span className="ml-auto text-muted-foreground">✓ Unique in both files</span>
+          <div className="ml-auto flex h-7 w-full items-center justify-end gap-2 text-muted-foreground sm:w-64">
+            {progress ? <ComparisonProgress tab={tab} /> : <span>✓ Unique in both files</span>}
+          </div>
         </div>
       ) : <ComparisonKeyEditor tab={tab} />}
     </div>
@@ -171,15 +174,15 @@ function ComparisonKeyEditor({ tab, inDialog = false }: { tab: ComparisonTab; in
 }
 
 /** Feedback is delayed, never the result. One indicator covers computation and the first row read. */
-function ComparisonProgress({ tab, hidden = false }: { tab: ComparisonTab; hidden?: boolean }) {
+function ComparisonProgress({ tab }: { tab: ComparisonTab }) {
   const { comparison, progressVisible } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  if (!progressVisible || hidden) return null;
+  if (!progressVisible) return null;
   return (
     <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
       <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
       <span>Comparing CSVs…</span>
       {comparison.operation ? (
-        <Button type="button" size="sm" variant="ghost" onClick={() => void tab.cancel()}>
+        <Button type="button" size="xs" variant="ghost" onClick={() => void tab.cancel()}>
           Cancel
         </Button>
       ) : null}
@@ -198,8 +201,7 @@ function ComparisonRowsError({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
-  const { comparison, presentedComparison, actionError, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const attempt = comparison.lastAttempt;
+  const { presentedComparison } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   return (
     <div>
       <ComparisonRowsError tab={tab} />
@@ -210,7 +212,20 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
           are ready.
         </StatusBanner>
       ) : null}
-      {attempt?.status === 'cancelled' && acknowledgedAttemptId !== attempt.attemptId ? (
+      <ComparisonAttemptFeedback tab={tab} />
+    </div>
+  );
+}
+
+function ComparisonAttemptFeedback({ tab }: { tab: ComparisonTab }) {
+  const { comparison, presentedComparison, actionError, acknowledgedAttemptId } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const attempt = comparison.lastAttempt?.attemptId === acknowledgedAttemptId ? null : comparison.lastAttempt;
+  const cancelled = attempt?.status === 'cancelled';
+  const feedback = actionError || attempt?.status === 'failed' || attempt?.status === 'sources-changed' || cancelled;
+  return (
+    <div className={presentedComparison.applied && feedback
+      ? 'absolute right-4 bottom-12 left-4 z-10 overflow-hidden rounded-md border bg-card shadow-lg sm:left-auto sm:max-w-lg' : undefined}>
+      {cancelled ? (
         <StatusBanner tone="neutral" aria-live="polite">
           {comparison.applied
             ? 'Comparison cancelled. The previous applied result was preserved.'
@@ -225,11 +240,17 @@ function ComparisonStatus({ tab }: { tab: ComparisonTab }) {
           {comparison.applied
             ? 'Sources changed while comparing. The previous result was preserved.'
             : 'Sources changed while comparing. No result was applied.'}
+          <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={() => tab.dismissAttempt()}>
+            Dismiss
+          </Button>
         </StatusBanner>
       ) : null}
       {attempt?.status === 'failed' ? (
         <StatusBanner tone="error" role="alert">
           <strong>Comparison failed.</strong> {attempt.failure.message}
+          <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={() => tab.dismissAttempt()}>
+            Dismiss
+          </Button>
         </StatusBanner>
       ) : null}
       {actionError ? (

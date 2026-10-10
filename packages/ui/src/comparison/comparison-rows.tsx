@@ -31,7 +31,7 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
   className?: string;
   resizable?: boolean;
 }) {
-  const { queryVersion, selection } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { comparison, queryVersion, selection } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const apiRef = useRef<GridApi<GridComparisonRow> | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const selectedKey = selection ? JSON.stringify(selection.row.keyValues) : null;
@@ -39,6 +39,7 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
   selectedKeyRef.current = selectedKey;
   const savedScroll = useRef(viewState.scroll?.queryVersion === queryVersion ? viewState.scroll : undefined);
   const previousQueryVersion = useRef(queryVersion);
+  const previousResultToken = useRef(comparison.applied?.resultToken);
   const datasource = useMemo<IDatasource>(() => ({
     getRows: params => {
       const version = tab.snapshot().queryVersion;
@@ -59,12 +60,14 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
   useEffect(() => {
     if (previousQueryVersion.current === queryVersion) return;
     previousQueryVersion.current = queryVersion;
+    const replacing = previousResultToken.current !== comparison.applied?.resultToken;
+    previousResultToken.current = comparison.applied?.resultToken;
     const api = apiRef.current;
     if (!api || api.isDestroyed()) return;
-    api.ensureIndexVisible(0, 'top');
+    if (!replacing) api.ensureIndexVisible(0, 'top');
     // Refresh retains displayed rows until their replacements arrive; a new datasource purges them.
     api.refreshInfiniteCache();
-  }, [queryVersion]);
+  }, [queryVersion, comparison.applied?.resultToken]);
 
   useEffect(() => {
     const api = apiRef.current;

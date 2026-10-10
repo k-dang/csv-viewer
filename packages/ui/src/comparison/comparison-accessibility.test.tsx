@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComparisonView } from '@csv-viewer/workspace/csv-viewer';
@@ -35,6 +35,36 @@ function panelMarkup(view: ComparisonView): string {
 }
 
 describe('Comparison accessibility semantics', () => {
+  it('delays refresh feedback, cancels its timer for a quick operation, and keeps a live Cancel action', () => {
+    vi.useFakeTimers();
+    try {
+      const applied: ComparisonView['applied'] = { resultToken: 'result-1', key: ['id'], freshness: { kind: 'current' }, summary: { rows: { total: 0, changed: 0, unchanged: 0, baselineOnly: 0, candidateOnly: 0 }, changedColumns: [] } };
+      const view = comparison({ applied });
+      const cancel = vi.fn(async () => ({ status: 'requested' as const }));
+      const tab = new ComparisonTab(createTestCsvViewer({ handlers: { 'comparison.cancel': cancel } }), view);
+      render(<ComparisonPanel tab={tab} />);
+      const operation: NonNullable<ComparisonView['operation']> = { operationId: 'operation-1', intent: 'refresh', phase: 'comparing' };
+      act(() => tab.receive({ ...view, version: 2, operation }));
+      act(() => vi.advanceTimersByTime(120));
+      expect(screen.queryByRole('button', { name: 'Refreshing…' })).toBeNull();
+      act(() => tab.receive({ ...view, version: 3 }));
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+      act(() => tab.receive({ ...view, version: 4, operation }));
+      act(() => vi.advanceTimersByTime(249));
+      expect(screen.queryByRole('button', { name: 'Refreshing…' })).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole('button', { name: 'Refreshing…' }).hasAttribute('disabled')).toBe(true);
+      const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+      expect(cancelButton.closest('[aria-live]')?.getAttribute('aria-live')).toBe('polite');
+      act(() => cancelButton.click());
+      expect(cancel).toHaveBeenCalledWith({ operation: 'comparison.cancel', comparisonId: 'comparison-1', operationId: 'operation-1' });
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it('names and describes the modal Candidate picker and exposes incompatible choices', () => {
     const baseline = workingCsv('baseline');
     const candidate = workingCsv('candidate');

@@ -191,7 +191,7 @@ export class ComparisonTab {
     }
   }
 
-  /** Hides the cancelled-attempt banner for the current attempt. */
+  /** Hides feedback for the current attempt. */
   dismissAttempt(): void {
     const attempt = this.state.comparison.lastAttempt;
     if (attempt) this.set({ acknowledgedAttemptId: attempt.attemptId });
@@ -326,13 +326,17 @@ export class ComparisonTab {
       if (outcome.status === 'rejected') throw new Error(outcome.fault.message);
       if (outcome.status !== 'ready') return;
       const { window } = outcome;
+      const previous = this.state.selection;
+      const selectedIndex = previous && JSON.stringify(applied.key) === JSON.stringify(this.state.presentedComparison.applied?.key)
+        ? window.rows.findIndex(row => JSON.stringify(row.keyValues) === JSON.stringify(previous.row.keyValues)) : -1;
       const version = queryVersion + 1;
       this.firstWindow = { window, queryVersion: version };
       this.set({
         presentedComparison: this.state.comparison,
         queryVersion: version,
         totalRows: window.totalRowCount,
-        selection: window.rows[0] ? { row: window.rows[0], index: 0 } : null,
+        selection: selectedIndex >= 0 ? { row: window.rows[selectedIndex], index: window.offset + selectedIndex }
+          : window.rows[0] ? { row: window.rows[0], index: window.offset } : null,
         rowsLoading: false,
         rowsError: null,
       });

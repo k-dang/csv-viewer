@@ -30,6 +30,28 @@ const window = (resultToken: string): ComparisonWindowOutcome => ({
 });
 
 describe('ComparisonTab', () => {
+  it('keeps the selected key and its displayed values until replacement rows arrive', async () => {
+    const oldRow: ComparisonRow = { keyValues: ['2'], classification: 'changed', baseline: { rowId: '2', values: ['Old'] }, candidate: { rowId: '2', values: ['Before'] }, changed: [true] };
+    const firstRow = { ...oldRow, keyValues: ['1'] };
+    const oldComparison = comparisonFixture({ applied: applied('result-1') });
+    const pending = Promise.withResolvers<ComparisonWindowOutcome>();
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': () => pending.promise,
+    } }), oldComparison);
+    const firstPage = { comparisonId: 'comparison-1', resultToken: 'result-1', offset: 0, totalRowCount: 2, keyColumns: ['id'], rows: [firstRow, oldRow] };
+    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    tab.selectRow(oldRow, 1);
+    const nextComparison = comparisonFixture({ version: 2, applied: applied('result-2') });
+    tab.receive(nextComparison);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 2, rowsLoading: true, selection: { row: oldRow, index: 1 } });
+    expect(tab.snapshot().presentedComparison).toBe(oldComparison);
+    const newRow = { ...oldRow, candidate: { rowId: '2', values: ['After'] } };
+    pending.resolve({ status: 'ready', window: { ...firstPage, resultToken: 'result-2', rows: [firstRow, newRow] } });
+    await pending.promise;
+    expect(tab.snapshot()).toMatchObject({ totalRows: 2, rowsLoading: false, selection: { row: newRow, index: 1 } });
+    expect(tab.snapshot().presentedComparison).toBe(nextComparison);
+  });
+
   it('delays progress across phases and the first row read, and clears it on completion, cancellation, and disposal', async () => {
     vi.useFakeTimers();
     const pending = Promise.withResolvers<ComparisonWindowOutcome>();
