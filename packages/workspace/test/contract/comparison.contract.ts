@@ -686,14 +686,14 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
         value.openSource('candidate.csv', 'id,value\n1,new\n'),
       ]);
       const comparison = await openComparison(value, baseline, candidate);
-      const summarizing = new Promise<void>((resolve) => {
+      const comparing = new Promise<void>((resolve) => {
         const unsubscribe = value.viewer.onEvent((viewerEvent) => {
           if (viewerEvent.type !== 'comparison') return;
           const event = viewerEvent.event;
           if (
             event.kind === 'changed' &&
             event.comparison.comparisonId === comparison.comparisonId &&
-            event.comparison.operation?.phase === 'summarizing'
+            event.comparison.operation?.phase === 'comparing'
           ) {
             unsubscribe();
             resolve();
@@ -709,7 +709,7 @@ export function defineCsvWorkspaceComparisonContract(factory: WorkspaceContractF
       });
       if (started.status !== 'accepted')
         throw new Error(`Comparison was ${started.status}.`);
-      await summarizing;
+      await comparing;
 
       await expect(
         value.viewer.call({
