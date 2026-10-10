@@ -8,6 +8,51 @@ async function compare(page: Page): Promise<void> {
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
 
+test('resets filter scroll after a refresh finishes before the grid API is ready', { tag: '@dev' }, async ({ page }) => {
+  // Delay API registration while the real grid loads and the comparison refreshes.
+  await page.route(url => url.pathname.endsWith('/comparison-rows.tsx'), async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const ready = 'apiRef.current = event.api;';
+    const query = 'previousQueryVersion.current = queryVersion;';
+    expect(source).toContain(ready);
+    expect(source).toContain(query);
+    await route.fulfill({ response, body: source.replace(ready, `
+      if (document.body.dataset.deferComparisonGrid === 'true') {
+        document.body.dataset.initialGridToken = comparison.applied?.resultToken;
+        window.addEventListener('comparison-grid-ready', () => { apiRef.current = event.api; }, { once: true });
+      } else { ${ready} }
+    `).replace(query, `${query}
+      document.body.dataset.observedGridToken = comparison.applied?.resultToken;
+    `) });
+  });
+  await page.goto('/');
+  const keys = Array.from({ length: 250 }, (_, index) => String(index + 1).padStart(4, '0'));
+  await openCsv(page, 'baseline.csv', `id,value\n${keys.map(key => `${key},Old`).join('\n')}\n`);
+  await openCsv(page, 'candidate.csv', `id,value\n${keys.map(key => `${key},New`).join('\n')}\n`);
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const comparison = page.getByRole('region', { name: 'CSV comparison', exact: true });
+  await expect(comparison.getByRole('gridcell', { name: /id 0001/ })).toBeVisible();
+  await page.evaluate(() => { document.body.dataset.deferComparisonGrid = 'true'; });
+  await comparison.getByRole('button', { name: 'Grid', exact: true }).click();
+  const grid = comparison.getByRole('grid', { name: 'Aligned comparison results' });
+  await expect(grid.getByRole('gridcell', { name: /id 0001/ })).toBeVisible();
+  const viewport = grid.locator('.ag-body-viewport');
+  await viewport.hover();
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeGreaterThan(500);
+  const initialToken = await page.locator('body').getAttribute('data-initial-grid-token');
+  if (!initialToken) throw new Error('The comparison grid did not register its initial result.');
+  await comparison.getByRole('button', { name: 'Refresh comparison', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-observed-grid-token', /.+/);
+  await expect(page.locator('body')).not.toHaveAttribute('data-observed-grid-token', initialToken);
+  await page.evaluate(() => window.dispatchEvent(new Event('comparison-grid-ready')));
+  await comparison.getByRole('button', { name: 'All rows 250', exact: true }).click();
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(0);
+});
+
 test('refreshes in place without clearing rows or moving the result body', { tag: '@dev' }, async ({ page }, testInfo) => {
   await beforeWorkspaceStarts(page, `
     const call = started.viewer.call.bind(started.viewer);

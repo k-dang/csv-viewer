@@ -60,10 +60,10 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
   useEffect(() => {
     if (previousQueryVersion.current === queryVersion) return;
     previousQueryVersion.current = queryVersion;
-    const api = apiRef.current;
-    if (!api || api.isDestroyed()) return;
     const replacing = previousResultToken.current !== comparison.applied?.resultToken;
     previousResultToken.current = comparison.applied?.resultToken;
+    const api = apiRef.current;
+    if (!api || api.isDestroyed()) return;
     if (!replacing) api.ensureIndexVisible(0, 'top');
     // Refresh retains displayed rows until their replacements arrive; a new datasource purges them.
     api.refreshInfiniteCache();

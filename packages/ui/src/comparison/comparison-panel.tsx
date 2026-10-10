@@ -31,7 +31,7 @@ export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
 }
 
 function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
-  const { comparison, displayedComparison, rowsLoading, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  const { comparison, displayedComparison, rowsLoading, rowsError, actionError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const replacing = rowsLoading && !rowsError && comparison.applied?.resultToken !== displayedComparison.applied?.resultToken;
   const busy = Boolean(comparison.operation) || replacing;
   const progress = useDelayedProgress(Boolean(displayedComparison.applied) && busy);
@@ -45,11 +45,12 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
     setEditingKey(false);
   }, [token]);
   useEffect(() => {
+    if (actionError) restoreRefreshFocus.current = false;
     if (!busy && restoreRefreshFocus.current) {
       restoreRefreshFocus.current = false;
       refreshRef.current?.focus();
     }
-  }, [busy]);
+  }, [busy, actionError]);
   return (
     <div className="border-b bg-card px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
