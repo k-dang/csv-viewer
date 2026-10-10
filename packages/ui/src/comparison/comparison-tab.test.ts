@@ -30,6 +30,29 @@ const window = (resultToken: string): ComparisonWindowOutcome => ({
 });
 
 describe('ComparisonTab', () => {
+  it('keeps the displayed result until replacement rows arrive, then publishes values and summary together', () => {
+    const oldRow: ComparisonRow = { keyValues: ['1'], classification: 'changed', baseline: { rowId: '1', values: ['Old'] }, candidate: { rowId: '1', values: ['Before'] }, changed: [true] };
+    const oldComparison = comparisonFixture({ applied: applied('result-1') });
+    const tab = new ComparisonTab(createTestCsvViewer(), oldComparison);
+    const firstPage = { comparisonId: 'comparison-1', resultToken: 'result-1', offset: 0, totalRowCount: 1, keyColumns: ['id'], rows: [oldRow] };
+    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    const nextComparison = comparisonFixture({ version: 2, applied: { ...applied('result-2'), summary: { rows: { total: 2, changed: 2, baselineOnly: 0, candidateOnly: 0, unchanged: 0 }, changedColumns: [] } } });
+    tab.receive(nextComparison);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 1, rowsLoading: true, selection: { row: oldRow } });
+    expect(tab.snapshot().displayedComparison).toBe(oldComparison);
+    tab.rowsFailed(tab.snapshot().queryVersion);
+    expect(tab.snapshot().selection?.row).toBe(oldRow);
+    tab.receiveRows(firstPage, tab.snapshot().queryVersion - 1);
+    expect(tab.snapshot().displayedComparison).toBe(oldComparison);
+    const newRow = { ...oldRow, candidate: { rowId: '1', values: ['After'] } };
+    tab.receiveRows({ ...firstPage, resultToken: 'result-2', totalRowCount: 2, rows: [newRow] }, tab.snapshot().queryVersion);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 2, rowsLoading: false, selection: { row: newRow } });
+    expect(tab.snapshot().displayedComparison).toBe(nextComparison);
+    tab.receive(comparisonFixture({ version: 3, applied: applied('result-3') }));
+    tab.receiveRows({ ...firstPage, resultToken: 'result-3', rows: [], totalRowCount: 0 }, tab.snapshot().queryVersion);
+    expect(tab.snapshot()).toMatchObject({ totalRows: 0, rowsLoading: false, selection: null });
+  });
+
   it('drafts a Comparison Key in order and applies it', async () => {
     const begin = vi.fn(async () => ({ status: 'accepted' as const, operationId: 'operation-1' }));
     const tab = new ComparisonTab(createTestCsvViewer({ handlers: { 'comparison.begin': begin } }), comparisonFixture({
@@ -207,7 +230,7 @@ describe('ComparisonTab', () => {
     expect(tab.snapshot()).toMatchObject({ totalRows: 0, rowsLoading: true });
     tab.receiveRows(firstPage, tab.snapshot().queryVersion);
     tab.receive(comparisonFixture({ version: 2, applied: applied('result-2') }));
-    expect(tab.snapshot().selection).toBeNull();
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['1']);
   });
 
   it('keeps the original row-window rejection for the caller', async () => {

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Comparison refresh options</title>
+<style>
+  :root{color-scheme:light dark;font-family:var(--font-sans,Arial,sans-serif);color:var(--foreground,var(--outer-text));--outer-text:#252838;--outer-muted:#5b6072;--outer-border:#cdd0dc;--outer-card:#f3f4f8;--p-bg:#0d1016;--p-card:#15171f;--p-muted:#1e212b;--p-border:#30333e;--p-text:#f0f1f7;--p-soft:#a8acbc;--p-primary:#959cff;--p-red:#ff758b;--p-green:#61d899;--p-radius:8px}
+  *{box-sizing:border-box}body{margin:0;background:transparent}button,select{font:inherit}button{cursor:pointer}button:disabled{cursor:default}button,select,input{accent-color:var(--p-primary)}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--p-primary);outline-offset:3px}button svg{pointer-events:none}svg{width:15px;height:15px;flex-shrink:0;vertical-align:middle;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .options{border:0;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.options legend{font-size:13px;font-weight:600;margin-bottom:10px}.option{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--border,var(--outer-border));padding:12px;border-radius:var(--radius,8px);font-size:12px;line-height:1.5;cursor:pointer}.option:has(input:checked){border-color:var(--p-primary);background:color-mix(in srgb,var(--p-primary) 8%,transparent)}.option input{margin:3px 0 0}.option b{display:block}.option small{color:var(--muted-foreground,var(--outer-muted));font-size:11px}.recommend{color:var(--p-primary)!important}.description{font-size:13px;line-height:1.5;margin:12px 0 14px;color:var(--muted-foreground,var(--outer-muted));min-height:40px}.controls{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:0 0 14px;font-size:12px}.controls label{display:flex;align-items:center;gap:7px}.controls select{border:1px solid var(--border,var(--outer-border));border-radius:6px;background:var(--card,var(--outer-card));color:var(--foreground,var(--outer-text));padding:6px 8px;max-width:100%}.scope{font-size:11px;color:var(--muted-foreground,var(--outer-muted));margin-left:auto}
+  .screen{color:var(--p-text);background:var(--p-card);border:1px solid var(--p-border);border-radius:var(--radius,10px);padding:16px;position:relative;isolation:isolate;overflow:hidden}.brand{font-size:11px;color:var(--p-soft);display:flex;align-items:center;gap:6px;margin-bottom:12px}.brand svg{color:var(--p-primary)}.header{position:relative;padding-bottom:14px;border-bottom:1px solid var(--p-border)}.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.toolbar h2{font-size:15px;line-height:24px;margin:0 auto 0 0;font-weight:600}.action{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;border:1px solid var(--p-border);background:var(--p-muted);color:var(--p-text);border-radius:6px;padding:0 10px;font-size:12px;font-weight:600;white-space:nowrap}.refresh{width:168px}.action:disabled{color:var(--p-soft);background:var(--p-card)}.sources{display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);gap:10px;align-items:center;margin-top:17px}.source{min-width:0;display:flex;gap:8px;align-items:center}.source svg{color:var(--p-soft)}.source-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:5px}.source small{font-size:11px}.source>div{min-width:0}.baseline{color:var(--p-red)}.candidate{color:var(--p-green)}.arrow{color:var(--p-soft)}.keyline{display:flex;align-items:center;gap:8px;margin-top:15px;font-size:11px;min-height:28px}.keyline>svg{color:var(--p-soft)}.keyline code{border:1px solid var(--p-border);border-radius:4px;background:var(--p-muted);padding:4px 7px;font-size:11px}.keyline .muted{white-space:nowrap}.key-status{margin-left:auto;display:flex;align-items:center;justify-content:flex-end;gap:7px;min-height:28px;font-size:11px}.cancel{background:none;border:0;color:var(--p-primary);font-size:11px;padding:6px 2px;font-weight:600;white-space:nowrap}.key-status span{white-space:nowrap}.muted{color:var(--p-soft)}.progressline{position:absolute;bottom:-1px;height:2px;left:0;right:0;overflow:hidden;visibility:hidden;background:#252945}.progressline:after{content:"";position:absolute;height:100%;width:35%;background:var(--p-primary);animation:sweep 1.2s linear infinite}.screen[data-option="b"].feedback .progressline{visibility:visible}
+  .filters{display:flex;align-items:center;gap:3px;padding:10px 0;border-bottom:1px solid var(--p-border);overflow-x:auto;white-space:nowrap;font-size:11px;scrollbar-width:thin}.filter{padding:7px 9px;border-radius:5px;font-weight:600}.filter.active{background:var(--p-muted)}.filter span{font-variant-numeric:tabular-nums}.viewline{display:flex;align-items:center;gap:8px;margin:12px 0}.viewpill{display:flex;border:1px solid var(--p-border);border-radius:5px;padding:2px;font-size:11px;gap:2px}.viewpill span{padding:6px 9px;display:flex;gap:5px;align-items:center}.viewpill .active{background:var(--p-muted);border-radius:3px}.counter{margin-left:auto;color:var(--p-soft);font-size:10px}.query{display:flex;gap:10px;align-items:center;margin:11px 0}.search{display:flex;gap:7px;align-items:center;padding:9px;color:var(--p-soft);background:var(--p-muted);border:1px solid var(--p-border);border-radius:5px;font-size:11px;flex:1;max-width:245px}.changed-toggle{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--p-soft);margin-left:auto;white-space:nowrap}.changed-toggle svg{width:13px;height:13px;color:var(--p-primary)}.legend{display:flex;gap:14px;font-size:10px;margin:11px 0}.inspector{display:grid;grid-template-columns:140px minmax(0,1fr);border:1px solid var(--p-border);border-radius:5px;overflow:hidden;min-height:235px;background:var(--p-bg)}.rowlist{border-right:1px solid var(--p-border)}.rowcount{padding:10px;color:var(--p-soft);border-bottom:1px solid var(--p-border);font-size:10px}.selected{padding:12px 10px;border-left:2px solid var(--p-primary);background:#202332;font-size:11px}.selected>div{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}code{font-family:var(--font-mono,Consolas,monospace)}.badge{font-size:9px;border-radius:4px;padding:3px 5px;background:#292c46;color:#afb4ff;display:inline-block}.detail{min-width:0}.detailhead{padding:13px 12px;border-bottom:1px solid var(--p-border);font-size:12px;min-height:67px}.detailhead p{margin:7px 0 0;display:flex;align-items:center;gap:7px;color:var(--p-soft);font-size:10px}.table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--p-border);overflow-wrap:anywhere;vertical-align:top}.table thead{background:#1a1d25;color:var(--p-soft);font-size:10px}.table thead th{font-weight:500}.table th:first-child{width:27%}.table tbody th{font-size:10px;font-weight:500}.value{border-left:2px solid;border-radius:4px;padding:6px;display:flex;gap:8px;font-variant-numeric:tabular-nums;min-height:27px}.value.baseline{background:#311e27;border-color:var(--p-red);color:var(--p-text)}.value.candidate{background:#182d27;border-color:var(--p-green);color:var(--p-text)}.value .sign{color:var(--p-soft)}.footer{display:flex;justify-content:space-between;gap:12px;font-size:10px;color:var(--p-soft);padding-top:14px;min-height:27px}.empty{grid-column:1/-1;display:grid;place-content:center;text-align:center;padding:24px;font-size:12px}.empty h3{font-size:15px;margin:0 0 8px}.empty p{margin:0;color:var(--p-soft);line-height:1.5}.empty button{margin:12px auto 0}.notice{position:absolute;right:16px;bottom:48px;max-width:calc(100% - 32px);padding:12px 14px;background:#222636;border:1px solid #434964;border-radius:8px;box-shadow:0 8px 24px #0005;display:flex;gap:10px;align-items:center;font-size:12px;z-index:3}.notice[hidden]{display:none}.notice-copy{min-width:0}.notice strong{display:block;font-size:12px;margin-bottom:3px}.notice small{font-size:10px;color:var(--p-soft);line-height:1.5}.notice.error{border-color:#875162}.notice.error>svg{color:var(--p-red)}.dismiss{background:none;border:0;color:var(--p-soft);padding:5px}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.spin{animation:spin 1s linear infinite}.note{font-size:12px;color:var(--muted-foreground,var(--outer-muted));line-height:1.6;margin:12px 0 0}.note b{color:var(--foreground,var(--outer-text))}
+  body{font-family:var(--font-sans,Arial,Helvetica,sans-serif);color:var(--foreground,var(--outer-text))}
+  :root{--outer-primary:#514daf}
+  .recommend{color:var(--primary,var(--outer-primary))!important}
+  .option input{accent-color:var(--primary,var(--outer-primary))}
+  .option:has(input:checked){border-color:var(--primary,var(--outer-primary))}
+  @media(prefers-color-scheme:dark){:root{--outer-text:#ececf3;--outer-muted:#a8acbc;--outer-border:#30333e;--outer-card:#15171f}}
+  @media(prefers-color-scheme:dark){:root{--outer-primary:#959cff}}
+  .empty[hidden]{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}@keyframes sweep{from{left:-35%}to{left:100%}}
+  @media(max-width:560px){.options{grid-template-columns:1fr}.option{padding:9px 11px;align-items:center}.option b{display:inline}.option small{margin-left:5px}.description{min-height:0}.scope{margin-left:0;width:100%}.toolbar h2{width:100%;margin-bottom:4px}.toolbar .action{flex:1}.sources{gap:5px}.source{gap:5px}.source-name{font-size:10px}.keyline{flex-wrap:wrap;gap:6px}.key-status{width:100%;justify-content:flex-start;margin-left:0}.inspector{grid-template-columns:1fr;min-height:350px}.rowlist{border-right:0;border-bottom:1px solid var(--p-border)}.rowcount{padding:7px 10px}.selected{padding:8px 10px;display:flex;align-items:center;gap:12px}.selected>div{margin:0;min-width:55px}.selected>div>span{display:none}.detailhead{min-height:60px;padding:11px 10px}.table th,.table td{padding:9px 6px}.table tbody th{font-size:9px}.value{gap:4px;padding:5px 4px}.changed-toggle{font-size:9px}.search{max-width:55%;font-size:10px}.filters{font-size:10px}.filter{padding:6px 8px}.footer{font-size:9px}.screen{padding:16px}.notice{bottom:44px}.description{font-size:12px}}
+  @media(prefers-reduced-motion:reduce){.spin,.progressline:after{animation:none}.progressline:after{left:0;width:100%;opacity:.65}}
+</style>
+</head>
+<body>
+<fieldset class="options">
+  <legend>Try three ways to refresh the comparison</legend>
+  <label class="option"><input type="radio" name="option" value="a" checked><span><b>A · In the button</b><small class="recommend">Recommended</small></span></label>
+  <label class="option"><input type="radio" name="option" value="b"><span><b>B · Thin progress line</b><small>More visible, no extra panel</small></span></label>
+  <label class="option"><input type="radio" name="option" value="c"><span><b>C · Floating notice</b><small>Detailed progress for long runs</small></span></label>
+</fieldset>
+<p class="description" id="description">The Refresh button shows progress. Cancel lives in the existing key row. No new banner, and the results stay in place.</p>
+<div class="controls">
+  <label>Duration <select id="duration"><option value="3000">Slow · 3 seconds</option><option value="120">Fast · 120 ms</option></select></label>
+  <label>Result <select id="outcome"><option value="same">Same data</option><option value="changed">Changed value</option><option value="empty">No differences</option><option value="error">Refresh fails</option></select></label>
+  <span class="scope">Interactive prototype · simulated data</span>
+</div>
+<section class="screen" id="screen" data-option="a" aria-label="CSV comparison prototype">
+  <div class="brand"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M3 9h18"/></svg>CSV Viewer</div>
+  <header class="header">
+    <div class="toolbar"><h2>Compare CSVs</h2><button class="action" id="swap"><svg viewBox="0 0 24 24"><path d="M3 7h16m-4-4 4 4-4 4M21 17H5m4-4-4 4 4 4"/></svg>Swap sides</button><button class="action refresh" id="refresh"><svg id="refresh-icon" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 2M4 16l2 2a7 7 0 0 0 12-1"/></svg><span id="refresh-label">Refresh comparison</span></button></div>
+    <div class="sources"><div class="source"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h8M12 11v8"/></svg><div><div class="source-name" id="baseline-name">phase-2-sample.csv</div><small class="baseline">Baseline</small></div></div><svg class="arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></svg><div class="source"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h8M12 11v8"/></svg><div><div class="source-name" id="candidate-name">phase-2-sample-edited.csv</div><small class="candidate">Candidate</small></div></div></div>
+    <div class="keyline"><svg viewBox="0 0 24 24"><circle cx="16" cy="8" r="5"/><path d="m12 12-9 9v-5h4v-4h4"/></svg><span class="muted">Match rows by</span><code>id</code><span class="key-status" id="key-status"><span class="muted">✓ Unique in both files</span></span></div>
+    <div class="progressline" aria-hidden="true"></div>
+  </header>
+  <div class="filters" aria-label="Applied comparison summary"><span class="filter active">Differences <span id="differences">1</span></span><span class="filter">All rows 5</span><span class="filter">Changed <span id="changed-count">1</span></span><span class="filter">Baseline-only 0</span><span class="filter">Candidate-only 0</span><span class="filter">Unchanged <span id="unchanged">4</span></span></div>
+  <div class="viewline"><div class="viewpill" aria-label="Inspector view"><span><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg>Grid</span><span class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>Inspector</span></div><span class="counter" id="counter">Row 1 of 1</span></div>
+  <div class="query"><span class="search"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg>Find a row or value…</span><span class="changed-toggle"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 12 3 3 7-7"/></svg>Changed fields only</span></div>
+  <div class="legend"><span class="baseline">− Baseline value</span><span class="candidate">+ Candidate value</span></div>
+  <div class="inspector" id="inspector">
+    <aside class="rowlist" id="rowlist" aria-label="Selected row"><div class="rowcount">1 row · select to inspect</div><div class="selected"><div><code>id 4</code><span class="muted">1</span></div><span class="badge">Changed</span></div></aside>
+    <section class="detail" id="detail" aria-label="Selected comparison row"><header class="detailhead"><code><b>id 4</b></code><p><span class="badge">Changed</span>Row 1 of 1</p></header><table class="table"><thead><tr><th scope="col">Field</th><th scope="col">Baseline</th><th scope="col">Candidate</th></tr></thead><tbody><tr><th scope="row"><code>total_spend</code></th><td><span class="value baseline"><span class="sign">−</span><span id="baseline-value">1.5</span></span></td><td><span class="value candidate"><span class="sign">+</span><span id="candidate-value">1.0</span></span></td></tr></tbody></table></section>
+    <div class="empty" id="empty" hidden><h3>No differences</h3><p>All 5 rows match.<br>The refreshed comparison is ready.</p><button class="action" id="reset">Restore sample difference</button></div>
+  </div>
+  <footer class="footer"><span id="foot-count">1 of 5 rows</span><span id="foot-hidden">4 unchanged rows hidden</span></footer>
+  <div class="notice" id="notice" hidden></div>
+  <span class="sr-only" id="announcement" role="status" aria-live="polite"></span>
+</section>
+<p class="note"><b>Shared behavior:</b> keep the current rows, counts, and selected row visible until the replacement is ready. Replace them together. Progress appears after 250 ms, so quick refreshes do not flash a status message.</p>
+<script>
+  const $=id=>document.getElementById(id);
+  const icon='<svg viewBox="0 0 24 24" class="spin" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 2M4 16l2 2a7 7 0 0 0 12-1"/></svg>';
+  const descriptions={a:'The Refresh button shows progress. Cancel lives in the existing key row. No new banner, and the results stay in place.',b:'A thin line runs along the header edge. Progress and Cancel use the existing key row. More noticeable, with no layout movement.',c:'A compact notice floats above the footer with progress and Cancel. It suits long operations, but covers a little of the results area.'};
+  let option='a',busy=false,feedback=false,timers=[],base='1.5',candidate='1.0',swapped=false;
+  function clearTimers(){timers.forEach(clearTimeout);timers=[]}
+  function announce(text){$('announcement').textContent=text}
+  function cancelButton(){return '<button class="cancel" data-cancel>Cancel</button>'}
+  function dismissButton(){return '<button class="dismiss" data-dismiss aria-label="Dismiss notice">✕</button>'}
+  function notice(message,detail,error=false){$('notice').classList.toggle('error',error);$('notice').innerHTML='<div class="notice-copy"><strong>'+message+'</strong><small>'+detail+'</small></div>'+dismissButton();$('notice').hidden=false}
+  function paintProgress(phase='Refreshing…'){
+    $('screen').classList.toggle('feedback',feedback);
+    $('refresh').disabled=busy;$('swap').disabled=busy;$('reset').disabled=busy;
+    $('refresh-icon').classList.toggle('spin',feedback&&option==='a');
+    $('refresh-label').textContent=feedback&&option==='a'?'Refreshing…':'Refresh comparison';
+    if(feedback&&option!=='c'){$('key-status').innerHTML='<span class="muted">'+(option==='a'?'Refreshing…':phase)+'</span>'+cancelButton()}
+    else $('key-status').innerHTML='<span class="muted">✓ Unique in both files</span>';
+    if(feedback&&option==='c'){$('notice').classList.remove('error');$('notice').innerHTML=icon+'<div class="notice-copy"><strong>'+phase+'</strong><small>Current results stay available.</small></div>'+cancelButton();$('notice').hidden=false}
+    else if(busy) $('notice').hidden=true;
+  }
+  function paintResult(){
+    const isEmpty=base===candidate;
+    $('rowlist').hidden=isEmpty;$('detail').hidden=isEmpty;$('empty').hidden=!isEmpty;
+    $('baseline-value').textContent=swapped?candidate:base;$('candidate-value').textContent=swapped?base:candidate;
+    $('baseline-name').textContent=swapped?'phase-2-sample-edited.csv':'phase-2-sample.csv';$('candidate-name').textContent=swapped?'phase-2-sample.csv':'phase-2-sample-edited.csv';
+    $('differences').textContent=$('changed-count').textContent=isEmpty?'0':'1';$('unchanged').textContent=isEmpty?'5':'4';
+    $('counter').textContent=isEmpty?'No differences':'Row 1 of 1';$('foot-count').textContent=isEmpty?'0 of 5 rows':'1 of 5 rows';$('foot-hidden').textContent=(isEmpty?'5':'4')+' unchanged rows hidden';
+  }
+  function finish(){clearTimers();busy=false;feedback=false;paintProgress();$('notice').hidden=true;['duration','outcome'].forEach(id=>$(id).disabled=false)}
+  function cancel(){if(!busy)return;finish();notice('Refresh cancelled','The previous result was kept.');announce('Refresh cancelled. Previous result kept.');$('refresh').focus()}
+  function refresh(){
+    if(busy)return;busy=true;feedback=false;$('notice').hidden=true;
+    const outcome=$('outcome').value,duration=Number($('duration').value);
+    ['duration','outcome'].forEach(id=>$(id).disabled=true);paintProgress();announce('Refreshing comparison. Current results remain available.');
+    timers.push(setTimeout(()=>{feedback=true;paintProgress('Comparing CSVs…')},250));
+    timers.push(setTimeout(()=>{if(feedback)paintProgress('Preparing result…')},duration*.75));
+    timers.push(setTimeout(()=>{
+      finish();
+      if(outcome==='error'){notice('Refresh failed','Previous results kept. Choose Refresh to retry.',true);announce('Refresh failed. Previous results kept.');return}
+      if(outcome==='changed')candidate=candidate==='2.0'?'1.0':'2.0';
+      if(outcome==='empty')candidate=base;
+      paintResult();announce('Comparison refreshed. '+(base===candidate?'No differences.':'One changed row.'));
+    },duration));
+  }
+  document.querySelectorAll('input[name="option"]').forEach(input=>input.addEventListener('change',()=>{option=input.value;$('screen').dataset.option=option;$('description').textContent=descriptions[option];if(!busy)$('notice').hidden=true;paintProgress()}));
+  $('refresh').addEventListener('click',refresh);
+  $('swap').addEventListener('click',()=>{swapped=!swapped;paintResult();announce('Comparison sides swapped.')});
+  $('reset').addEventListener('click',()=>{if(busy)return;candidate='1.0';paintResult();$('refresh').focus();announce('Sample difference restored.')});
+  $('screen').addEventListener('click',event=>{if(event.target.closest('[data-cancel]'))cancel();if(event.target.closest('[data-dismiss]')){$('notice').hidden=true;$('refresh').focus()}});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'){if(busy)cancel();else if(!$('notice').hidden){$('notice').hidden=true;$('refresh').focus()}}});
+  paintResult();
+</script>
+</body>
+</html>

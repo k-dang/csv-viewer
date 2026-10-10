@@ -8,6 +8,58 @@ async function compare(page: Page): Promise<void> {
   await expect(page.getByRole('region', { name: 'CSV comparison', exact: true })).toBeVisible();
 }
 
+test('refreshes in place without clearing rows or moving the result body', { tag: '@dev' }, async ({ page }, testInfo) => {
+  await beforeWorkspaceStarts(page, `
+    const call = started.viewer.call.bind(started.viewer);
+    started.viewer.call = async (request) => {
+      const outcome = await call(request);
+      if (request.operation === 'comparison.get-window' && document.body.dataset.holdRefreshRows === 'true') {
+        document.body.dataset.refreshRowsHeld = 'true';
+        await new Promise(resolve => window.addEventListener('release-refresh-rows', resolve, { once: true }));
+      }
+      return outcome;
+    };
+  `);
+  await page.goto('/');
+  await openCsv(page, 'baseline.csv', 'id,value\n1,Old\n2,Same\n');
+  await openCsv(page, 'candidate.csv', 'id,value\n1,New\n2,Same\n');
+  await compare(page);
+  await page.getByRole('checkbox', { name: 'id', exact: true }).check();
+  await page.getByRole('button', { name: 'Apply key', exact: true }).click();
+  const comparison = page.getByRole('region', { name: 'CSV comparison', exact: true });
+  const detail = comparison.getByRole('region', { name: 'Selected comparison row' });
+  await expect(detail.getByRole('cell', { name: /candidate changed value: New/ })).toBeVisible();
+  for (const view of ['Inspector', 'Grid']) {
+    await comparison.getByRole('button', { name: view, exact: true }).click();
+    const grid = comparison.getByRole('grid', { name: view === 'Inspector' ? 'Comparison rows' : 'Aligned comparison results' });
+    await expect(grid.getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+    const body = comparison.locator('.comparison-result-body');
+    const before = await body.boundingBox();
+    const gridElement = await grid.elementHandle();
+    await page.evaluate(() => {
+      delete document.body.dataset.refreshRowsHeld;
+      document.body.dataset.holdRefreshRows = 'true';
+    });
+    await comparison.getByRole('button', { name: 'Refresh comparison', exact: true }).click();
+    await expect(page.locator('body')).toHaveAttribute('data-refresh-rows-held', 'true');
+    await expect(grid.getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+    expect(await gridElement?.evaluate(element => element.isConnected)).toBe(true);
+    expect(await body.boundingBox()).toEqual(before);
+    await expect(comparison.getByText('Loading rows…', { exact: true })).toHaveCount(0);
+    await expect(comparison.getByText('Loading a row to inspect…', { exact: true })).toHaveCount(0);
+    await expect(comparison.getByRole('button', { name: 'Refreshing…', exact: true })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath(`refresh-${view}.png`) });
+    if (view === 'Inspector') await expect(detail.getByRole('cell', { name: /candidate changed value: New/ })).toBeVisible();
+    await page.evaluate(() => {
+      delete document.body.dataset.holdRefreshRows;
+      window.dispatchEvent(new Event('release-refresh-rows'));
+    });
+    await expect(comparison.getByRole('button', { name: 'Refresh comparison', exact: true })).toBeEnabled();
+    await expect(grid.getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+    expect(await body.boundingBox()).toEqual(before);
+  }
+});
+
 test('keeps the settled comparison visible while populated and empty filters load', { tag: '@dev' }, async ({ page }, testInfo) => {
   // Hold delivery of a real row window so the intermediate UI is observable on every machine.
   await beforeWorkspaceStarts(page, `
@@ -396,7 +448,8 @@ test('inspects across page boundaries and preserves grid scroll and widths acros
   await page.mouse.up();
   const width = await valueHeader.evaluate(element => element.getBoundingClientRect().width);
   expect(width).toBeGreaterThan(300);
-  await grid.locator('.ag-body-horizontal-scroll-viewport').evaluate(element => { element.scrollLeft = 140; });
+  await grid.locator('.ag-center-cols-viewport').hover();
+  await page.mouse.wheel(140, 0);
   await expect.poll(() => grid.locator('.ag-center-cols-viewport').evaluate(element => element.scrollLeft)).toBe(140);
   await grid.locator('.ag-body-viewport').evaluate(element => { element.scrollTop = 98 * 44; });
   await expect(grid.getByRole('gridcell', { name: /^id 100 Press Enter/ })).toBeVisible();

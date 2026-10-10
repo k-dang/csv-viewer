@@ -11,6 +11,8 @@ export const comparisonPageSize = 100;
 
 export type ComparisonTabState = {
   comparison: ComparisonView;
+  /** Source labels, key, and summary belonging to the rows still displayed during replacement. */
+  displayedComparison: ComparisonView;
   /** The Draft Comparison Key: chosen columns in key order, not yet applied. */
   draftKey: string[];
   rows: ComparisonRowsMode;
@@ -55,6 +57,7 @@ export class ComparisonTab {
   ) {
     this.state = {
       comparison,
+      displayedComparison: comparison,
       draftKey: comparison.applied?.key ?? [],
       rows: 'differences',
       view: 'inspector',
@@ -90,7 +93,11 @@ export class ComparisonTab {
     if (this.disposed || comparison.version <= this.state.comparison.version) return;
     if (comparison.applied?.resultToken !== this.state.comparison.applied?.resultToken) {
       this.resetQuery({ comparison });
-    } else this.set({ comparison });
+    } else this.set({
+      comparison,
+      displayedComparison: comparison.applied?.resultToken === this.state.displayedComparison.applied?.resultToken
+        ? comparison : this.state.displayedComparison,
+    });
   }
 
   toggleKeyColumn(column: string, included: boolean): void {
@@ -168,7 +175,7 @@ export class ComparisonTab {
     }
   }
 
-  /** Hides the cancelled-attempt banner for the current attempt. */
+  /** Hides feedback for the current attempt. */
   dismissAttempt(): void {
     const attempt = this.state.comparison.lastAttempt;
     if (attempt) this.set({ acknowledgedAttemptId: attempt.attemptId });
@@ -231,17 +238,23 @@ export class ComparisonTab {
     return outcome.status === 'ready' ? outcome.window : null;
   }
 
-  /** Replaces the previous query's selection with its first row, then preserves later choices. */
+  /** Publishes loaded rows with their summary; a replacement keeps the selected key when present. */
   receiveRows(window: ComparisonWindow, version: number): void {
     if (this.disposed || version !== this.state.queryVersion) return;
+    const replacing = this.state.comparison.applied?.resultToken !== this.state.displayedComparison.applied?.resultToken;
     // A refreshed grid may finish a later cached page before the new query's first page.
-    if (this.state.rowsLoading && window.offset !== 0) return;
+    if (this.state.rowsLoading && window.offset !== 0 && !replacing) return;
     const first = window.rows[0];
     const previousSelection = this.state.rowsLoading ? null : this.state.selection;
-    const selection = previousSelection ?? (window.offset === 0 && first && !this.state.selectionLoading
-      ? { row: first, index: 0 }
+    const selectedIndex = replacing && this.state.selection
+      && JSON.stringify(this.state.comparison.applied?.key) === JSON.stringify(this.state.displayedComparison.applied?.key)
+      ? window.rows.findIndex(row => JSON.stringify(row.keyValues) === JSON.stringify(this.state.selection?.row.keyValues)) : -1;
+    const selection = previousSelection ?? (selectedIndex >= 0
+      ? { row: window.rows[selectedIndex], index: window.offset + selectedIndex }
+      : (window.offset === 0 || replacing) && first && !this.state.selectionLoading
+      ? { row: first, index: window.offset }
       : null);
-    this.set({ totalRows: window.totalRowCount, rowsLoading: false, selection, rowsError: null });
+    this.set({ displayedComparison: this.state.comparison, totalRows: window.totalRowCount, rowsLoading: false, selection, rowsError: null });
   }
 
   rowsFailed(version: number): void {
@@ -254,12 +267,13 @@ export class ComparisonTab {
     this.selectionRequest += 1;
     this.set({
       ...patch,
+      displayedComparison: this.state.displayedComparison.applied
+        ? this.state.displayedComparison : patch.comparison ?? this.state.displayedComparison,
       queryVersion: this.state.queryVersion + 1,
-      // Keep the settled result readable while a filter loads, including its empty state.
-      totalRows: patch.comparison ? null : this.state.totalRows,
+      // Keep settled values and counts readable until the replacement page arrives.
+      totalRows: this.state.totalRows,
       rowsLoading: true,
-      // A new applied result must discard old values.
-      selection: patch.comparison ? null : this.state.selection,
+      selection: this.state.selection,
       selectionLoading: false,
       rowsError: null,
     });
