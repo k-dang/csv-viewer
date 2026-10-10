@@ -221,17 +221,6 @@ function waitForIdle(service: ReturnType<typeof createService>, comparisonId: st
   }, settles);
 }
 
-function waitForPhase(
-  service: ReturnType<typeof createService>,
-  comparisonId: string,
-  phase: 'validating' | 'comparing' | 'summarizing',
-) {
-  return vi.waitUntil(() => {
-    const operation = service.getState(comparisonId)?.operation;
-    return operation?.phase === phase ? operation : false;
-  }, settles);
-}
-
 function waitForArtifactDrop(executor: ScriptedComparisonExecutor, artifactId: string) {
   return vi.waitUntil(() => executor.droppedArtifacts.includes(artifactId), settles);
 }
@@ -519,19 +508,18 @@ describe('Comparisons interaction contract', () => {
       kind: 'refresh',
       comparisonId: opened.comparison.comparisonId,
     });
-    await waitForPhase(service, opened.comparison.comparisonId, 'summarizing');
     await waitForArtifactDrop(executor, firstToken);
 
     const published = service.getState(opened.comparison.comparisonId);
     expect(executor.droppedArtifacts).toContain(firstToken);
-    expect(published?.operation?.phase).toBe('summarizing');
+    expect(published?.operation?.phase).toBe('comparing');
     expect(published?.lastAttempt).toBeNull();
     expect(published?.applied?.resultToken).not.toBe(firstToken);
 
     executor.deferDrops = false;
     executor.releaseDrops();
     await waitForReleaseAttemptCount(executor, releaseAttemptCountBeforeRefresh + 1);
-    expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe('summarizing');
+    expect(service.getState(opened.comparison.comparisonId)?.operation?.phase).toBe('comparing');
     executor.deferReleases = false;
     executor.releaseWorkers();
     const completed = await waitForIdle(service, opened.comparison.comparisonId);

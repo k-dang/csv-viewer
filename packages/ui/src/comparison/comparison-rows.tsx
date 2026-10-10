@@ -44,15 +44,12 @@ export function ComparisonRows({ tab, viewState, columnDefs, onChoose, label, ro
     getRows: params => {
       const version = tab.snapshot().queryVersion;
       tab.rows(params.startRow, params.endRow - params.startRow).then(window => {
+        // A query can change after the tab resolves, before this grid callback runs.
         if (!window || tab.snapshot().queryVersion !== version) {
           params.failCallback();
           return;
         }
-        tab.receiveRows(window, version);
         params.successCallback(window.rows.map((row, index) => ({ row, index: window.offset + index, queryVersion: version })), window.totalRowCount);
-      }).catch(() => {
-        tab.rowsFailed(version);
-        params.failCallback();
       });
     },
   }), [tab]);

@@ -35,11 +35,11 @@ describe('ComparisonTab', () => {
     const firstRow = { ...oldRow, keyValues: ['1'] };
     const oldComparison = comparisonFixture({ applied: applied('result-1') });
     const pending = Promise.withResolvers<ComparisonWindowOutcome>();
-    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
-      'comparison.get-window': () => pending.promise,
-    } }), oldComparison);
     const firstPage = { comparisonId: 'comparison-1', resultToken: 'result-1', offset: 0, totalRowCount: 2, keyColumns: ['id'], rows: [firstRow, oldRow] };
-    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': vi.fn().mockResolvedValueOnce({ status: 'ready', window: firstPage }).mockReturnValueOnce(pending.promise),
+    } }), oldComparison);
+    await tab.rows(0, 100);
     tab.selectRow(oldRow, 1);
     const nextComparison = comparisonFixture({ version: 2, applied: applied('result-2') });
     tab.receive(nextComparison);
@@ -105,7 +105,7 @@ describe('ComparisonTab', () => {
     first.resolve(window('result-1'));
     await first.promise;
     expect(tab.snapshot().presentedComparison.applied).toBeNull();
-    tab.rowsFailed(tab.snapshot().queryVersion);
+    expect(await tab.rows(0, 100)).toBeNull();
     expect(tab.snapshot().rowsError).toBeNull();
     tab.receive(comparisonFixture({ version: 4, applied: applied('result-2'), availableKeyColumns: ['id', 'value'] }));
     second.resolve(window('result-2'));
@@ -272,7 +272,6 @@ describe('ComparisonTab', () => {
     } }), comparisonFixture({ applied: applied('result-1') }));
     const firstPage = await tab.rows(0, 100);
     if (!firstPage) throw new Error('Missing first page.');
-    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
     expect(getWindow).toHaveBeenCalledTimes(1);
     tab.setView('grid');
     tab.setChangedOnly(false);
@@ -290,22 +289,27 @@ describe('ComparisonTab', () => {
     tab.setRowsMode('all');
     expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
     expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
-    const previousVersion = tab.snapshot().queryVersion;
+    getWindow.mockResolvedValueOnce({ status: 'ready', window: firstPage });
+    const previousQuery = tab.rows(0, 100);
     tab.setRowsMode('unchanged');
-    tab.receiveRows(firstPage, previousVersion);
+    expect(await previousQuery).toBeNull();
     expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
-    tab.receiveRows({ ...firstPage, offset: 100, rows: [], totalRowCount: 1 }, tab.snapshot().queryVersion);
+    getWindow.mockResolvedValueOnce({ status: 'ready', window: { ...firstPage, offset: 100, rows: [], totalRowCount: 1 } });
+    await tab.rows(100, 100);
     expect(tab.snapshot()).toMatchObject({ totalRows: 205, rowsLoading: true });
     expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
-    tab.receiveRows({ ...firstPage, rows: [row('2')], totalRowCount: 1 }, tab.snapshot().queryVersion);
+    getWindow.mockResolvedValueOnce({ status: 'ready', window: { ...firstPage, rows: [row('2')], totalRowCount: 1 } });
+    await tab.rows(0, 100);
     expect(tab.snapshot().selection?.row.keyValues).toEqual(['2']);
     expect(tab.snapshot().selection?.index).toBe(0);
     tab.setRowsMode('baseline-only');
-    tab.receiveRows({ ...firstPage, rows: [], totalRowCount: 0 }, tab.snapshot().queryVersion);
+    getWindow.mockResolvedValueOnce({ status: 'ready', window: { ...firstPage, rows: [], totalRowCount: 0 } });
+    await tab.rows(0, 100);
     expect(tab.snapshot().selection).toBeNull();
     tab.setRowsMode('all');
     expect(tab.snapshot()).toMatchObject({ totalRows: 0, rowsLoading: true });
-    tab.receiveRows(firstPage, tab.snapshot().queryVersion);
+    getWindow.mockResolvedValueOnce({ status: 'ready', window: firstPage });
+    await tab.rows(0, 100);
     getWindow.mockResolvedValueOnce(window('result-2'));
     tab.receive(comparisonFixture({ version: 2, applied: applied('result-2') }));
     expect(tab.snapshot().selection?.row.keyValues).toEqual(['1']);
@@ -313,14 +317,31 @@ describe('ComparisonTab', () => {
     expect(tab.snapshot().selection).toBeNull();
   });
 
-  it('keeps the original row-window rejection for the caller', async () => {
-    const failure = new Error('The row request failed.');
+  it('owns row-window failures and clears them when a page succeeds', async () => {
+    const getWindow = vi.fn().mockRejectedValueOnce(new Error('The row request failed.')).mockResolvedValueOnce(window('result-1'));
     const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
-      'comparison.get-window': vi.fn().mockRejectedValue(failure),
+      'comparison.get-window': getWindow,
     } }), comparisonFixture({ applied: applied('result-1') }));
 
-    await expect(tab.rows(0, 100)).rejects.toBe(failure);
+    expect(await tab.rows(0, 100)).toBeNull();
+    expect(tab.snapshot().rowsError).toBe('Unable to load comparison rows. Try again.');
     expect(tab.snapshot().actionError).toBeNull();
+    expect(await tab.rows(0, 100)).not.toBeNull();
+    expect(tab.snapshot()).toMatchObject({ rowsError: null, rowsLoading: false, totalRows: 0 });
+  });
+
+  it('ignores a previous query failure after a newer page has settled', async () => {
+    const pending = Promise.withResolvers<ComparisonWindowOutcome>();
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce(window('result-1')),
+    } }), comparisonFixture({ applied: applied('result-1') }));
+    const previousQuery = tab.rows(0, 100);
+    tab.setRowsMode('all');
+    await tab.rows(0, 100);
+    const settled = tab.snapshot();
+    pending.reject(new Error('The old query failed.'));
+    expect(await previousQuery).toBeNull();
+    expect(tab.snapshot()).toBe(settled);
   });
 
   it('commits search once after typing pauses and cancels the timer on disposal', async () => {

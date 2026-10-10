@@ -14,6 +14,7 @@ import type {
   ComparisonKeyDiagnostics,
   ComparisonMutationOutcome,
   ComparisonOperationId,
+  ComparisonPhase,
   ComparisonResultToken,
   ComparisonSide,
   ComparisonSummary,
@@ -60,7 +61,7 @@ type Snapshot = {
 type Operation = {
   operationId: ComparisonOperationId;
   intent: 'apply-key' | 'refresh';
-  phase: 'validating' | 'comparing' | 'summarizing';
+  phase: ComparisonPhase;
   cancelRequested: boolean;
   changedSides: ComparisonSide[];
   invalidKeyDiagnostics: ComparisonKeyDiagnostics | null;
@@ -593,8 +594,6 @@ class CsvComparisonService implements Comparisons {
       key,
       valueColumns,
     }));
-    operation.phase = 'summarizing';
-    this.publishChange(entity);
     yield* Effect.yieldNow;
     const previousArtifactId = entity.snapshot?.artifactId;
     if (previousArtifactId) {
