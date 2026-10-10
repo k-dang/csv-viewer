@@ -66,7 +66,7 @@ describe('Comparison accessibility semantics', () => {
     expect(markup).toContain('Missing from Candidate: value');
   });
 
-  it('announces progress politely and exposes a keyboard-operable Cancel action', () => {
+  it('delays progress feedback, then announces it politely with a keyboard-operable Cancel action', async () => {
     const cancel = vi.fn(async () => ({ status: 'requested' as const }));
     const tab = new ComparisonTab(
       createTestCsvViewer({ handlers: { 'comparison.cancel': cancel } }),
@@ -74,10 +74,11 @@ describe('Comparison accessibility semantics', () => {
     );
     render(<ComparisonPanel tab={tab} />);
 
-    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+    expect(screen.queryByRole('status')).toBeNull();
+    const cancelButton = await screen.findByRole('button', { name: 'Cancel' });
     const banner = cancelButton.closest('[aria-live]');
     expect(banner?.getAttribute('aria-live')).toBe('polite');
-    expect(banner?.textContent).toContain('Comparing complete CSVs…');
+    expect(banner?.textContent).toContain('Comparing CSVs…');
     cancelButton.click();
     expect(cancel).toHaveBeenCalledWith({ operation: 'comparison.cancel', comparisonId: 'comparison-1', operationId: 'operation-1' });
   });
