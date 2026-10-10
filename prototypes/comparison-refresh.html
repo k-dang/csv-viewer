@@ -87,7 +87,7 @@
     $('counter').textContent=isEmpty?'No differences':'Row 1 of 1';$('foot-count').textContent=isEmpty?'0 of 5 rows':'1 of 5 rows';$('foot-hidden').textContent=(isEmpty?'5':'4')+' unchanged rows hidden';
   }
   function finish(){clearTimers();busy=false;feedback=false;paintProgress();$('notice').hidden=true;['duration','outcome'].forEach(id=>$(id).disabled=false)}
-  function cancel(){if(!busy)return;finish();notice('Refresh cancelled','The previous result was kept.');announce('Refresh cancelled. Previous result kept.');$('refresh').focus()}
+  function cancel(){if(!busy)return;finish();notice('Refresh cancelled','The previous result was kept.');announce('Refresh cancelled. Previous result kept.')}
   function refresh(){
     if(busy)return;busy=true;feedback=false;$('notice').hidden=true;
     const outcome=$('outcome').value,duration=Number($('duration').value);
