@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Loader2, RefreshCw, Rows3, Grid2X2, PanelLeft, KeyRound, Search, FileSpreadsheet, ArrowRight } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -32,11 +32,9 @@ export function ComparisonPanel({ tab }: { tab: ComparisonTab }) {
 function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
   const { comparison: current, presentedComparison: comparison, preparingResult } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const busy = Boolean(current.operation) || preparingResult;
-  const [editingKey, setEditingKey] = useState(false);
+  const [editingKeyToken, setEditingKeyToken] = useState<string | null>(null);
   const token = comparison.applied?.resultToken;
-  useEffect(() => {
-    setEditingKey(false);
-  }, [token]);
+  const editingKey = editingKeyToken !== null && editingKeyToken === token;
   return (
     <div className="border-b bg-card px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -69,7 +67,7 @@ function ComparisonHeader({ tab }: { tab: ComparisonTab }) {
           <code className="rounded border bg-muted px-2 py-1" aria-label={`Applied key: ${comparison.applied.key.join(' + ')}`}>
             {comparison.applied.key.join(' + ')}
           </code>
-          <Dialog.Root open={editingKey} onOpenChange={setEditingKey}>
+          <Dialog.Root open={editingKey} onOpenChange={open => setEditingKeyToken(open ? token ?? null : null)}>
             <Dialog.Trigger disabled={busy} render={<Button variant="ghost" size="sm" className="text-primary" />}>
               Edit key
             </Dialog.Trigger>
@@ -174,18 +172,8 @@ function ComparisonKeyEditor({ tab, inDialog = false }: { tab: ComparisonTab; in
 
 /** Feedback is delayed, never the result. One indicator covers computation and the first row read. */
 function ComparisonProgress({ tab, hidden = false }: { tab: ComparisonTab; hidden?: boolean }) {
-  const { comparison, preparingResult, rowsError } = useSyncExternalStore(tab.subscribe, tab.snapshot);
-  const busy = Boolean(comparison.operation) || (preparingResult && !rowsError);
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    if (!busy) {
-      setVisible(false);
-      return;
-    }
-    const timer = setTimeout(() => setVisible(true), 250);
-    return () => clearTimeout(timer);
-  }, [busy]);
-  if (!busy || !visible || hidden) return null;
+  const { comparison, progressVisible } = useSyncExternalStore(tab.subscribe, tab.snapshot);
+  if (!progressVisible || hidden) return null;
   return (
     <div role="status" aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
       <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
@@ -257,27 +245,29 @@ function ComparisonResults({ tab, applied }: { tab: ComparisonTab; applied: NonN
   const { view, rows, search, totalRows, rowsLoading } = useSyncExternalStore(tab.subscribe, tab.snapshot);
   const gridState = useRef<ComparisonRowsViewState>({});
   const inspectorState = useRef<ComparisonRowsViewState>({});
-  const previousView = useRef(view);
-  const previousToken = useRef<string | null>(null);
-  const focusDetail = previousView.current === 'grid' || previousToken.current !== applied.resultToken;
-  useEffect(() => { previousView.current = view; previousToken.current = applied.resultToken; }, [view, applied.resultToken]);
+  // Reattach on a result or view change; ordinary row queries leave keyboard focus alone.
+  const focusResult = useCallback((element: HTMLDivElement | null) => {
+    const emptyHeading = element?.querySelector<HTMLElement>('h2[tabindex="-1"]');
+    const detail = view === 'inspector' ? element?.querySelector<HTMLElement>('[aria-label="Selected comparison row"]') : null;
+    (emptyHeading ?? detail)?.focus();
+  }, [view, applied.resultToken]);
   const empty = totalRows === 0;
   const unchanged = applied.summary.rows.unchanged;
   return (
-    <div className="comparison-result-body">
+    <div ref={focusResult} className="comparison-result-body">
       <ComparisonSummaryBar tab={tab} summary={applied.summary} />
       <div className="relative min-h-0 min-w-0" aria-busy={rowsLoading}>
         <div className={`h-full min-h-0${empty ? ' invisible' : ''}`} aria-hidden={empty}>
           {view === 'grid'
             ? <ComparisonGrid tab={tab} applied={applied} viewState={gridState.current} />
-            : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} focusDetail={focusDetail && !empty} />}
+            : <ComparisonInspector tab={tab} applied={applied} viewState={inspectorState.current} />}
         </div>
         {empty ? (
           <div className="absolute inset-0 overflow-auto bg-background">
             <EmptyState
               icon={<Rows3 className="mx-auto mb-3 size-8 text-muted-foreground" />}
               title={rows === 'differences' && !search ? 'No differences' : 'No matching rows'}
-              focus={focusDetail}
+              focusable
             >
               <p className="mt-2 text-sm text-muted-foreground">
                 {search ? 'Try another search or show all rows.' : 'Choose another result filter to see more rows.'}
@@ -321,12 +311,12 @@ function ComparisonBody({ tab }: { tab: ComparisonTab }) {
   );
 }
 
-function EmptyState({ icon, title, children, focus = false }: { icon: React.ReactNode; title: string; children: React.ReactNode; focus?: boolean }) {
+function EmptyState({ icon, title, children, focusable = false }: { icon: React.ReactNode; title: string; children: React.ReactNode; focusable?: boolean }) {
   return (
     <div className="grid place-items-center p-8 text-center">
       <div className="max-w-lg">
         {icon}
-        <h2 tabIndex={focus ? -1 : undefined} ref={element => { if (focus) element?.focus(); }} className="text-xl font-semibold outline-none">{title}</h2>
+        <h2 tabIndex={focusable ? -1 : undefined} className="text-xl font-semibold outline-none">{title}</h2>
         {children}
       </div>
     </div>

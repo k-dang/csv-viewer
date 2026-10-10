@@ -15,6 +15,8 @@ export type ComparisonTabState = {
   /** The projection shown to the user; replacements wait for their first row window. */
   presentedComparison: ComparisonView;
   preparingResult: boolean;
+  /** Progress becomes visible only after computation or first-row preparation lasts 250 ms. */
+  progressVisible: boolean;
   /** The Draft Comparison Key: chosen columns in key order, not yet applied. */
   draftKey: string[];
   rows: ComparisonRowsMode;
@@ -52,6 +54,7 @@ export class ComparisonTab {
   private disposed = false;
   private selectionRequest = 0;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
+  private progressTimer: ReturnType<typeof setTimeout> | undefined;
   private committedSearch = '';
   private preparationRequest = 0;
   private firstWindow: { window: ComparisonWindow; queryVersion: number } | null = null;
@@ -64,6 +67,7 @@ export class ComparisonTab {
       comparison,
       presentedComparison: comparison,
       preparingResult: false,
+      progressVisible: false,
       draftKey: comparison.applied?.key ?? [],
       rows: 'differences',
       view: 'inspector',
@@ -79,6 +83,7 @@ export class ComparisonTab {
       actionError: null,
       acknowledgedAttemptId: null,
     };
+    if (comparison.operation) this.delayProgress();
   }
 
   get comparisonId(): string {
@@ -300,6 +305,7 @@ export class ComparisonTab {
     this.disposed = true;
     this.listeners.clear();
     clearTimeout(this.searchTimer);
+    clearTimeout(this.progressTimer);
   }
 
   /** Warms the first page, then reveals its projection, count, and selected row together. */
@@ -365,8 +371,26 @@ export class ComparisonTab {
   }
 
   private set(patch: Partial<ComparisonTabState>): void {
+    const wasComparing = this.isComparing();
     this.state = { ...this.state, ...patch };
     this.state.preparingResult = this.state.comparison.applied?.resultToken !== this.state.presentedComparison.applied?.resultToken;
+    if (!this.isComparing()) {
+      clearTimeout(this.progressTimer);
+      this.progressTimer = undefined;
+      this.state.progressVisible = false;
+    } else if (!wasComparing) this.delayProgress();
     for (const listener of this.listeners) listener();
+  }
+
+  private isComparing(): boolean {
+    return Boolean(this.state.comparison.operation) || (this.state.preparingResult && !this.state.rowsError);
+  }
+
+  /** The tab owns one timer across operation phases and the first-row read. */
+  private delayProgress(): void {
+    this.progressTimer = setTimeout(() => {
+      this.progressTimer = undefined;
+      if (!this.disposed && this.isComparing()) this.set({ progressVisible: true });
+    }, 250);
   }
 }

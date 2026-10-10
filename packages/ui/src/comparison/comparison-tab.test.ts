@@ -30,6 +30,45 @@ const window = (resultToken: string): ComparisonWindowOutcome => ({
 });
 
 describe('ComparisonTab', () => {
+  it('delays progress across phases and the first row read, and clears it on completion, cancellation, and disposal', async () => {
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<ComparisonWindowOutcome>();
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': () => pending.promise,
+    } }), comparisonFixture());
+    const operation = { operationId: 'operation-1', intent: 'apply-key' as const, phase: 'validating' as const };
+    try {
+      tab.receive(comparisonFixture({ version: 2, operation }));
+      await vi.advanceTimersByTimeAsync(249);
+      expect(tab.snapshot().progressVisible).toBe(false);
+      tab.receive(comparisonFixture({ version: 3, operation: { ...operation, phase: 'comparing' } }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tab.snapshot().progressVisible).toBe(true);
+      tab.receive(comparisonFixture({ version: 4, applied: applied('result-1') }));
+      expect(tab.snapshot()).toMatchObject({ preparingResult: true, progressVisible: true });
+      pending.resolve(window('result-1'));
+      await pending.promise;
+      expect(tab.snapshot()).toMatchObject({ preparingResult: false, progressVisible: false });
+
+      tab.receive(comparisonFixture({ version: 5, applied: applied('result-1'), operation }));
+      await vi.advanceTimersByTimeAsync(249);
+      tab.receive(comparisonFixture({ version: 6, applied: applied('result-1') }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tab.snapshot().progressVisible).toBe(false);
+      tab.receive(comparisonFixture({ version: 7, applied: applied('result-1'), operation }));
+      await vi.advanceTimersByTimeAsync(249);
+      expect(tab.snapshot().progressVisible).toBe(false);
+      tab.dispose();
+      const disposed = tab.snapshot();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tab.snapshot()).toBe(disposed);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      tab.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('discards superseded first windows and reveals the latest projection with its warmed page', async () => {
     const first = Promise.withResolvers<ComparisonWindowOutcome>();
     const second = Promise.withResolvers<ComparisonWindowOutcome>();

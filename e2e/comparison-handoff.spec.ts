@@ -70,12 +70,20 @@ test('hands off from the key form to a complete first result without intermediat
   await releaseWindow(page);
   await expect(comparison.getByRole('region', { name: 'Selected comparison row' }).getByRole('cell', { name: /candidate changed value: New/ })).toBeVisible();
   await expect(comparison.getByRole('grid', { name: 'Comparison rows' }).getByRole('gridcell', { name: /id 1/ })).toBeVisible();
+  await expect(comparison.getByRole('region', { name: 'Selected comparison row' })).toBeFocused();
   await expect(comparison.getByRole('status')).toHaveCount(0);
   const frames = await page.evaluate(() => {
     document.body.dataset.stopComparisonFrames = 'true';
     return window.comparisonFrames;
   });
   expect(frames.some(text => /Validating key…|Publishing result…|Loading rows…|Loading a row to inspect…/.test(text))).toBe(false);
+  const search = comparison.getByRole('searchbox', { name: 'Find a comparison row or value' });
+  await search.fill('no matching value');
+  await expect(comparison.getByRole('heading', { name: 'No matching rows', exact: true })).toBeVisible();
+  await expect(search).toBeFocused();
+  await search.fill('');
+  await expect(comparison.getByRole('region', { name: 'Selected comparison row' })).toBeVisible();
+  await expect(search).toBeFocused();
 });
 
 test('keeps the previous summary and values together until refreshed rows are ready', { tag: '@dev' }, async ({ page }, testInfo) => {
