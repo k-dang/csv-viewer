@@ -548,6 +548,17 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       expect(window).toEqual({ workingCsvId: workingCsv.workingCsvId, offset: 1, filteredRowCount: 1, totalRowCount: 3, rows: [] });
     });
 
+    it('keeps the values of columns named like the row window counts', async () => {
+      const workingCsv = await fixture.openSource(
+        'count-names.csv',
+        '__csvViewerFilteredRowCount,__CSVVIEWERTOTALROWCOUNT,name\n7,8,Ada\n',
+      );
+      const window = await workspace().call({ operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 });
+
+      expect({ filteredRowCount: window.filteredRowCount, totalRowCount: window.totalRowCount }).toEqual({ filteredRowCount: 1, totalRowCount: 1 });
+      expectVisibleRows(window.rows).toEqual([{ __csvViewerFilteredRowCount: '7', __CSVVIEWERTOTALROWCOUNT: '8', name: 'Ada' }]);
+    });
+
     it('preserves text-like values and null values distinctly in row windows', async () => {
       const workingCsv = await fixture.openSource(
         'missing.csv',
