@@ -65,14 +65,24 @@ import {
   runEditCommand,
   type CsvTable,
 } from './csv-working-csv-table';
-import { csvDeletedField, csvHiddenColumnPrefix, csvSourceOrderField, hiddenCsvColumnName } from './csv-storage-schema';
+import {
+  csvDeletedField,
+  csvFilteredRowCountField,
+  csvHiddenColumnPrefix,
+  csvSourceOrderField,
+  csvTotalRowCountField,
+  hiddenCsvColumnName,
+} from './csv-storage-schema';
 import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-executor';
 import { CsvWorkspaceHost, type CsvSourceUnavailableError } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 type WorkingCsvOperationError = WorkspaceRequestError | DataEngineError;
 
-const decodeFilteredRowCount = decodeEngineRow(Schema.Struct({ filtered_row_count: EngineNonNegativeInt }));
+const decodeRowWindowCounts = decodeEngineRow(Schema.Struct({
+  [csvFilteredRowCountField]: EngineNonNegativeInt,
+  [csvTotalRowCountField]: EngineNonNegativeInt,
+}));
 const decodeCsvRows = decodeEngineRows(EngineCsvRow);
 const decodeColumnValueRows = decodeEngineRows(Schema.Struct({ column_value: EngineCell }));
 const decodeColumnValueCountRows = decodeEngineRows(Schema.Struct({
@@ -474,14 +484,20 @@ class WorkingCsvStore implements WorkingCsvs {
         offset,
       }));
 
-      const countRow = yield* this.database.readObjects(query.countSql, query.values).pipe(Effect.flatMap(decodeFilteredRowCount));
-      const rows = yield* this.database.readObjects(query.rowsSql, query.values).pipe(Effect.flatMap(decodeCsvRows));
+      const engineRows = yield* this.database.readObjects(query.sql, query.values);
+      const counts = yield* decodeRowWindowCounts(engineRows.slice(0, 1));
+      const rows = yield* decodeCsvRows(engineRows
+        .filter((row) => row[csvInternalRowIdField] !== null)
+        .map((row) => {
+          const { [csvFilteredRowCountField]: _filteredRowCount, [csvTotalRowCountField]: _totalRowCount, ...cells } = row;
+          return cells;
+        }));
 
       return {
         workingCsvId: state.metadata.workingCsvId,
         offset,
-        filteredRowCount: countRow.filtered_row_count,
-        totalRowCount: state.metadata.rowCount,
+        filteredRowCount: counts[csvFilteredRowCountField],
+        totalRowCount: counts[csvTotalRowCountField],
         rows: rows.map(normalizeRow),
       };
     }));
@@ -1121,6 +1137,8 @@ function isReservedCsvColumnName(name: string): boolean {
     needle === csvInternalRowIdField.toLowerCase() ||
     needle === csvSourceOrderField.toLowerCase() ||
     needle === csvDeletedField.toLowerCase() ||
+    needle === csvFilteredRowCountField.toLowerCase() ||
+    needle === csvTotalRowCountField.toLowerCase() ||
     needle.startsWith(csvHiddenColumnPrefix.toLowerCase())
   );
 }

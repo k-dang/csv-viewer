@@ -535,6 +535,19 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       });
     });
 
+    it('reports both counts for a window past the last matching row', async () => {
+      const workingCsv = await fixture.openSource('past-end.csv', 'name\nAda\nGrace\nLinus\n');
+      const window = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 1,
+        limit: 10,
+        search: 'grace',
+      });
+
+      expect(window).toEqual({ workingCsvId: workingCsv.workingCsvId, offset: 1, filteredRowCount: 1, totalRowCount: 3, rows: [] });
+    });
+
     it('preserves text-like values and null values distinctly in row windows', async () => {
       const workingCsv = await fixture.openSource(
         'missing.csv',

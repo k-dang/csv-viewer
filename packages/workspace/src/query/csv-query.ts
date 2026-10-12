@@ -11,7 +11,12 @@ import type {
 import { Result } from 'effect';
 import { csvInternalRowIdField, topCountedValuesLimit } from '../csv-viewer';
 import { WorkspaceRequestError } from '../errors';
-import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
+import {
+  csvDeletedField,
+  csvFilteredRowCountField,
+  csvSourceOrderField,
+  csvTotalRowCountField,
+} from '../working-csv/csv-storage-schema';
 
 export type QueryValues = Array<string | number | boolean | null>;
 
@@ -191,21 +196,27 @@ export function buildRowsQuery({
   sort: readonly CsvSortDescriptor[];
   limit: number;
   offset: number;
-}): QueryBuild<{ countSql: string; rowsSql: string; values: QueryValues }> {
+}): QueryBuild<CsvStatement> {
   return Result.gen(function* () {
     const knownColumns = new Set(columns.map((column) => column.name));
     const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
     const orderSql = yield* buildOrderSql(sort, knownColumns);
-    const fromSql = ` FROM ${quoteIdentifier(tableName)}${scope.whereSql}`;
-    const rowProjectionSql = [
+    const tableSql = quoteIdentifier(tableName);
+    const filteredCountSql = `(SELECT count(*)::BIGINT FROM ${tableSql}${scope.whereSql})`;
+    const totalCountSql = `(SELECT count(*)::BIGINT FROM ${tableSql} WHERE ${quoteIdentifier(csvDeletedField)} = false)`;
+    const pageSql = `SELECT ${[
       quoteIdentifier(csvInternalRowIdField),
       ...columns.map((column) => quoteIdentifier(column.name)),
-    ].join(', ');
+      quoteIdentifier(csvSourceOrderField),
+    ].join(', ')} FROM ${tableSql}${scope.whereSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`;
 
+    // One statement reads one engine snapshot. The join does not preserve page order, so the outer ORDER BY repeats it.
     return {
-      countSql: `SELECT count(*)::BIGINT AS filtered_row_count${fromSql}`,
-      rowsSql: `SELECT ${rowProjectionSql}${fromSql}${orderSql} LIMIT ${limit} OFFSET ${offset}`,
-      values: scope.values,
+      sql: `SELECT counts.*, page.* EXCLUDE (${quoteIdentifier(csvSourceOrderField)})
+FROM (SELECT ${filteredCountSql} AS ${quoteIdentifier(csvFilteredRowCountField)},
+             ${totalCountSql} AS ${quoteIdentifier(csvTotalRowCountField)}) AS counts
+LEFT JOIN (${pageSql}) AS page ON true${orderSql}`,
+      values: [...scope.values, ...scope.values],
     };
   });
 }

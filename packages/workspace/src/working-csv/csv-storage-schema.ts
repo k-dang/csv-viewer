@@ -1,5 +1,7 @@
 export const csvDeletedField = '__csvViewerDeleted';
 export const csvSourceOrderField = '__csvViewerSourceOrder';
+export const csvFilteredRowCountField = '__csvViewerFilteredRowCount';
+export const csvTotalRowCountField = '__csvViewerTotalRowCount';
 export const csvHiddenColumnPrefix = '__csvViewerHidden_';
 
 export function hiddenCsvColumnName(revisionId: number, takenNames: readonly string[]): string {
