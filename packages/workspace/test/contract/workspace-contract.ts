@@ -18,6 +18,8 @@ import {
 
 import type { WorkspaceDiagnostics } from '../../src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
+import type { WorkspaceRequestError } from '../../src/errors';
+import type { CsvSourceUnavailableError } from '../../src/workspace-host';
 import type { ExportPreparationFailure } from './database-failure-injection';
 
 /**
@@ -39,6 +41,8 @@ export interface WorkspaceContractFixture {
   failNextExportWorkerRelease(failures: number): () => boolean;
   /** Fail export preparation and return whether its worker connection has closed. */
   failNextExportPreparation(failure: ExportPreparationFailure): () => boolean;
+  /** Fail the next engine source acquisition, after the source was described, with a declared host failure. */
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void;
   /** Fail one temporary engine source release. */
   failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */

@@ -21,6 +21,8 @@ import type {
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
+import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
+import type { CsvSourceUnavailableError, CsvWorkspaceHost } from '../../../../packages/workspace/src/workspace-host';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
@@ -126,6 +128,10 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void {
+    const host: CsvWorkspaceHost = this.host;
+    vi.spyOn(host, 'acquireEngineSource').mockImplementationOnce(() => Effect.fail(failure));
+  }
   failNextEngineSourceRelease(): void {
     const original = this.host.acquireEngineSource.bind(this.host);
     this.host.acquireEngineSource = (sourceId) => {

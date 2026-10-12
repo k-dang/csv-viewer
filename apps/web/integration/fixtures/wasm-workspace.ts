@@ -22,6 +22,7 @@ import type {
 } from '../../../../packages/workspace/src/csv-viewer';
 import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
+import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
 import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
@@ -258,6 +259,10 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void {
+    const host: CsvWorkspaceHost = this.host;
+    vi.spyOn(host, 'acquireEngineSource').mockImplementationOnce(() => Effect.fail(failure));
+  }
   failNextEngineSourceRelease(): void {
     const original = this.database.dropFile.bind(this.database);
     this.database.dropFile = () => Effect.suspend(() => {

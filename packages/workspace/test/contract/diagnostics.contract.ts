@@ -2,6 +2,8 @@ import { Effect, Logger } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { DuckDbComparisonExecutor } from '../../src/comparison/duckdb-comparison-executor';
 import { DataEngineError } from '../../src/database';
+import { WorkspaceRequestError } from '../../src/errors';
+import { CsvSourceUnavailableError } from '../../src/workspace-host';
 import { cleanupEffect } from '../../src/comparison/comparison-effects';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
 import type { CloseWorkingCsvOutcome, ComparisonSummary } from '../../src/csv-viewer';
@@ -588,6 +590,26 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
           && record.annotations.outcome === 'succeeded')).toBeDefined();
         expect(records.find((record) => record.message === 'csv.release-staging'
           && record.annotations.requestId === request?.annotations.requestId)).toBeDefined();
+      } finally { await fixture.dispose(); }
+    });
+
+    it.each([
+      ['a source released after it was described', new CsvSourceUnavailableError({ code: 'missing-source', message: 'PRIVATE host detail' }), 'Unable to open CSV: the file no longer exists.'],
+      ['a host rejection', new WorkspaceRequestError({ message: 'PRIVATE host detail' }), 'Unable to open CSV.'],
+    ])('reports %s at engine source acquisition as a source-access failure', async (_case, failure, message) => {
+      const capture = diagnosticCapture();
+      const fixture = await factory.create(undefined, capture.configuration);
+      try {
+        const sourceId = await fixture.registerSource('PRIVATE-SOURCE.csv', 'name\nAda\n');
+        fixture.failNextEngineSourceAcquire(failure);
+        await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId }))
+          .resolves.toMatchObject({ status: 'failed', message });
+
+        const request = capture.completed().find((record) => record.message === 'csv.open-recent' && record.annotations.outcome === 'failed');
+        expect(request?.annotations.csvFailureCategory).toBe('source-access');
+        expect(request?.annotations.failureCategory).toBe('recoverable-failure');
+        expect(capture.logs.join('')).not.toContain('PRIVATE');
+        await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId })).resolves.toMatchObject({ status: 'opened' });
       } finally { await fixture.dispose(); }
     });
 
