@@ -107,6 +107,20 @@ test('window close and app quit share confirmation; cancelling preserves edits a
   expect(await readFile(path.join(directory, 'people.csv'), 'utf8')).toBe(contents);
 });
 
+test('a renderer reload ends the previous document workspace, so reopening shows the CSV Source', async () => {
+  await openSource(path.join(directory, 'people.csv'));
+  await editCell(page, 'name', 0, 'Ada edited');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'CSV Viewer', exact: true })).toBeVisible();
+  await openSource(path.join(directory, 'people.csv'));
+  await expect(page.getByRole('img', { name: 'Unexported Changes', exact: true })).toHaveCount(0);
+  const electronProcess = app.process();
+  const closed = app.waitForEvent('close');
+  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
+  await closed;
+  await expect.poll(() => electronProcess.exitCode).toBe(0);
+});
+
 test('quit rechecks confirmation when another CSV gains unexported changes', async () => {
   await openSource(path.join(directory, 'people.csv'));
   await editCell(page, 'name', 0, 'Ada edited');

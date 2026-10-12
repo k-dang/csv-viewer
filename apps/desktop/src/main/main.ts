@@ -11,10 +11,10 @@ import {
 import path from 'node:path';
 import { Effect } from 'effect';
 import { toError } from '@csv-viewer/workspace/errors';
-import { DesktopLifecycle } from './desktop-lifecycle';
+import { DesktopLifecycle, WindowWorkspace } from './desktop-lifecycle';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { registerCsvViewerRequestHandler, registerDroppedSourceHandler } from './csv-viewer-ipc';
-import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
+import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
 import { ipcChannels } from '../ipc-channels';
@@ -105,7 +105,7 @@ function registerContentSecurityPolicy() {
   });
 }
 
-const createWindow = Effect.fnUntraced(function* (lifecycle: DesktopLifecycle) {
+const createWindow = Effect.fnUntraced(function* () {
   const windowOptions: BrowserWindowConstructorOptions = {
     width: 1180,
     height: 760,
@@ -122,19 +122,22 @@ const createWindow = Effect.fnUntraced(function* (lifecycle: DesktopLifecycle) {
   };
 
   const mainWindow = new BrowserWindow(windowOptions);
-  let closeAllowed = false;
-
+  const { webContents } = mainWindow;
+  webContents.on('did-start-navigation', (details) => {
+    if (!details.isMainFrame || details.isSameDocument || quit.allowed) return;
+    documentWorkspace.replace().catch(() => {
+      console.error('CSV Viewer could not open its workspace.');
+      app.exit(1);
+    });
+  });
   mainWindow.on('close', (event) => {
-    if (closeAllowed || lifecycle.isDisposed) return;
+    if (!documentWorkspace.isOpen) return;
     event.preventDefault();
-    Effect.runFork(lifecycle.requestWindowClose().pipe(
-      Effect.tap((allowed) => Effect.sync(() => {
-        if (!allowed) return;
-        closeAllowed = true;
-        if (!mainWindow.isDestroyed()) mainWindow.close();
-      })),
-      Effect.catchCause(() => reportCloseFailure),
-    ));
+    void documentWorkspace.close().then((outcome) => {
+      if (outcome === 'disposed' && !mainWindow.isDestroyed()) mainWindow.close();
+      else if (outcome === 'failed') reportCloseFailure();
+      else if (outcome === 'forced') app.exit(1);
+    }, reportCloseFailure);
   });
 
   if (isDevelopment) {
@@ -220,45 +223,62 @@ async function confirmWorkspaceClose(impact: WorkspaceCloseImpact): Promise<bool
 }
 
 /** Event failures keep the window open and never print source identities or driver causes. */
-const reportCloseFailure = Effect.sync(() => {
+function reportCloseFailure() {
   console.error('CSV Viewer could not confirm closing. Try closing again.');
+}
+
+/** The one window's document owns the workspace; closing the window or loading a new document ends it. */
+const documentWorkspace = new WindowWorkspace(async () => {
+  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost);
+  const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
+    try: () => confirmWorkspaceClose(impact), catch: toError,
+  }), (code) => app.exit(code));
+  return { workspace, lifecycle, detach: workspace.onEvent(sendEvent) };
+});
+
+const workspaceRequests: Pick<CsvWorkspaceOwner, 'receive'> = {
+  receive: async (payload) => {
+    const current = documentWorkspace.get();
+    if (!current) throw new Error('The CSV workspace is closing.');
+    return (await current).workspace.receive(payload);
+  },
+};
+
+/** Registered before startup, so a quit while the workspace opens still waits for it and disposes it. */
+const quit = { allowed: false, requested: false };
+app.on('before-quit', (event) => {
+  if (quit.allowed) return;
+  event.preventDefault();
+  if (quit.requested) return;
+  quit.requested = true;
+  void documentWorkspace.close().then((outcome) => {
+    quit.requested = false;
+    if (outcome === 'disposed') {
+      quit.allowed = true;
+      app.quit();
+    } else if (outcome === 'failed' || outcome === 'forced') {
+      app.exit(1);
+    }
+  }, () => {
+    quit.requested = false;
+    reportCloseFailure();
+  });
 });
 
 const startup = Effect.gen(function* () {
   yield* Effect.tryPromise({ try: () => app.whenReady(), catch: toError });
   registerContentSecurityPolicy();
   createApplicationMenu();
-  const workspace = yield* Effect.tryPromise({
-    try: () => createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost), catch: toError,
+  registerCsvViewerRequestHandler(ipcMain, workspaceRequests);
+  registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
+  yield* createWindow();
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      Effect.runFork(createWindow().pipe(Effect.catchCause(() => Effect.sync(() => {
+        console.error('CSV Viewer could not open a window.');
+      }))));
+    }
   });
-  const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
-    try: () => confirmWorkspaceClose(impact), catch: toError,
-  }));
-  yield* Effect.gen(function* () {
-    registerCsvViewerRequestHandler(ipcMain, workspace);
-    registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
-    workspace.onEvent(sendEvent);
-    // Registered only once the workspace exists: quitting before then has nothing to dispose.
-    app.on('before-quit', (event) => {
-      if (lifecycle.isDisposed) return;
-      event.preventDefault();
-      Effect.runFork(lifecycle.requestQuit().pipe(
-        Effect.tap((result) => Effect.sync(() => {
-          if (result === 'disposed') app.quit();
-          else if (result === 'failed') app.exit(1);
-        })),
-        Effect.catchCause(() => reportCloseFailure),
-      ));
-    });
-    yield* createWindow(lifecycle);
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        Effect.runFork(createWindow(lifecycle).pipe(Effect.catchCause(() => Effect.sync(() => {
-          console.error('CSV Viewer could not open a window.');
-        }))));
-      }
-    });
-  }).pipe(Effect.onError(() => Effect.promise(() => workspace.dispose()).pipe(Effect.ignoreCause)));
 });
 
 Effect.runFork(startup.pipe(Effect.catchCause(() => Effect.sync(() => {
