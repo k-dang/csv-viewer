@@ -1,3 +1,4 @@
+import { Array as Arr, Result } from 'effect';
 import type {
   ComparisonCandidate,
   ComparisonFault,
@@ -33,18 +34,22 @@ export function sharedColumnNames(baseline: WorkingCsvView, candidate: WorkingCs
     .filter((column) => candidateColumns.has(column));
 }
 
-export function validateKeySelection(key: readonly string[], available: string[]): ComparisonFault | null {
-  if (key.length === 0 || new Set(key).size !== key.length) {
-    return fault('invalid-key-shape', 'Choose one or more distinct Comparison Key columns.');
+export function validateKeySelection(
+  key: readonly string[],
+  available: string[],
+): Result.Result<Arr.NonEmptyArray<string>, ComparisonFault> {
+  const columns = [...key];
+  if (!Arr.isArrayNonEmpty(columns) || new Set(columns).size !== columns.length) {
+    return Result.fail(fault('invalid-key-shape', 'Choose one or more distinct Comparison Key columns.'));
   }
   const known = new Set(available);
-  if (key.some((column) => !known.has(column))) {
-    return fault(
+  if (columns.some((column) => !known.has(column))) {
+    return Result.fail(fault(
       'unknown-key-column',
       'The Comparison Key contains a column that is not shared by both Working CSVs.',
-    );
+    ));
   }
-  return null;
+  return Result.succeed(columns);
 }
 
 export function hasInvalidKeys(diagnostics: ComparisonKeyDiagnostics): boolean {

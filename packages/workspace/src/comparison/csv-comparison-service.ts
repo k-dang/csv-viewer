@@ -1,5 +1,5 @@
 import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, type Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Result, type Array as Arr, type Scope } from 'effect';
 import type { DataEngineError } from '../database';
 import type { WorkspaceRequestError } from '../errors';
 import type {
@@ -257,8 +257,8 @@ class CsvComparisonService implements Comparisons {
 
     const key = request.kind === 'apply-key' ? request.key : entity.snapshot?.key;
     if (!key) return rejected('no-applied-key', 'Apply a Comparison Key before refreshing.');
-    const keyFault = validateKeySelection(key, this.availableKeyColumns(entity));
-    if (keyFault) return { status: 'rejected', fault: keyFault };
+    const validKey = validateKeySelection(key, this.availableKeyColumns(entity));
+    if (Result.isFailure(validKey)) return { status: 'rejected', fault: validKey.failure };
     if (this.csvs.isClosing(entity.baselineId) || this.csvs.isClosing(entity.candidateId)) {
       return rejected('source-not-found', 'A Working CSV is closing.');
     }
@@ -280,7 +280,7 @@ class CsvComparisonService implements Comparisons {
       Effect.scoped(Deferred.await(ready).pipe(
         // Return from admission before starting database work.
         Effect.andThen(Effect.yieldNow),
-        Effect.andThen(this.compute(entity, operation, [...key])),
+        Effect.andThen(this.compute(entity, operation, validKey.success)),
       )).pipe(
         Effect.onExit((result) => Effect.gen({ self: this }, function* () {
           const outcome = this.finishAttempt(entity, operation, result);
@@ -545,7 +545,7 @@ class CsvComparisonService implements Comparisons {
     this: CsvComparisonService,
     entity: ComparisonRecord,
     operation: Operation,
-    key: string[],
+    key: Arr.NonEmptyArray<string>,
   ): Effect.fn.Return<AttemptResult, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     yield* this.retryPendingRetirements();
     const baseline = this.csvs.getState(entity.baselineId);

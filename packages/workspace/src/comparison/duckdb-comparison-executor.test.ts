@@ -3,9 +3,10 @@ import { describe, expect, it } from '@effect/vitest';
 import { DataEngineError, driverEffect, type WorkspaceDatabaseConnection } from '../database';
 import type { EngineRow } from '../query/csv-result-normalization';
 import { stubConnection } from '../../test/stub-connection';
+import type { CreateComparisonSnapshotRequest } from './comparison-executor';
 import { DuckDbComparisonExecutor, type ComparisonSource } from './duckdb-comparison-executor';
 
-const snapshotRequest = {
+const snapshotRequest: CreateComparisonSnapshotRequest = {
   artifactId: 'attempt',
   comparisonId: 'comparison',
   baselineId: 'baseline',

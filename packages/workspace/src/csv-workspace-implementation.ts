@@ -7,7 +7,7 @@ import { Comparisons } from './comparison/csv-comparison-service';
 import { WorkingCsvs } from './working-csv/working-csv-store';
 import { CsvWorkspaceHost, type CsvSourceUnavailableError } from './workspace-host';
 import type { CreateCsvViewerOptions, CsvWorkspaceOwner } from './csv-workspace';
-import { genericWorkspaceFailure, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError, type ExpectedWorkspaceError } from './errors';
+import { genericWorkspaceFailure, type CsvOpenError, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError, type ExpectedWorkspaceError } from './errors';
 import { CloseImpact, CsvViewerRequest } from './csv-viewer-requests';
 import type {
   BeginComparisonResult,
@@ -284,7 +284,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   private readonly openCsv = Effect.fnUntraced(function* (
     this: CsvWorkspaceImplementation,
     { options, sourceId: reservedSourceId }: Extract<CsvViewerRequest, { operation: 'csv.open' }>,
-  ): Effect.fn.Return<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError> {
+  ): Effect.fn.Return<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError | CsvOpenError> {
     if (this.disposal) {
       if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
       return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
@@ -309,7 +309,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     this: CsvWorkspaceImplementation,
     sourceId: CsvSourceId,
     options?: CsvDialectOptions,
-  ): Effect.fn.Return<OpenCsvResult, WorkspaceRequestError, Scope.Scope> {
+  ): Effect.fn.Return<OpenCsvResult, WorkspaceRequestError | CsvOpenError, Scope.Scope> {
     if (!(yield* this.workingCsvs.admit())) return { status: 'failed', message: 'The CSV workspace is closing.' } satisfies OpenCsvResult;
     const outcome = yield* this.workingCsvs.open(sourceId, options);
     if (outcome.status === 'failed') return { status: 'failed', message: outcome.failure.message } satisfies OpenCsvResult;

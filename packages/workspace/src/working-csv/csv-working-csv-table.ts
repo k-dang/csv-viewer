@@ -1,4 +1,4 @@
-import { Effect, Result } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import type {
   CsvCellValue,
   CsvColumn,
@@ -29,7 +29,15 @@ import {
   requireKnownColumn,
   type QueryBuild,
 } from '../query/csv-query';
-import { normalizeCellValue, type EngineRow } from '../query/csv-result-normalization';
+import {
+  decodeEngineRow,
+  decodeEngineRows,
+  EngineCell,
+  EngineNonNegativeInt,
+  EngineRowId,
+  normalizeCellValue,
+  type EngineRow,
+} from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 import type { DataEngineError, WorkspaceDatabase, WorkspaceDatabaseConnection } from '../database';
 
@@ -51,17 +59,28 @@ export function dropWorkingCsvTable(table: CsvTable): Effect.Effect<void, DataEn
   return table.database.run(buildDropTableSql(table.tableName));
 }
 
+const decodeColumnRows = decodeEngineRows(Schema.Struct({ column_name: Schema.String, column_type: Schema.String }));
+const decodeRowCount = decodeEngineRow(Schema.Struct({ row_count: EngineNonNegativeInt }));
+const decodeCellValueRows = decodeEngineRows(Schema.Struct({ cell_value: EngineCell }));
+const decodeRowIdRows = decodeEngineRows(Schema.Struct({ row_id: EngineRowId }));
+const decodeNextRowId = decodeEngineRow(Schema.Struct({ next_row_id: EngineNonNegativeInt }));
+const SourceOrderRow = Schema.Struct({ source_order: EngineNonNegativeInt });
+const decodeSourceOrderRows = decodeEngineRows(SourceOrderRow);
+const decodeAppendSourceOrder = decodeEngineRow(SourceOrderRow);
+
 export function readColumns(table: CsvTable): Effect.Effect<CsvColumn[], DataEngineError> {
   return table.database.readObjects(buildDescribeColumnsSql(table.tableName)).pipe(
+    Effect.flatMap(decodeColumnRows),
     Effect.map((rows) => rows
-      .filter((row) => !internalFields.has(String(row.column_name)))
-      .map((row) => ({ name: String(row.column_name), type: String(row.column_type) }))),
+      .filter((row) => !internalFields.has(row.column_name))
+      .map((row) => ({ name: row.column_name, type: row.column_type }))),
   );
 }
 
 export function readRowCount(table: CsvTable): Effect.Effect<number, DataEngineError> {
   return table.database.readObjects(buildRowCountSql(table.tableName)).pipe(
-    Effect.map(([row]) => Number(row.row_count)),
+    Effect.flatMap(decodeRowCount),
+    Effect.map((row) => row.row_count),
   );
 }
 
@@ -71,7 +90,7 @@ export const readCellValue = Effect.fnUntraced(function* (
   column: string,
 ): Effect.fn.Return<CsvCellValue, DataEngineError | WorkspaceRequestError> {
   const query = buildCellValueQuery(table.tableName, rowId, column);
-  const [row] = yield* table.database.readObjects(query.sql, query.values);
+  const [row] = yield* table.database.readObjects(query.sql, query.values).pipe(Effect.flatMap(decodeCellValueRows));
   if (!row) return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV row no longer exists.' }));
   return normalizeCellValue(row.cell_value);
 });
@@ -190,8 +209,8 @@ export const assertRowsExist = Effect.fnUntraced(function* (
   rowIds: string[],
 ): Effect.fn.Return<void, DataEngineError | WorkspaceRequestError> {
   const query = yield* Effect.fromResult(buildExistingRowIdsQuery(table.tableName, rowIds));
-  const rows = yield* table.database.readObjects(query.sql, query.values);
-  const foundRowIds = new Set(rows.map((row) => String(row.row_id)));
+  const rows = yield* table.database.readObjects(query.sql, query.values).pipe(Effect.flatMap(decodeRowIdRows));
+  const foundRowIds = new Set(rows.map((row) => row.row_id));
   const missingRowId = rowIds.find((rowId) => !foundRowIds.has(rowId));
   if (missingRowId) return yield* Effect.fail(new WorkspaceRequestError({ message: `CSV row no longer exists: ${missingRowId}` }));
 });
@@ -279,7 +298,8 @@ export const runEditCommand = Effect.fnUntraced(function* (
 
 function nextRowId(table: CsvTable): Effect.Effect<string, DataEngineError> {
   return table.database.readObjects(buildNextRowIdSql(table.tableName)).pipe(
-    Effect.map(([row]) => String(row.next_row_id)),
+    Effect.flatMap(decodeNextRowId),
+    Effect.map((row) => String(row.next_row_id)),
   );
 }
 
@@ -289,14 +309,14 @@ const resolveInsertionOrder = Effect.fnUntraced(function* (
   targetRowId: string | undefined,
 ): Effect.fn.Return<number, DataEngineError | WorkspaceRequestError> {
   if (placement === 'append') {
-    const [row] = yield* table.database.readObjects(buildAppendSourceOrderSql(table.tableName));
-    return Number(row.source_order);
+    const row = yield* table.database.readObjects(buildAppendSourceOrderSql(table.tableName)).pipe(Effect.flatMap(decodeAppendSourceOrder));
+    return row.source_order;
   }
 
   if (!targetRowId) return yield* Effect.fail(new WorkspaceRequestError({ message: 'CSV row identifier is required for insertion.' }));
 
   const query = buildRowSourceOrderQuery(table.tableName, targetRowId);
-  const [row] = yield* table.database.readObjects(query.sql, query.values);
+  const [row] = yield* table.database.readObjects(query.sql, query.values).pipe(Effect.flatMap(decodeSourceOrderRows));
   if (!row) return yield* Effect.fail(new WorkspaceRequestError({ message: `CSV row no longer exists: ${targetRowId}` }));
-  return Number(row.source_order) + (placement === 'below' ? 1 : 0);
+  return row.source_order + (placement === 'below' ? 1 : 0);
 });
