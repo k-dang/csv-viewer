@@ -30,11 +30,10 @@ export class DesktopLifecycle {
     this.quitting = true;
     return yield* Effect.gen({ self: this }, function* () {
       if (!(yield* this.confirmClose(this.authorizedImpact))) return 'cancelled' as const;
-      // Disposal is memoized by the workspace. Wait at most twenty seconds without interrupting
-      // its cleanup or retrying the same Promise.
+      // The process exits only once the database release settles, however long it takes.
       const released = yield* Effect.exit(Effect.tryPromise({
         try: () => this.workspace.dispose(), catch: toError,
-      }).pipe(Effect.timeout('20 seconds')));
+      }));
       if (Exit.isFailure(released)) return 'failed' as const;
       this.disposed = true;
       return 'disposed' as const;

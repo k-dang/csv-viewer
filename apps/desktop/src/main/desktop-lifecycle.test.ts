@@ -67,7 +67,7 @@ it.effect('settles all confirmation waiters after a prompt failure and permits r
   expect(yield* Effect.exit(lifecycle.requestQuit())).toEqual(Exit.fail(failure));
 }));
 
-it.effect('bounds shutdown to twenty seconds while the one underlying cleanup continues', () => Effect.gen(function* () {
+it.effect('keeps quit waiting for the one disposal however long the release takes', () => Effect.gen(function* () {
   const entered = Promise.withResolvers<void>();
   const cleanup = Promise.withResolvers<void>();
   const dispose = vi.fn(() => { entered.resolve(); return cleanup.promise; });
@@ -78,10 +78,20 @@ it.effect('bounds shutdown to twenty seconds while the one underlying cleanup co
   yield* Effect.addFinalizer(() => Effect.sync(() => cleanup.resolve()));
   yield* Effect.promise(() => entered.promise);
   expect(yield* lifecycle.requestQuit()).toBe('cancelled');
-  yield* TestClock.adjust('20 seconds');
-  expect(yield* Fiber.join(quit)).toBe('failed');
-  expect(dispose).toHaveBeenCalledTimes(1);
+  yield* TestClock.adjust('1 minute');
+  expect(quit.pollUnsafe()).toBeUndefined();
   expect(lifecycle.isDisposed).toBe(false);
   cleanup.resolve();
-  yield* Effect.promise(() => cleanup.promise);
+  expect(yield* Fiber.join(quit)).toBe('disposed');
+  expect(dispose).toHaveBeenCalledTimes(1);
+  expect(lifecycle.isDisposed).toBe(true);
+}));
+
+it.effect('reports a failed disposal so quit can exit with failure', () => Effect.gen(function* () {
+  const lifecycle = new DesktopLifecycle({
+    confirmClose: async () => ({ status: 'ready' }),
+    dispose: async () => { throw new Error('release failed'); },
+  }, () => Effect.succeed(true));
+  expect(yield* lifecycle.requestQuit()).toBe('failed');
+  expect(lifecycle.isDisposed).toBe(false);
 }));
