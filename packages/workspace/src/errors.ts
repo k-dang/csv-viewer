@@ -1,6 +1,6 @@
-import { Data, Predicate } from 'effect';
-import type { DataEngineError } from './database';
-import type { CsvSourceUnavailableError } from './workspace-host';
+import { Data } from 'effect';
+import { DataEngineError } from './database';
+import { CsvSourceUnavailableError } from './workspace-host';
 
 /** A deliberate request rejection whose message is safe to show to the user. `cause` is never shown. */
 export class WorkspaceRequestError extends Data.TaggedError('WorkspaceRequestError')<{ message: string; cause?: unknown }> {}
@@ -19,15 +19,16 @@ export const malformedRequestMessage = 'Malformed CSV Viewer request.';
 /** The declared failures a request may end with. Each carries a message that is safe to show the user. */
 export type ExpectedWorkspaceError = WorkspaceRequestError | CsvOpenError | DataEngineError | CsvSourceUnavailableError;
 
-const expectedWorkspaceErrorTags = {
-  WorkspaceRequestError: true,
-  CsvOpenError: true,
-  DataEngineError: true,
-  CsvSourceUnavailableError: true,
-} satisfies Record<ExpectedWorkspaceError['_tag'], true>;
+/** Only these classes' messages are safe to show; a look-alike object with a matching `_tag` is not. */
+const expectedWorkspaceErrors = {
+  WorkspaceRequestError,
+  CsvOpenError,
+  DataEngineError,
+  CsvSourceUnavailableError,
+} satisfies { [Tag in ExpectedWorkspaceError['_tag']]: abstract new (...args: never[]) => Extract<ExpectedWorkspaceError, { _tag: Tag }> };
 
 export function isExpectedWorkspaceError(cause: unknown): cause is ExpectedWorkspaceError {
-  return Predicate.hasProperty(cause, '_tag') && Predicate.isString(cause._tag) && Object.hasOwn(expectedWorkspaceErrorTags, cause._tag);
+  return Object.values(expectedWorkspaceErrors).some((ExpectedError) => cause instanceof ExpectedError);
 }
 
 /** Narrows an unknown thrown value to an Error, so failures can be collected and re-thrown. */

@@ -15,6 +15,7 @@ describe('isExpectedWorkspaceError', () => {
 
   it.each([
     ['a plain Error with a declared message', new Error('Working CSV is closing.')],
+    ['a plain object with a declared tag', { _tag: 'WorkspaceRequestError', message: 'PRIVATE detail' }],
     ['an undeclared tag', { _tag: 'ComparisonCleanupError', message: 'cleanup' }],
     ['a non-string tag', { _tag: 1 }],
     ['an inherited tag name', { _tag: 'toString' }],
