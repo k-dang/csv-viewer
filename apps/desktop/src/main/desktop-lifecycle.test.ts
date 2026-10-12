@@ -1,6 +1,6 @@
 import type { ConfirmWorkspaceCloseOutcome, WorkspaceCloseImpact } from '@csv-viewer/workspace/csv-viewer';
-import { Deferred, Effect, Exit, Fiber } from 'effect';
-import { TestClock } from 'effect/testing';
+import { Deferred, Effect, Exit, Fiber, Logger } from 'effect';
+import { TestClock, TestConsole } from 'effect/testing';
 import { expect, it, vi } from '@effect/vitest';
 import { DesktopLifecycle, WindowWorkspace, type DocumentWorkspace } from './desktop-lifecycle';
 
@@ -15,7 +15,7 @@ it.effect('shares one confirmation between window close and quit and allows a fr
   const confirmClose = vi.fn(async (): Promise<ConfirmWorkspaceCloseOutcome> => ({ status: 'confirmation-required', impact }));
   const dispose = vi.fn(async () => {});
   const prompt = vi.fn(() => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(answer))));
-  const lifecycle = new DesktopLifecycle({ confirmClose, dispose }, prompt);
+  const lifecycle = new DesktopLifecycle({ confirmClose, dispose }, prompt, () => undefined);
 
   const close = yield* Effect.forkScoped(lifecycle.requestClose());
   yield* Deferred.await(entered);
@@ -39,7 +39,7 @@ it.effect('rechecks a close impact that changed during the prompt, then disposes
     confirmed === changed ? { status: 'ready' } : { status: 'confirmation-required', impact: confirmed ? changed : impact });
   const dispose = vi.fn(async () => {});
   const prompt = vi.fn(() => Effect.succeed(true));
-  const lifecycle = new DesktopLifecycle({ confirmClose, dispose }, prompt);
+  const lifecycle = new DesktopLifecycle({ confirmClose, dispose }, prompt, () => undefined);
 
   expect(yield* lifecycle.requestClose()).toBe('disposed');
   expect(prompt.mock.calls).toEqual([[impact], [changed]]);
@@ -56,7 +56,7 @@ it.effect('settles every waiter after a prompt failure and permits retry', () =>
   const lifecycle = new DesktopLifecycle({
     confirmClose: async () => ({ status: 'confirmation-required', impact }),
     dispose: async () => {},
-  }, () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(answer))));
+  }, () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(answer))), () => undefined);
   const close = yield* Effect.forkScoped(lifecycle.requestClose());
   yield* Deferred.await(entered);
   const quit = yield* Effect.forkScoped(lifecycle.requestClose(), { startImmediately: true });
@@ -66,30 +66,62 @@ it.effect('settles every waiter after a prompt failure and permits retry', () =>
   expect(yield* Effect.exit(lifecycle.requestClose())).toEqual(Exit.fail(failure));
 }));
 
-it.effect('keeps a close waiting for the one disposal however long the release takes', () => Effect.gen(function* () {
+it.effect('returns normally when disposal finishes before 60 seconds and force-exits after logging when it does not', () => Effect.gen(function* () {
+  const watched = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+    Effect.provide(Logger.layer([Logger.consoleLogFmt])),
+  );
+  const releaseUnfinished = function* () {
+    const lines = [...(yield* TestConsole.logLines), ...(yield* TestConsole.errorLines)].map(String);
+    return lines.some((line) => line.includes('message=workspace.release-unfinished') && line.includes('outcome=failed'));
+  };
+
   const entered = Promise.withResolvers<void>();
   const cleanup = Promise.withResolvers<void>();
   const dispose = vi.fn(() => { entered.resolve(); return cleanup.promise; });
+  const forceExit = vi.fn();
   const lifecycle = new DesktopLifecycle({
     confirmClose: async () => ({ status: 'ready' }), dispose,
-  }, () => Effect.succeed(true));
-  const quit = yield* Effect.forkScoped(lifecycle.requestClose());
+  }, () => Effect.succeed(true), forceExit);
+  const quit = yield* Effect.forkScoped(watched(lifecycle.requestClose()));
   yield* Effect.addFinalizer(() => Effect.sync(() => cleanup.resolve()));
   yield* Effect.promise(() => entered.promise);
-  const second = yield* Effect.forkScoped(lifecycle.requestClose(), { startImmediately: true });
-  yield* TestClock.adjust('1 minute');
+  const second = yield* Effect.forkScoped(watched(lifecycle.requestClose()), { startImmediately: true });
+  yield* TestClock.adjust('59 seconds');
   expect(quit.pollUnsafe()).toBeUndefined();
+  expect(forceExit).not.toHaveBeenCalled();
+  expect(yield* releaseUnfinished()).toBe(false);
   cleanup.resolve();
   expect(yield* Fiber.join(quit)).toBe('disposed');
   expect(yield* Fiber.join(second)).toBe('disposed');
   expect(dispose).toHaveBeenCalledTimes(1);
+  yield* TestClock.adjust('1 minute');
+  expect(forceExit).not.toHaveBeenCalled();
+  expect(yield* releaseUnfinished()).toBe(false);
+
+  const hungEntered = Promise.withResolvers<void>();
+  const hungCleanup = Promise.withResolvers<void>();
+  const hungDispose = vi.fn(() => { hungEntered.resolve(); return hungCleanup.promise; });
+  const hungExit = vi.fn();
+  const hung = new DesktopLifecycle({
+    confirmClose: async () => ({ status: 'ready' }), dispose: hungDispose,
+  }, () => Effect.succeed(true), hungExit);
+  const waiting = yield* Effect.forkScoped(watched(hung.requestClose()));
+  yield* Effect.addFinalizer(() => Effect.sync(() => hungCleanup.resolve()));
+  yield* Effect.promise(() => hungEntered.promise);
+  const alsoWaiting = yield* Effect.forkScoped(watched(hung.requestClose()), { startImmediately: true });
+  yield* TestClock.adjust('1 minute');
+  expect(yield* Fiber.join(waiting)).toBe('forced');
+  expect(yield* Fiber.join(alsoWaiting)).toBe('forced');
+  expect(hungExit.mock.calls).toEqual([[1]]);
+  expect(hungDispose).toHaveBeenCalledTimes(1);
+  expect(yield* releaseUnfinished()).toBe(true);
 }));
 
 it.effect('reports a failed disposal so quit can exit with failure', () => Effect.gen(function* () {
   const lifecycle = new DesktopLifecycle({
     confirmClose: async () => ({ status: 'ready' }),
     dispose: async () => { throw new Error('release failed'); },
-  }, () => Effect.succeed(true));
+  }, () => Effect.succeed(true), () => undefined);
   expect(yield* lifecycle.requestClose()).toBe('failed');
 }));
 
@@ -106,7 +138,7 @@ function documentWorkspaces(events: string[], prompt: () => Effect.Effect<boolea
     };
     return Promise.resolve<DocumentWorkspace>({
       workspace,
-      lifecycle: new DesktopLifecycle(workspace, () => prompt().pipe(Effect.tap((answer) => Effect.sync(() => events.push(`prompt ${id}: ${answer}`))))),
+      lifecycle: new DesktopLifecycle(workspace, () => prompt().pipe(Effect.tap((answer) => Effect.sync(() => events.push(`prompt ${id}: ${answer}`)))), () => undefined),
       detach: () => { events.push(`detach ${id}`); },
     });
   };

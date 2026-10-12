@@ -1,9 +1,9 @@
 import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
 import type { WorkspaceCloseImpact } from '@csv-viewer/workspace/csv-viewer';
 import { toError } from '@csv-viewer/workspace/errors';
-import { Deferred, Effect, Exit } from 'effect';
+import { Deferred, Effect, Exit, Logger } from 'effect';
 
-export type CloseOutcome = 'cancelled' | 'disposed' | 'failed';
+export type CloseOutcome = 'cancelled' | 'disposed' | 'failed' | 'forced';
 
 /** Ends one document's workspace: confirms its close impact, then disposes it. */
 export class DesktopLifecycle {
@@ -13,6 +13,7 @@ export class DesktopLifecycle {
   constructor(
     private readonly workspace: Pick<CsvWorkspaceOwner, 'confirmClose' | 'dispose'>,
     private readonly prompt: (impact: WorkspaceCloseImpact) => Effect.Effect<boolean, Error>,
+    private readonly forceExit: (code: number) => void,
   ) {}
 
   /** Window close and quit share one request. A cancelled or failed request permits another. */
@@ -25,11 +26,23 @@ export class DesktopLifecycle {
     this.closing = closing;
     return yield* Effect.gen({ self: this }, function* () {
       if (!(yield* this.confirmClose())) return 'cancelled' as const;
-      // The window closes, or the process exits, only once the database release settles.
-      const released = yield* Effect.exit(Effect.tryPromise({ try: () => this.workspace.dispose(), catch: toError }));
+      // Interrupting this wait does not cancel dispose(). The release keeps running until the process exits.
+      const released = yield* Effect.exit(Effect.tryPromise({
+        try: () => this.workspace.dispose(), catch: toError,
+      }).pipe(
+        Effect.as('disposed' as const),
+        Effect.timeoutOrElse({
+          duration: '60 seconds',
+          orElse: () => Effect.logInfo('workspace.release-unfinished').pipe(
+            Effect.annotateLogs({ outcome: 'failed' }),
+            Effect.andThen(Effect.sync(() => this.forceExit(1))),
+            Effect.as('forced' as const),
+          ),
+        }),
+      ));
       if (Exit.isFailure(released)) return 'failed' as const;
-      this.disposed = true;
-      return 'disposed' as const;
+      if (released.value === 'disposed') this.disposed = true;
+      return released.value;
     }).pipe(
       Effect.onExit((exit) => Deferred.done(closing, exit)),
       Effect.ensuring(Effect.sync(() => { this.closing = null; })),
@@ -91,7 +104,9 @@ export class WindowWorkspace {
     const closing = this.current;
     if (!closing) return 'disposed';
     const owned = await closing;
-    const outcome = await Effect.runPromise(owned.lifecycle.requestClose());
+    const outcome = await Effect.runPromise(owned.lifecycle.requestClose().pipe(
+      Effect.provide(Logger.layer([Logger.consoleLogFmt])),
+    ));
     if (outcome === 'disposed' && this.current === closing) {
       owned.detach();
       this.current = null;

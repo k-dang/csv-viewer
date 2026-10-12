@@ -136,6 +136,7 @@ const createWindow = Effect.fnUntraced(function* () {
     void documentWorkspace.close().then((outcome) => {
       if (outcome === 'disposed' && !mainWindow.isDestroyed()) mainWindow.close();
       else if (outcome === 'failed') reportCloseFailure();
+      else if (outcome === 'forced') app.exit(1);
     }, reportCloseFailure);
   });
 
@@ -231,7 +232,7 @@ const documentWorkspace = new WindowWorkspace(async () => {
   const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost);
   const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
     try: () => confirmWorkspaceClose(impact), catch: toError,
-  }));
+  }), (code) => app.exit(code));
   return { workspace, lifecycle, detach: workspace.onEvent(sendEvent) };
 });
 
@@ -255,7 +256,7 @@ app.on('before-quit', (event) => {
     if (outcome === 'disposed') {
       quit.allowed = true;
       app.quit();
-    } else if (outcome === 'failed') {
+    } else if (outcome === 'failed' || outcome === 'forced') {
       app.exit(1);
     }
   }, () => {
