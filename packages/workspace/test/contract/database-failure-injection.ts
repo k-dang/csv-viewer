@@ -1,5 +1,7 @@
 import { Effect } from 'effect';
+import { csvInternalRowIdField } from '../../src/csv-viewer';
 import { DataEngineError, type WorkspaceDatabase } from '../../src/database';
+import { quoteIdentifier } from '../../src/query/csv-query';
 
 export function failNextExportPreparation(database: WorkspaceDatabase, failure: 'read' | 'serialization'): () => boolean {
   let released = false;
@@ -65,6 +67,16 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_working_')) return run(sql, values);
     database.run = run;
     return Effect.die(new Error('PRIVATE table cleanup failure'));
+  };
+}
+
+/** The next row window comes back from the real engine without its internal row identifiers. */
+export function corruptNextRowWindow(database: WorkspaceDatabase): void {
+  const read = database.readObjects.bind(database);
+  database.readObjects = (sql, values) => {
+    if (!sql.startsWith(`SELECT ${quoteIdentifier(csvInternalRowIdField)}, `)) return read(sql, values);
+    database.readObjects = read;
+    return read(sql, values).pipe(Effect.map((rows) => rows.map(({ [csvInternalRowIdField]: _rowId, ...row }) => row)));
   };
 }
 
