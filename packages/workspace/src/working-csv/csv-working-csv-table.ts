@@ -32,11 +32,12 @@ import {
 import {
   decodeEngineRow,
   decodeEngineRows,
+  decodeEngineCellRows,
   EngineCell,
+  EngineCellRow,
   EngineNonNegativeInt,
   EngineRowId,
   normalizeCellValue,
-  type EngineRow,
 } from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from './csv-storage-schema';
 import type { DataEngineError, WorkspaceDatabase, WorkspaceDatabaseConnection } from '../database';
@@ -244,8 +245,8 @@ export function readExportRows(
   connection: WorkspaceDatabaseConnection,
   tableName: string,
   columns: CsvColumn[],
-): Effect.Effect<EngineRow[], DataEngineError> {
-  return connection.readObjectsCancellable(buildExportRowsSql(tableName, columns));
+): Effect.Effect<ReadonlyArray<typeof EngineCellRow.Type>, DataEngineError> {
+  return connection.readObjectsCancellable(buildExportRowsSql(tableName, columns)).pipe(Effect.flatMap(decodeEngineCellRows));
 }
 
 export const runEditCommand = Effect.fnUntraced(function* (

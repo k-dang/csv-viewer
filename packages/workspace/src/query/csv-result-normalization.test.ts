@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from '@effect/vitest';
 import { csvInternalRowIdField } from '../csv-viewer';
-import { decodeEngineRow, decodeEngineRows, EngineCsvRow, EngineNonNegativeInt, normalizeRow, type EngineRow } from './csv-result-normalization';
+import { decodeEngineCellRows, decodeEngineRow, decodeEngineRows, EngineCsvRow, EngineNonNegativeInt, normalizeRow, type EngineRow } from './csv-result-normalization';
 
 const decodeCsvRows = decodeEngineRows(EngineCsvRow);
 const decodeCount = decodeEngineRow(Schema.Struct({ count: EngineNonNegativeInt }));
@@ -45,6 +45,17 @@ describe('engine row decoding', () => {
     ['an extra aggregate row', [{ count: 1n }, { count: 2n }]],
   ])('fails %s as DataEngineError', ([, rows]) => Effect.gen(function* () {
     const failure = yield* Effect.flip(decodeCount(rows));
+
+    expect(failure._tag).toBe('DataEngineError');
+  }));
+
+  it.effect.each<readonly [string, unknown]>([
+    ['an invalid Date', new Date(NaN)],
+    ['a struct', { name: 'Ada' }],
+    ['a list', ['Ada']],
+    ['a Map', new Map()],
+  ])('fails %s cell as DataEngineError', ([, cell]) => Effect.gen(function* () {
+    const failure = yield* Effect.flip(decodeEngineCellRows([{ name: cell }]));
 
     expect(failure._tag).toBe('DataEngineError');
   }));

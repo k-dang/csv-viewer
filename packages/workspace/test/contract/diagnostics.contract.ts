@@ -46,7 +46,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       } finally { await fixture.dispose(); }
     });
 
-    it.each(['read', 'serialization'] as const)('releases the export worker after a %s failure without marking edits exported', async (failure) => {
+    it.each(['read', 'malformed', 'defect'] as const)('releases the export worker after a %s failure without marking edits exported', async (failure) => {
       const capture = diagnosticCapture();
       const fixture = await factory.create(undefined, capture.configuration);
       try {
@@ -55,12 +55,12 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         const exported = fixture.captureNextExport('exported.csv');
         const released = fixture.failNextExportPreparation(failure);
         await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow(
-          failure === 'read' ? 'The data engine could not complete the operation.' : 'The CSV workspace could not complete the request.',
+          failure === 'defect' ? 'The CSV workspace could not complete the request.' : 'The data engine could not complete the operation.',
         );
         expect(released()).toBe(true);
         expect(await fixture.editState(workingCsvId)).toMatchObject({ hasUnexportedChanges: true, canUndo: true });
         expect(capture.completed().find((record) => record.message === 'csv.export')?.annotations).toMatchObject({
-          outcome: 'failed', cleanup: 'succeeded', failureCategory: failure === 'read' ? 'recoverable-failure' : 'defect',
+          outcome: 'failed', cleanup: 'succeeded', failureCategory: failure === 'defect' ? 'defect' : 'recoverable-failure',
         });
         await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).resolves.toMatchObject({ status: 'exported' });
         expect(await exported()).toBe('name\nGrace\n');

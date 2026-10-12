@@ -43,7 +43,7 @@ async function openWorkingCsv(fileName: string, contents: string) {
 }
 
 describe('Working CSV store invariants', () => {
-  it.effect.each(['read', 'serialization'] as const)('retains a %s failure alongside worker cleanup failure and retries cleanup', (failure) => Effect.gen(function* () {
+  it.effect.each(['read', 'defect'] as const)('retains a %s failure alongside worker cleanup failure and retries cleanup', (failure) => Effect.gen(function* () {
     const { workingCsvId } = yield* Effect.promise(() => openWorkingCsv('export-failures.csv', 'name\nAda\n'));
     yield* Effect.addFinalizer(() => store.disposeStore().pipe(Effect.orDie));
     yield* store.editCell({ workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
@@ -57,7 +57,7 @@ describe('Working CSV store invariants', () => {
     expect(failures).toMatchObject(failure === 'read'
       ? [{ cause: { message: 'PRIVATE export read failure' } }, { cause: { message: 'PRIVATE export release failure' } }]
       : [{ cause: { message: 'PRIVATE export release failure' } }]);
-    expect(Cause.hasDies(exit.cause)).toBe(failure === 'serialization');
+    expect(Cause.hasDies(exit.cause)).toBe(failure === 'defect');
     expect((yield* store.getEditState({ workingCsvId })).hasUnexportedChanges).toBe(true);
     expect(fixture.prompts.defaultExportPaths).toEqual([]);
     expect(closed()).toBe(false);

@@ -18,6 +18,7 @@ import {
 
 import type { WorkspaceDiagnostics } from '../../src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
+import type { ExportPreparationFailure } from './database-failure-injection';
 
 /**
  * User-observable setup around CsvViewer. Engine-specific source and export mechanics stay in the
@@ -37,7 +38,7 @@ export interface WorkspaceContractFixture {
   /** Fail the next export worker's first `failures` close attempts without closing it; return whether it has since closed. */
   failNextExportWorkerRelease(failures: number): () => boolean;
   /** Fail export preparation and return whether its worker connection has closed. */
-  failNextExportPreparation(failure: 'read' | 'serialization'): () => boolean;
+  failNextExportPreparation(failure: ExportPreparationFailure): () => boolean;
   /** Fail one temporary engine source release. */
   failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */

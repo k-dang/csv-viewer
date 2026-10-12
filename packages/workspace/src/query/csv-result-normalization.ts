@@ -3,20 +3,15 @@ import type { CsvCellValue, CsvRow } from '../csv-viewer';
 import { csvInternalRowIdField } from '../csv-viewer';
 import { DataEngineError } from '../database';
 
-export type EngineCellValue =
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | Uint8Array
-  | Date
-  | ReadonlyArray<EngineCellValue>
-  | { readonly [key: string]: EngineCellValue };
+// A row as the engine returns it. Values are unchecked until one of the decoders below accepts them.
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type
+export type EngineRow = { readonly [column: string]: unknown };
 
-export type EngineRow = Record<string, EngineCellValue>;
-
-export const EngineCell: Schema.Codec<EngineCellValue> = Schema.Union([
+/**
+ * One scalar result value. Working CSV tables hold VARCHAR cells and no query selects nested
+ * values, so a list, struct, or invalid Date fails decoding rather than becoming an object.
+ */
+export const EngineCell = Schema.Union([
   Schema.Null,
   Schema.Boolean,
   Schema.Number,
@@ -24,9 +19,9 @@ export const EngineCell: Schema.Codec<EngineCellValue> = Schema.Union([
   Schema.String,
   Schema.Uint8Array,
   Schema.Date,
-  Schema.Array(Schema.suspend((): Schema.Codec<EngineCellValue> => EngineCell)),
-  Schema.Record(Schema.String, Schema.suspend((): Schema.Codec<EngineCellValue> => EngineCell)),
 ]);
+
+export type EngineCellValue = typeof EngineCell.Type;
 
 /** A BIGINT or INTEGER result, which drivers return as either a bigint or a number. */
 export const EngineNonNegativeInt = Schema.Union([Schema.Number, Schema.BigInt]).pipe(Schema.decodeTo(
@@ -35,6 +30,8 @@ export const EngineNonNegativeInt = Schema.Union([Schema.Number, Schema.BigInt])
 ));
 
 export const EngineRowId = Schema.NonEmptyString;
+
+export const EngineCellRow = Schema.Record(Schema.String, EngineCell);
 
 /** A Working CSV row: its internal identifier plus one engine value per projected column. */
 export const EngineCsvRow = Schema.StructWithRest(
@@ -51,6 +48,8 @@ export function decodeEngineRows<S extends Schema.Decoder<unknown>>(row: S) {
   return (rows: readonly EngineRow[]): Effect.Effect<ReadonlyArray<S['Type']>, DataEngineError> =>
     decode(rows).pipe(Effect.mapError((cause) => new DataEngineError({ cause })));
 }
+
+export const decodeEngineCellRows = decodeEngineRows(EngineCellRow);
 
 /** Decodes a result set that must hold exactly one row, such as an aggregate. */
 export function decodeEngineRow<S extends Schema.Decoder<unknown>>(row: S) {

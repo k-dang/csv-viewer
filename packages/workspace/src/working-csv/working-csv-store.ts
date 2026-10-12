@@ -41,6 +41,7 @@ import {
   requireKnownColumn,
 } from '../query/csv-query';
 import {
+  decodeEngineCellRows,
   decodeEngineRow,
   decodeEngineRows,
   EngineCell,
@@ -767,7 +768,7 @@ class WorkingCsvStore implements WorkingCsvs {
         const connection = yield* Effect.acquireRelease(this.database.connectWorker(), (worker) =>
           this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => { releaseFailure = error; }))),
         );
-        const rows = yield* connection.readObjectsCancellable(query.sql, query.values);
+        const rows = yield* connection.readObjectsCancellable(query.sql, query.values).pipe(Effect.flatMap(decodeEngineCellRows));
         return {
           sourceId: state.sourceId,
           suggestedName: metadata.source.name.replace(/(\.[^.]+)$/, '-view$1'),
