@@ -1,5 +1,5 @@
 import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure } from './workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Schema, type Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { makeWorkspaceLayer } from './workspace-runtime';
 import { DatabaseReleaseError, stoppedEngineMessage, type DataEngineError, type OpenWorkspaceDatabase } from './database';
@@ -34,7 +34,12 @@ function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
   return request.operation === 'csv.export' || request.operation === 'csv.export-view';
 }
 type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>>;
-type WorkspaceRuntime = ManagedRuntime.ManagedRuntime<WorkspaceServices, Layer.Error<ReturnType<typeof makeWorkspaceLayer>>>;
+
+/** Disposal closes the build scope. Forked fibers live in a child of that scope, so closing it interrupts them. */
+interface WorkspaceRuntime {
+  readonly disposeEffect: Effect.Effect<void>;
+  runFork<A, E>(effect: Effect.Effect<A, E, WorkspaceServices>): Fiber.Fiber<A, E>;
+}
 
 /** The opaque identifiers a request carries. Diagnostics drop anything that is not a UUID. */
 const RequestIdentifiers = Schema.Struct({
@@ -88,13 +93,17 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   ): Promise<CsvWorkspaceImplementation> {
     const workspaceId = crypto.randomUUID();
     const layer = makeWorkspaceLayer(openDatabase, host, executor, diagnostics, startup?.stopped);
-    const runtime = ManagedRuntime.make(Layer.effectContext(Layer.build(layer).pipe(Effect.annotateSpans({ workspaceId }))));
+    // Acquisition runs on this fiber so startup cancellation interrupts it. A forked build would
+    // only be awaited, and a driver failure would hide that interrupt in the diagnostics.
+    const scope = Scope.makeUnsafe('sequential');
+    const building = Layer.buildWithScope(layer, scope).pipe(Effect.annotateSpans({ workspaceId }));
     const build = startup
-      ? Effect.raceFirst(runtime.contextEffect, Deferred.await(startup.stopped).pipe(Effect.andThen(Effect.fail(workspaceStoppedError()))))
-      : runtime.contextEffect;
+      ? Effect.raceFirst(building, Deferred.await(startup.stopped).pipe(Effect.andThen(Effect.fail(workspaceStoppedError()))))
+      : building;
     const built = await Effect.runPromiseExit(build, { signal: startup?.signal });
+    const disposeEffect = Scope.close(scope, Exit.void);
     // The release stage reports a failed release; startup rejects with why the build failed.
-    const disposeFailedStartup = () => Effect.runPromise(Effect.exit(runtime.disposeEffect));
+    const disposeFailedStartup = () => Effect.runPromise(Effect.exit(disposeEffect));
     if (Exit.isFailure(built)) {
       await disposeFailedStartup();
       throw Cause.squash(built.cause);
@@ -103,7 +112,15 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
       await disposeFailedStartup();
       throw workspaceStoppedError();
     }
-    const workspace = new CsvWorkspaceImplementation(workspaceId, runtime, built.value, startup?.stopped);
+    const context = built.value;
+    const fiberScope = Scope.forkUnsafe(scope, 'parallel');
+    const runtime: WorkspaceRuntime = {
+      disposeEffect,
+      runFork: (effect) => Effect.runFork(effect.pipe(Effect.provideContext(context)), {
+        onFiberStart: Fiber.runIn(fiberScope),
+      }),
+    };
+    const workspace = new CsvWorkspaceImplementation(workspaceId, runtime, context, startup?.stopped);
     if (startup) {
       // Disposal interrupts the watcher, so a started notification finishes first.
       runtime.runFork(Deferred.await(startup.stopped).pipe(
