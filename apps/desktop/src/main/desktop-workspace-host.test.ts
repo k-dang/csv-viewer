@@ -24,13 +24,15 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source no longer exists.' })));
   });
 
-  it('fails a rejected discard prompt as a request error without exposing what the prompt threw', async () => {
+  it('fails a rejected discard prompt as a request error that keeps what the prompt threw out of its message', async () => {
     const failure = new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE prompt failure.' });
     fixture.prompts.holdDiscardPrompt = async () => { throw failure; };
 
-    const exit = await Effect.runPromiseExit(fixture.host.confirmDiscardChanges('people.csv'));
+    const error = await Effect.runPromise(Effect.flip(fixture.host.confirmDiscardChanges('people.csv')));
 
-    expect(exit).toEqual(Exit.fail(new WorkspaceRequestError({ message: 'CSV Viewer could not show the dialog. Try again.' })));
+    expect(error).toBeInstanceOf(WorkspaceRequestError);
+    expect(error).toMatchObject({ _tag: 'WorkspaceRequestError', message: 'CSV Viewer could not show the dialog. Try again.' });
+    expect(error.cause).toBe(failure);
   });
 
   it('classifies an export filesystem failure without exposing the destination path', async () => {

@@ -2,8 +2,8 @@ import { Data, Predicate } from 'effect';
 import type { DataEngineError } from './database';
 import type { CsvSourceUnavailableError } from './workspace-host';
 
-/** A deliberate request rejection whose message is safe to show to the user. */
-export class WorkspaceRequestError extends Data.TaggedError('WorkspaceRequestError')<{ message: string }> {}
+/** A deliberate request rejection whose message is safe to show to the user. `cause` is never shown. */
+export class WorkspaceRequestError extends Data.TaggedError('WorkspaceRequestError')<{ message: string; cause?: unknown }> {}
 
 /** A CSV Source that could not become a Working CSV, with product guidance and a diagnostic category. */
 export class CsvOpenError extends Data.TaggedError('CsvOpenError')<{

@@ -336,7 +336,7 @@ function toExportDestinationError(cause: NodeJS.ErrnoException): CsvSourceUnavai
 function promptEffect<A>(prompt: () => Promise<A>): Effect.Effect<A, WorkspaceRequestError> {
   return Effect.tryPromise({
     try: prompt,
-    catch: () => new WorkspaceRequestError({ message: 'CSV Viewer could not show the dialog. Try again.' }),
+    catch: (cause) => new WorkspaceRequestError({ message: 'CSV Viewer could not show the dialog. Try again.', cause }),
   });
 }
 
