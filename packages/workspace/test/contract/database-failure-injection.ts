@@ -1,7 +1,12 @@
 import { Effect } from 'effect';
+import { csvInternalRowIdField } from '../../src/csv-viewer';
 import { DataEngineError, type WorkspaceDatabase } from '../../src/database';
+import { quoteIdentifier } from '../../src/query/csv-query';
 
-export function failNextExportPreparation(database: WorkspaceDatabase, failure: 'read' | 'serialization'): () => boolean {
+export type ExportPreparationFailure = 'read' | 'malformed' | 'defect';
+
+/** `malformed` returns an invalid Date cell; `defect` returns a cell that throws when it is read. */
+export function failNextExportPreparation(database: WorkspaceDatabase, failure: ExportPreparationFailure): () => boolean {
   let released = false;
   const connect = database.connectWorker.bind(database);
   database.connectWorker = () => {
@@ -10,9 +15,12 @@ export function failNextExportPreparation(database: WorkspaceDatabase, failure: 
       const read = connection.readObjectsCancellable.bind(connection);
       connection.readObjectsCancellable = (sql, values) => failure === 'read'
         ? Effect.fail(new DataEngineError({ cause: new Error('PRIVATE export read failure') }))
-        : read(sql, values).pipe(Effect.map((rows) => {
-          rows[0][Object.keys(rows[0])[0]] = new Date(NaN);
-          return rows;
+        : read(sql, values).pipe(Effect.map(([first, ...rest]) => {
+          const column = Object.keys(first)[0];
+          const corrupted = failure === 'malformed'
+            ? { ...first, [column]: new Date(NaN) }
+            : Object.defineProperty({ ...first }, column, { enumerable: true, get: () => { throw new Error('PRIVATE export cell defect'); } });
+          return [corrupted, ...rest];
         }));
       const close = connection.close.bind(connection);
       connection.close = () => close().pipe(Effect.tap(() => Effect.sync(() => { released = true; })));
@@ -65,6 +73,16 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
     if (!sql.startsWith('DROP TABLE IF EXISTS "csv_working_')) return run(sql, values);
     database.run = run;
     return Effect.die(new Error('PRIVATE table cleanup failure'));
+  };
+}
+
+/** The next row window comes back from the real engine without its internal row identifiers. */
+export function corruptNextRowWindow(database: WorkspaceDatabase): void {
+  const read = database.readObjects.bind(database);
+  database.readObjects = (sql, values) => {
+    if (!sql.startsWith(`SELECT ${quoteIdentifier(csvInternalRowIdField)}, `)) return read(sql, values);
+    database.readObjects = read;
+    return read(sql, values).pipe(Effect.map((rows) => rows.map(({ [csvInternalRowIdField]: _rowId, ...row }) => row)));
   };
 }
 

@@ -108,8 +108,7 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
 
   async readRows(sql: string, values?: QueryValues): Promise<EngineRow[]> {
     const table = await this.query(sql, values);
-    // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
-    return table.toArray().map((row) => row.toJSON() as EngineRow);
+    return table.toArray().map((row) => row.toJSON());
   }
 
   private async query(sql: string, values?: QueryValues) {
@@ -141,8 +140,7 @@ class DuckDbWasmConnection implements WorkspaceDatabaseConnection {
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
             if (isCancelled()) return rows;
           }
-          // SAFETY: Arrow's toJSON returns own fields whose recursive values match EngineCellValue.
-          rows.push(row.toJSON() as EngineRow);
+          rows.push(row.toJSON());
         }
       }
       return rows;

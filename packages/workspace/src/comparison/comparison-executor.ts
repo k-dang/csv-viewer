@@ -1,4 +1,4 @@
-import { Context, type Effect, type Scope } from 'effect';
+import { Context, type Array as Arr, type Effect, type Scope } from 'effect';
 import type { DataEngineError } from '../database';
 import type { WorkspaceRequestError } from '../errors';
 import type {
@@ -17,7 +17,7 @@ export type CreateComparisonSnapshotRequest = {
   comparisonId: ComparisonId;
   baselineId: WorkingCsvId;
   candidateId: WorkingCsvId;
-  key: string[];
+  key: Arr.NonEmptyReadonlyArray<string>;
   valueColumns: string[];
 };
 
@@ -41,7 +41,7 @@ export type StoredComparisonWindow = {
 export interface ComparisonAttemptExecutor {
   validateKey(
     workingCsvId: WorkingCsvId,
-    key: string[],
+    key: Arr.NonEmptyReadonlyArray<string>,
   ): Effect.Effect<SourceKeyDiagnostics, DataEngineError | WorkspaceRequestError>;
   createSnapshot(request: CreateComparisonSnapshotRequest): Effect.Effect<ComparisonSummary, DataEngineError | WorkspaceRequestError>;
 }

@@ -18,6 +18,9 @@ import {
 
 import type { WorkspaceDiagnostics } from '../../src/workspace-diagnostics';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
+import type { WorkspaceRequestError } from '../../src/errors';
+import type { CsvSourceUnavailableError } from '../../src/workspace-host';
+import type { ExportPreparationFailure } from './database-failure-injection';
 
 /**
  * User-observable setup around CsvViewer. Engine-specific source and export mechanics stay in the
@@ -37,7 +40,9 @@ export interface WorkspaceContractFixture {
   /** Fail the next export worker's first `failures` close attempts without closing it; return whether it has since closed. */
   failNextExportWorkerRelease(failures: number): () => boolean;
   /** Fail export preparation and return whether its worker connection has closed. */
-  failNextExportPreparation(failure: 'read' | 'serialization'): () => boolean;
+  failNextExportPreparation(failure: ExportPreparationFailure): () => boolean;
+  /** Fail the next engine source acquisition, after the source was described, with a declared host failure. */
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void;
   /** Fail one temporary engine source release. */
   failNextEngineSourceRelease(): void;
   /** Fail one owner connection close after the connection closes; the engine release still runs. */
@@ -48,6 +53,8 @@ export interface WorkspaceContractFixture {
   failNextDescribeSource(): void;
   /** Fail one Comparison snapshot deletion as a declared failure or defect; later cleanup uses the real driver. */
   failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void>;
+  /** Strip the internal row identifiers from the next row window the engine returns. */
+  corruptNextRowWindow(): void;
   holdNextRowRead(): { entered: Promise<void>; release: () => void };
   /** Hold the next export's row read until released. */
   holdNextExportRead(): { entered: Promise<void>; release: () => void };

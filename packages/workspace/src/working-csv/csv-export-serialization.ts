@@ -1,6 +1,6 @@
 import type { CsvColumn } from '../csv-viewer';
 import { Effect } from 'effect';
-import { normalizeCellValue, type EngineRow } from '../query/csv-result-normalization';
+import { normalizeCellValue, type EngineCellRow } from '../query/csv-result-normalization';
 
 /**
  * Serializes Working CSV rows to exported CSV text. Export serialization stays in shared
@@ -14,7 +14,7 @@ export function serializeCsvExport({
   header,
 }: {
   columns: CsvColumn[];
-  rows: EngineRow[];
+  rows: ReadonlyArray<typeof EngineCellRow.Type>;
   delimiter: string;
   header: boolean;
 }): string {

@@ -78,7 +78,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   }
 
   acquireSource() {
-    return Effect.promise(() => this.prompts.chooseSource()).pipe(
+    return promptEffect(() => this.prompts.chooseSource()).pipe(
       Effect.flatMap((filePath) => filePath ? this.registerSource(filePath) : Effect.succeed(null)),
     );
   }
@@ -128,16 +128,16 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     const source = yield* this.requireSource(request.sourceId);
     const defaultPath = path.join(path.dirname(source.filePath), request.kind === 'view' ? request.suggestedName : buildDefaultExportName(request.suggestedName));
     while (true) {
-      const destinationPath = yield* Effect.promise(() => this.prompts.chooseExportDestination(defaultPath));
+      const destinationPath = yield* promptEffect(() => this.prompts.chooseExportDestination(defaultPath));
       if (!destinationPath) return { status: 'cancelled' } satisfies CsvExportDelivery;
       const conflicts = yield* filesystemEffect(() => isSourceDestination(source, destinationPath)).pipe(Effect.mapError(toExportDestinationError));
       if (conflicts) {
-        yield* Effect.promise(() => this.prompts.showSourceConflict());
+        yield* promptEffect(() => this.prompts.showSourceConflict());
         continue;
       }
       const published = yield* filesystemEffect(() => publishExport(source, destinationPath, request.contents, this.writeExport)).pipe(Effect.mapError(toExportDestinationError));
       if (!published) {
-        yield* Effect.promise(() => this.prompts.showSourceConflict());
+        yield* promptEffect(() => this.prompts.showSourceConflict());
         continue;
       }
       return { status: 'delivered' } satisfies CsvExportDelivery;
@@ -202,7 +202,7 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   });
 
   confirmDiscardChanges(sourceName: string) {
-    return Effect.promise(() => this.prompts.confirmDiscardChanges(sourceName));
+    return promptEffect(() => this.prompts.confirmDiscardChanges(sourceName));
   }
 
   private requireSource(sourceId: CsvSourceId) {
@@ -330,6 +330,14 @@ function toExportDestinationError(cause: NodeJS.ErrnoException): CsvSourceUnavai
     return new CsvSourceUnavailableError({ code: 'permission-denied', message: 'Permission was denied for the export destination.' });
   }
   return new CsvSourceUnavailableError({ code: 'unreadable', message: 'The export destination could not be accessed.' });
+}
+
+/** A native dialog that cannot be shown rejects the request with a message the user can act on. */
+function promptEffect<A>(prompt: () => Promise<A>): Effect.Effect<A, WorkspaceRequestError> {
+  return Effect.tryPromise({
+    try: prompt,
+    catch: (cause) => new WorkspaceRequestError({ message: 'CSV Viewer could not show the dialog. Try again.', cause }),
+  });
 }
 
 /** Only Node filesystem errors are expected at this platform boundary; other exceptions are defects. */

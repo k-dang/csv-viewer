@@ -22,6 +22,7 @@ import type {
 } from '../../../../packages/workspace/src/csv-viewer';
 import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
+import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
 import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
@@ -35,7 +36,7 @@ import {
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { corruptNextRowWindow, failNextExportPreparation, type ExportPreparationFailure, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
@@ -253,11 +254,15 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
   failNextCsvLoad(): void { failNextCsvLoad(this.database); }
 
-  failNextExportPreparation(failure: 'read' | 'serialization') { return failNextExportPreparation(this.database, failure); }
+  failNextExportPreparation(failure: ExportPreparationFailure) { return failNextExportPreparation(this.database, failure); }
 
   failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void {
+    const host: CsvWorkspaceHost = this.host;
+    vi.spyOn(host, 'acquireEngineSource').mockImplementationOnce(() => Effect.fail(failure));
+  }
   failNextEngineSourceRelease(): void {
     const original = this.database.dropFile.bind(this.database);
     this.database.dropFile = () => Effect.suspend(() => {
@@ -294,6 +299,7 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
 
   failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void> { return failNextSnapshotDrop(this.database, mode); }
 
+  corruptNextRowWindow(): void { corruptNextRowWindow(this.database); }
   holdNextRowRead() { return holdNextRowRead(this.database); }
   holdNextExportRead() { return holdNextExportRead(this.database); }
 

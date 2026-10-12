@@ -91,6 +91,13 @@ describe('CsvViewer Electron request bridge', () => {
       ok: false, message: 'The CSV workspace could not complete the request.',
     });
 
+    const lookAlikeAcquire = () => Effect.fail({ _tag: 'WorkspaceRequestError', message: 'PRIVATE look-alike detail' });
+    // SAFETY: Deliberately fails with a plain object that only imitates a declared error's tag.
+    registerDroppedSourceHandler(ipc, lookAlikeAcquire as never);
+    await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
+      ok: false, message: 'The CSV workspace could not complete the request.',
+    });
+
     registerDroppedSourceHandler(ipc, () => Effect.die(new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE unexpected source error.' })));
     await expect(handler(ipcEvent, missingPath)).resolves.toEqual({
       ok: false, message: 'The CSV workspace could not complete the request.',

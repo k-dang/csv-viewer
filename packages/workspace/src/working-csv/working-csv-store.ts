@@ -1,7 +1,7 @@
 import { DataEngineError, WorkspaceDatabase, type WorkspaceDatabaseConnection } from '../database';
-import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Result, Semaphore, type Scope, type Types } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Predicate, Result, Schema, Semaphore, type Scope, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
-import { WorkspaceRequestError } from '../errors';
+import { CsvOpenError, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
 import type {
   CsvCellEditRequest,
@@ -40,7 +40,16 @@ import {
   maxRowWindowLimit,
   requireKnownColumn,
 } from '../query/csv-query';
-import { normalizeCellValue, normalizeCount, normalizeRow } from '../query/csv-result-normalization';
+import {
+  decodeEngineCellRows,
+  decodeEngineRow,
+  decodeEngineRows,
+  EngineCell,
+  EngineCsvRow,
+  EngineNonNegativeInt,
+  normalizeCellValue,
+  normalizeRow,
+} from '../query/csv-result-normalization';
 import {
   applyCellValue,
   applyRowDeletion,
@@ -58,10 +67,20 @@ import {
 } from './csv-working-csv-table';
 import { csvDeletedField, csvHiddenColumnPrefix, csvSourceOrderField, hiddenCsvColumnName } from './csv-storage-schema';
 import { DuckDbComparisonExecutor } from '../comparison/duckdb-comparison-executor';
-import { CsvSourceUnavailableError, CsvWorkspaceHost } from '../workspace-host';
+import { CsvWorkspaceHost, type CsvSourceUnavailableError } from '../workspace-host';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 type WorkingCsvOperationError = WorkspaceRequestError | DataEngineError;
+
+const decodeFilteredRowCount = decodeEngineRow(Schema.Struct({ filtered_row_count: EngineNonNegativeInt }));
+const decodeCsvRows = decodeEngineRows(EngineCsvRow);
+const decodeColumnValueRows = decodeEngineRows(Schema.Struct({ column_value: EngineCell }));
+const decodeColumnValueCountRows = decodeEngineRows(Schema.Struct({
+  counted_value: EngineCell,
+  value_count: EngineNonNegativeInt,
+  scope_row_count: EngineNonNegativeInt,
+  percent_of_scope: Schema.Finite,
+}));
 
 type WorkingCsvFailure = {
   code: 'open-failed' | 'replace-failed';
@@ -98,7 +117,7 @@ type TableLease = { count: number; released: Deferred.Deferred<void> };
 export interface WorkingCsvs {
   beginDisposal(): void;
   admit(): Effect.Effect<boolean, never, Scope.Scope>;
-  open(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenWorkingCsvOutcome, WorkspaceRequestError>;
+  open(sourceId: CsvSourceId, options?: CsvDialectOptions): Effect.Effect<OpenWorkingCsvOutcome, WorkspaceRequestError | CsvOpenError>;
   getState(workingCsvId: WorkingCsvId): WorkingCsvView | null;
   has(workingCsvId: WorkingCsvId): boolean;
   list(): WorkingCsvView[];
@@ -199,7 +218,7 @@ class WorkingCsvStore implements WorkingCsvs {
     this: WorkingCsvStore,
     sourceId: CsvSourceId,
     options: CsvDialectOptions = {},
-  ): Effect.fn.Return<OpenWorkingCsvOutcome, WorkspaceRequestError, Scope.Scope> {
+  ): Effect.fn.Return<OpenWorkingCsvOutcome, WorkspaceRequestError | CsvOpenError, Scope.Scope> {
     if (!(yield* this.admit())) {
       return { status: 'failed', failure: { code: 'open-failed', message: 'The CSV workspace is closing.', retryable: false } } satisfies OpenWorkingCsvOutcome;
     }
@@ -410,7 +429,7 @@ class WorkingCsvStore implements WorkingCsvs {
     const closes = yield* Effect.forEach([...this.workingCsvs.keys()], (workingCsvId) => Effect.exit(this.closeWorkingCsv(workingCsvId)));
     yield* Exit.asVoidAll(closes);
     if (this.tableLeases.size > 0) {
-      throw new Error('Working CSV source lease invariant violated during disposal.');
+      return yield* Effect.die(new Error('Working CSV source lease invariant violated during disposal.'));
     }
     for (const { tableName } of this.retiredSourceTables()) {
       yield* this.dropRetiredSourceTable(tableName);
@@ -455,13 +474,13 @@ class WorkingCsvStore implements WorkingCsvs {
         offset,
       }));
 
-      const [countRow] = yield* this.database.readObjects(query.countSql, query.values);
-      const rows = yield* this.database.readObjects(query.rowsSql, query.values);
+      const countRow = yield* this.database.readObjects(query.countSql, query.values).pipe(Effect.flatMap(decodeFilteredRowCount));
+      const rows = yield* this.database.readObjects(query.rowsSql, query.values).pipe(Effect.flatMap(decodeCsvRows));
 
       return {
         workingCsvId: state.metadata.workingCsvId,
         offset,
-        filteredRowCount: normalizeCount(countRow.filtered_row_count),
+        filteredRowCount: countRow.filtered_row_count,
         totalRowCount: state.metadata.rowCount,
         rows: rows.map(normalizeRow),
       };
@@ -478,7 +497,7 @@ class WorkingCsvStore implements WorkingCsvs {
         search: request.search ?? '',
         sort: request.sort ?? [],
       }));
-      const rows = yield* this.database.readObjects(query.sql, query.values);
+      const rows = yield* this.database.readObjects(query.sql, query.values).pipe(Effect.flatMap(decodeColumnValueRows));
 
       return {
         workingCsvId: state.metadata.workingCsvId,
@@ -499,8 +518,8 @@ class WorkingCsvStore implements WorkingCsvs {
         filters: request.filters ?? [],
         search: request.search ?? '',
       }));
-      const rows = yield* this.database.readObjects(query.sql, query.values);
-      const scopeRowCount = rows.length > 0 ? normalizeCount(rows[0].scope_row_count) : 0;
+      const rows = yield* this.database.readObjects(query.sql, query.values).pipe(Effect.flatMap(decodeColumnValueCountRows));
+      const scopeRowCount = rows.length > 0 ? rows[0].scope_row_count : 0;
 
       return {
         workingCsvId: metadata.workingCsvId,
@@ -508,8 +527,8 @@ class WorkingCsvStore implements WorkingCsvs {
         scopeRowCount,
         values: rows.map((row) => ({
           value: normalizeCellValue(row.counted_value),
-          count: normalizeCount(row.value_count),
-          percentOfScope: Number(row.percent_of_scope),
+          count: row.value_count,
+          percentOfScope: row.percent_of_scope,
         })),
       };
     }));
@@ -749,7 +768,7 @@ class WorkingCsvStore implements WorkingCsvs {
         const connection = yield* Effect.acquireRelease(this.database.connectWorker(), (worker) =>
           this.releaseExportWorker(worker).pipe(Effect.catch((error) => Effect.sync(() => { releaseFailure = error; }))),
         );
-        const rows = yield* connection.readObjectsCancellable(query.sql, query.values);
+        const rows = yield* connection.readObjectsCancellable(query.sql, query.values).pipe(Effect.flatMap(decodeEngineCellRows));
         return {
           sourceId: state.sourceId,
           suggestedName: metadata.source.name.replace(/(\.[^.]+)$/, '-view$1'),
@@ -823,7 +842,7 @@ class WorkingCsvStore implements WorkingCsvs {
     const dialect = yield* Effect.fromResult(validateDialectOptions(options));
     const description = yield* observeStage('csv.describe-source', this.host.describeSource(sourceId).pipe(Effect.mapError(normalizeOpenError)));
     if (!isSupportedCsvSourceName(description.name)) {
-      return yield* Effect.fail(new CsvOpenError('Unsupported file type. Choose a CSV, TSV, or text file.', 'source-access'));
+      return yield* Effect.fail(new CsvOpenError({ message: 'Unsupported file type. Choose a CSV, TSV, or text file.', category: 'source-access' }));
     }
     yield* observeStage('csv.prepare-table', this.database.ownerConnection().pipe(Effect.mapError(normalizeEngineError)));
     const tableName = buildWorkingCsvTableName(crypto.randomUUID());
@@ -1071,7 +1090,7 @@ function unavailable(message: string): ReplaceWorkingCsvOutcome {
 function recordOpenFailure(cause: Cause.Cause<unknown>) {
   const error = Cause.squash(cause);
   return recordOutcome('failed', cause).pipe(
-    Effect.andThen(error instanceof CsvOpenError ? Effect.annotateCurrentSpan('csvFailureCategory', error.category) : Effect.void),
+    Effect.andThen(isCsvOpenError(error) ? Effect.annotateCurrentSpan('csvFailureCategory', error.category) : Effect.void),
   );
 }
 
@@ -1165,7 +1184,7 @@ function validateDialectOptions(options: CsvDialectOptions): Result.Result<CsvDi
 
   if (options.delimiter !== undefined && options.delimiter !== '') {
     if (options.delimiter.length !== 1) {
-      return Result.fail(new CsvOpenError('Delimiter must be exactly one character.', 'dialect'));
+      return Result.fail(new CsvOpenError({ message: 'Delimiter must be exactly one character.', category: 'dialect' }));
     }
 
     dialect.delimiter = options.delimiter;
@@ -1187,16 +1206,12 @@ function buildWorkingCsvTableName(physicalTableId: string): string {
   return `${workingCsvTablePrefix}${physicalTableId.replaceAll('-', '_')}`;
 }
 
-/** A CSV Source error with product guidance and a diagnostic category. */
-class CsvOpenError extends WorkspaceRequestError {
-  constructor(message: string, readonly category: 'source-access' | 'dialect' | 'engine') {
-    super({ message });
-    this.name = 'CsvOpenError';
-  }
+function isCsvOpenError(cause: unknown): cause is CsvOpenError {
+  return Predicate.isTagged(cause, 'CsvOpenError');
 }
 
 function isDeclaredOpenFailure(cause: Cause.Cause<unknown>): boolean {
-  return cause.reasons.length === 1 && cause.reasons[0]._tag === 'Fail' && cause.reasons[0].error instanceof CsvOpenError;
+  return cause.reasons.length === 1 && cause.reasons[0]._tag === 'Fail' && isCsvOpenError(cause.reasons[0].error);
 }
 
 function normalizeRowIds(rowIds: readonly string[]): string[] {
@@ -1207,31 +1222,34 @@ function normalizeRowIds(rowIds: readonly string[]): string[] {
 function workingCsvFailure(code: WorkingCsvFailure['code'], cause: unknown): WorkingCsvFailure {
   return {
     code,
-    message: cause instanceof CsvOpenError ? cause.message : 'Unable to open CSV.',
+    message: isCsvOpenError(cause) ? cause.message : 'Unable to open CSV.',
     retryable: true,
   };
 }
 
+const sourceAccessMessages = {
+  'missing-source': 'Unable to open CSV: the file no longer exists.',
+  'permission-denied': 'Unable to open CSV: permission was denied for this file.',
+  unreadable: 'Unable to open CSV: the file could not be read.',
+} satisfies Record<CsvSourceUnavailableError['code'], string>;
+
 function normalizeOpenError(cause: WorkspaceRequestError | CsvSourceUnavailableError): CsvOpenError {
-  if (cause instanceof CsvOpenError) return cause;
-
-  if (cause instanceof CsvSourceUnavailableError) {
-    if (cause.code === 'missing-source') {
-      return new CsvOpenError('Unable to open CSV: the file no longer exists.', 'source-access');
+  switch (cause._tag) {
+    case 'CsvSourceUnavailableError':
+      return new CsvOpenError({ message: sourceAccessMessages[cause.code], category: 'source-access' });
+    case 'WorkspaceRequestError':
+      return new CsvOpenError({ message: 'Unable to open CSV.', category: 'source-access' });
+    default: {
+      const exhaustive: never = cause;
+      return exhaustive;
     }
-    if (cause.code === 'permission-denied') {
-      return new CsvOpenError('Unable to open CSV: permission was denied for this file.', 'source-access');
-    }
-    return new CsvOpenError('Unable to open CSV: the file could not be read.', 'source-access');
   }
-
-  return new CsvOpenError('Unable to open CSV.', 'source-access');
 }
 
 /** Keep driver details out of product messages and diagnostics. */
 function normalizeEngineError(cause: WorkspaceRequestError | DataEngineError | CsvSourceUnavailableError): CsvOpenError {
-  if (cause instanceof CsvOpenError || cause instanceof CsvSourceUnavailableError) {
-    return normalizeOpenError(cause);
+  if (cause._tag === 'DataEngineError') {
+    return new CsvOpenError({ message: 'Unable to read CSV: check the delimiter, quote, and header options for this file.', category: 'engine' });
   }
-  return new CsvOpenError('Unable to read CSV: check the delimiter, quote, and header options for this file.', 'engine');
+  return normalizeOpenError(cause);
 }

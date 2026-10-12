@@ -1,5 +1,5 @@
 import { observeStage, retainDiagnosticContext } from '../workspace-diagnostics';
-import { Deferred, Effect, Exit, Cause, type Scope } from 'effect';
+import { Deferred, Effect, Exit, Cause, Schema, type Array as Arr, type Scope } from 'effect';
 import { cleanupEffect } from './comparison-effects';
 import type {
   ComparisonRow,
@@ -25,9 +25,28 @@ import {
   quoteIdentifier,
   requireKnownColumn,
 } from '../query/csv-query';
-import { normalizeCellValue, normalizeCount, type EngineCellValue } from '../query/csv-result-normalization';
+import {
+  decodeEngineRow,
+  decodeEngineRows,
+  EngineCell,
+  EngineNonNegativeInt,
+  EngineRowId,
+  normalizeCellValue,
+} from '../query/csv-result-normalization';
 import { csvDeletedField, csvSourceOrderField } from '../working-csv/csv-storage-schema';
 import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
+
+const decodeCount = decodeEngineRow(Schema.Struct({ count: EngineNonNegativeInt }));
+const decodeRowIdRows = decodeEngineRows(Schema.Struct({ row_id: EngineRowId }));
+const ComparisonClassification = Schema.Literals(['changed', 'baseline-only', 'candidate-only', 'unchanged']);
+
+/** Requires the engine columns `${prefix}_0` through `${prefix}_${count - 1}`, each decoded by `field`. */
+function indexedColumns<P extends string, S extends Schema.Top>(prefix: P, count: number, field: S) {
+  return {
+    fields: Object.fromEntries(Array.from({ length: count }, (_value, index) => [`${prefix}_${index}`, field])),
+    record: Schema.Record(Schema.TemplateLiteral([`${prefix}_`, Schema.Number]), field),
+  };
+}
 
 export type ComparisonSource = {
   tableName: string;
@@ -70,7 +89,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       }),
     );
     return {
-      validateKey: (workingCsvId: WorkingCsvId, key: string[]) => this.validateKey(writer, workingCsvId, key),
+      validateKey: (workingCsvId: WorkingCsvId, key: Arr.NonEmptyReadonlyArray<string>) => this.validateKey(writer, workingCsvId, key),
       createSnapshot: (request: CreateComparisonSnapshotRequest) => this.createSnapshot(writer, request),
     };
   });
@@ -79,9 +98,8 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
     writer: WorkspaceDatabaseConnection,
     workingCsvId: WorkingCsvId,
-    key: string[],
+    key: Arr.NonEmptyReadonlyArray<string>,
   ): Effect.fn.Return<SourceKeyDiagnostics, DataEngineError | WorkspaceRequestError, Scope.Scope> {
-    if (key.length === 0) throw new Error('Comparison key requires at least one column.');
     const source = yield* this.database.acquireSource(workingCsvId);
     const known = new Set(source.columns.map((column) => column.name));
     for (const column of key) yield* Effect.fromResult(requireKnownColumn(column, known));
@@ -103,43 +121,51 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const keyOrder = key
       .map((column) => `${quoteIdentifier(column)} COLLATE "binary" ASC`)
       .join(', ');
-    const blankCountRows = yield* writer.readObjectsCancellable(
+    const keyCells = indexedColumns('key', key.length, EngineCell);
+    const keyStrings = indexedColumns('key', key.length, Schema.String);
+    const blankCount = yield* writer.readObjectsCancellable(
       `SELECT count(*)::BIGINT AS count FROM ${table} WHERE ${active} AND (${blank})`,
-    );
+    ).pipe(Effect.flatMap(decodeCount));
     const blankExampleRows = yield* writer.readObjectsCancellable(
       `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id, ${keyProjection} FROM ${table}
        WHERE ${active} AND (${blank}) ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
-    );
-    const duplicateCountRows = yield* writer.readObjectsCancellable(
+    ).pipe(Effect.flatMap(decodeEngineRows(Schema.StructWithRest(
+      Schema.Struct({ row_id: EngineRowId, ...keyCells.fields }),
+      [keyCells.record],
+    ))));
+    const duplicateCount = yield* writer.readObjectsCancellable(
       `SELECT count(*)::BIGINT AS count FROM (
         SELECT 1 FROM ${table} WHERE ${active} AND (${present}) GROUP BY ${keyGroup} HAVING count(*) > 1
       ) duplicate_groups`,
-    );
+    ).pipe(Effect.flatMap(decodeCount));
     const duplicateGroupRows = yield* writer.readObjectsCancellable(
       `SELECT ${keyProjection}, count(*)::BIGINT AS row_count FROM ${table} WHERE ${active} AND (${present})
        GROUP BY ${keyGroup} HAVING count(*) > 1 ORDER BY ${keyOrder} LIMIT 5`,
-    );
+    ).pipe(Effect.flatMap(decodeEngineRows(Schema.StructWithRest(
+      Schema.Struct({ row_count: EngineNonNegativeInt, ...keyStrings.fields }),
+      [keyStrings.record],
+    ))));
     const duplicateExamples: SourceKeyDiagnostics['duplicateExamples'] = [];
     for (const group of duplicateGroupRows) {
-      const keyValues = key.map((_column, index) => String(group[`key_${index}`]));
+      const keyValues = key.map((_column, index) => group[`key_${index}`]);
       const conditions = key.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
       const rowIdRows = yield* writer.readObjectsCancellable(
         `SELECT ${quoteIdentifier(csvInternalRowIdField)} AS row_id FROM ${table}
          WHERE ${active} AND ${conditions} ORDER BY ${quoteIdentifier(csvSourceOrderField)} ASC LIMIT 5`,
         keyValues,
-      );
+      ).pipe(Effect.flatMap(decodeRowIdRows));
       duplicateExamples.push({
         keyValues,
-        rowCount: normalizeCount(group.row_count),
-        rowIds: rowIdRows.map((row) => String(row.row_id)),
+        rowCount: group.row_count,
+        rowIds: rowIdRows.map((row) => row.row_id),
       });
     }
 
     return {
-      blankRowCount: normalizeCount(blankCountRows[0].count),
-      duplicateGroupCount: normalizeCount(duplicateCountRows[0].count),
+      blankRowCount: blankCount.count,
+      duplicateGroupCount: duplicateCount.count,
       blankExamples: blankExampleRows.map((row) => ({
-        rowId: String(row.row_id),
+        rowId: row.row_id,
         keyValues: key.map((_column, index) => normalizeCellValue(row[`key_${index}`])),
       })),
       duplicateExamples,
@@ -200,25 +226,32 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
           `coalesce(sum(CASE WHEN ${quoteIdentifier(`changed_${index}`)} THEN 1 ELSE 0 END), 0)::BIGINT AS ${quoteIdentifier(`changed_count_${index}`)}`,
       )
       .join(', ');
-    const summaryRows = yield* writer.readObjectsCancellable(
+    const changedCounts = indexedColumns('changed_count', request.valueColumns.length, EngineNonNegativeInt);
+    const summary = yield* writer.readObjectsCancellable(
       `SELECT coalesce(sum(CASE WHEN classification = 'changed' THEN 1 ELSE 0 END), 0)::BIGINT AS changed,
         coalesce(sum(CASE WHEN classification = 'baseline-only' THEN 1 ELSE 0 END), 0)::BIGINT AS baseline_only,
         coalesce(sum(CASE WHEN classification = 'candidate-only' THEN 1 ELSE 0 END), 0)::BIGINT AS candidate_only,
         coalesce(sum(CASE WHEN classification = 'unchanged' THEN 1 ELSE 0 END), 0)::BIGINT AS unchanged,
         count(*)::BIGINT AS total${changedSums ? `, ${changedSums}` : ''} FROM ${table}`,
-    );
-    const row = summaryRows[0];
+    ).pipe(Effect.flatMap(decodeEngineRow(Schema.StructWithRest(Schema.Struct({
+      changed: EngineNonNegativeInt,
+      baseline_only: EngineNonNegativeInt,
+      candidate_only: EngineNonNegativeInt,
+      unchanged: EngineNonNegativeInt,
+      total: EngineNonNegativeInt,
+      ...changedCounts.fields,
+    }), [changedCounts.record]))));
     return {
       rows: {
-        changed: normalizeCount(row.changed),
-        baselineOnly: normalizeCount(row.baseline_only),
-        candidateOnly: normalizeCount(row.candidate_only),
-        unchanged: normalizeCount(row.unchanged),
-        total: normalizeCount(row.total),
+        changed: summary.changed,
+        baselineOnly: summary.baseline_only,
+        candidateOnly: summary.candidate_only,
+        unchanged: summary.unchanged,
+        total: summary.total,
       },
       changedColumns: request.valueColumns.map((name, index) => ({
         name,
-        changedRowCount: normalizeCount(row[`changed_count_${index}`]),
+        changedRowCount: summary[`changed_count_${index}`],
       })),
     };
   }, (effect) => Effect.scoped(effect));
@@ -236,9 +269,9 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     request: ReadComparisonSnapshotWindowRequest,
   ): Effect.fn.Return<StoredComparisonWindow, DataEngineError | WorkspaceRequestError, Scope.Scope> {
     if (!isValidRowWindow(request.offset, request.limit)) {
-      throw new Error(
-        'Comparison window requires a non-negative offset and a limit of at most 1,000.',
-      );
+      return yield* Effect.fail(new WorkspaceRequestError({
+        message: 'Comparison window requires a non-negative offset and a limit of at most 1,000.',
+      }));
     }
     yield* Effect.acquireRelease(
       this.acquireRead(request.artifactId),
@@ -248,46 +281,56 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const table = quoteIdentifier(buildComparisonTableName(request.artifactId));
     const { where, parameters } = comparisonWhere(request);
     const order = comparisonOrder(request);
-    const countRows = yield* connection.readObjects(
+    const count = yield* connection.readObjects(
       `SELECT count(*)::BIGINT AS count FROM ${table}${where}`,
       parameters,
-    );
+    ).pipe(Effect.flatMap(decodeCount));
+    const keys = indexedColumns('key', request.keyCount, Schema.String);
+    const baselineValues = indexedColumns('baseline', request.valueCount, EngineCell);
+    const candidateValues = indexedColumns('candidate', request.valueCount, EngineCell);
+    const changed = indexedColumns('changed', request.valueCount, Schema.Boolean);
     const resultRows = yield* connection.readObjects(
       `SELECT * FROM ${table}${where} ORDER BY ${order} LIMIT ${request.limit} OFFSET ${request.offset}`,
       parameters,
-    );
+    ).pipe(Effect.flatMap(decodeEngineRows(Schema.StructWithRest(Schema.Struct({
+      classification: ComparisonClassification,
+      baseline_row_id: Schema.NullOr(EngineRowId),
+      candidate_row_id: Schema.NullOr(EngineRowId),
+      ...keys.fields,
+      ...baselineValues.fields,
+      ...candidateValues.fields,
+      ...changed.fields,
+    }), [keys.record, baselineValues.record, candidateValues.record, changed.record]))));
     const columnIndexes = Array.from({ length: request.valueCount }, (_value, index) => index);
     const rows = resultRows.map((row): ComparisonRow => {
-      const classification = parseClassification(row.classification);
+      const classification = row.classification;
       const baselineSide =
-        row.baseline_row_id == null
+        row.baseline_row_id === null
           ? null
           : {
-              rowId: String(row.baseline_row_id),
+              rowId: row.baseline_row_id,
               values: columnIndexes.map((index) =>
                 normalizeCellValue(row[`baseline_${index}`]),
               ),
             };
       const candidateSide =
-        row.candidate_row_id == null
+        row.candidate_row_id === null
           ? null
           : {
-              rowId: String(row.candidate_row_id),
+              rowId: row.candidate_row_id,
               values: columnIndexes.map((index) =>
                 normalizeCellValue(row[`candidate_${index}`]),
               ),
             };
       return {
         classification: request.swapped ? flipClassification(classification) : classification,
-        keyValues: Array.from({ length: request.keyCount }, (_value, index) =>
-          String(row[`key_${index}`]),
-        ),
+        keyValues: Array.from({ length: request.keyCount }, (_value, index) => row[`key_${index}`]),
         baseline: request.swapped ? candidateSide : baselineSide,
         candidate: request.swapped ? baselineSide : candidateSide,
-        changed: columnIndexes.map((index) => Boolean(row[`changed_${index}`])),
+        changed: columnIndexes.map((index) => row[`changed_${index}`]),
       };
     });
-    return { totalRowCount: normalizeCount(countRows[0].count), rows };
+    return { totalRowCount: count.count, rows };
   }, Effect.scoped, Effect.uninterruptible);
 
   // A shared retirement must finish waiting and dropping even if a caller is interrupted.
@@ -299,7 +342,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     if (existing) return yield* existing;
     if (!this.hasSnapshot(artifactId)) return;
     const release = this.snapshotReleases.get(artifactId);
-    if (!release) throw new Error('Comparison snapshot release is missing.');
+    if (!release) return yield* Effect.die(new Error('Comparison snapshot release is missing.'));
     const retirement = yield* Effect.cached(release.pipe(
       Effect.ensuring(Effect.sync(() => this.retirements.delete(artifactId))),
     ));
@@ -345,7 +388,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     artifactId: ComparisonOperationId,
   ): Effect.fn.Return<void> {
     const readers = this.readers.get(artifactId);
-    if (!readers) throw new Error('Comparison reader lease is missing.');
+    if (!readers) return yield* Effect.die(new Error('Comparison reader lease is missing.'));
     readers.count -= 1;
     if (readers.count > 0) return;
     this.readers.delete(artifactId);
@@ -375,18 +418,6 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   private hasSnapshot(artifactId: ComparisonOperationId): boolean {
     return this.artifactRegistry.get(buildComparisonTableName(artifactId)) !== null;
   }
-}
-
-function parseClassification(value: EngineCellValue | undefined): ComparisonRow['classification'] {
-  if (
-    value === 'changed' ||
-    value === 'baseline-only' ||
-    value === 'candidate-only' ||
-    value === 'unchanged'
-  ) {
-    return value;
-  }
-  throw new Error('Comparison snapshot contains an invalid classification.');
 }
 
 function buildComparisonTableName(artifactId: ComparisonOperationId): string {

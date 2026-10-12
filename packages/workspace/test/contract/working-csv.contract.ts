@@ -474,6 +474,18 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       ]);
     });
 
+    it('fails a malformed engine row window as a data engine failure and recovers on the next read', async () => {
+      const workingCsv = await fixture.openSource('malformed-window.csv', 'name\nAda\n');
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const request = { operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 } as const;
+
+      fixture.corruptNextRowWindow();
+      await expect(workspace().call(request)).rejects.toThrow(/^The data engine could not complete the operation\.$/);
+      error.mockRestore();
+
+      expectVisibleRows((await workspace().call(request)).rows).toEqual([{ name: 'Ada' }]);
+    });
+
     it('returns bounded row windows without reading the full CSV', async () => {
       const workingCsv = await fixture.openSource(
         'window.csv',

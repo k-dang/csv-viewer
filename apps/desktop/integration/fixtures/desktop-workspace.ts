@@ -21,12 +21,14 @@ import type {
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
+import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
+import type { CsvSourceUnavailableError, CsvWorkspaceHost } from '../../../../packages/workspace/src/workspace-host';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
-import { failNextExportPreparation, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
+import { corruptNextRowWindow, failNextExportPreparation, type ExportPreparationFailure, failNextExportWorkerRelease, failNextCsvLoad, failNextMetadataRead, failNextSnapshotDrop, failNextTableDrop, holdNextExportRead, holdNextRowRead } from '../../../../packages/workspace/test/contract/database-failure-injection';
 
 /** Scripted answers for the desktop prompts a real user would see. */
 export type ScriptedPrompts = {
@@ -121,11 +123,15 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
   failNextCsvLoad(): void { failNextCsvLoad(this.database); }
 
-  failNextExportPreparation(failure: 'read' | 'serialization') { return failNextExportPreparation(this.database, failure); }
+  failNextExportPreparation(failure: ExportPreparationFailure) { return failNextExportPreparation(this.database, failure); }
 
   failNextExportWorkerRelease(failures: number) { return failNextExportWorkerRelease(this.database, failures); }
 
   failNextTableDrop(): void { failNextTableDrop(this.database); }
+  failNextEngineSourceAcquire(failure: WorkspaceRequestError | CsvSourceUnavailableError): void {
+    const host: CsvWorkspaceHost = this.host;
+    vi.spyOn(host, 'acquireEngineSource').mockImplementationOnce(() => Effect.fail(failure));
+  }
   failNextEngineSourceRelease(): void {
     const original = this.host.acquireEngineSource.bind(this.host);
     this.host.acquireEngineSource = (sourceId) => {
@@ -161,6 +167,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void> { return failNextSnapshotDrop(this.database, mode); }
 
+  corruptNextRowWindow(): void { corruptNextRowWindow(this.database); }
   holdNextRowRead() { return holdNextRowRead(this.database); }
   holdNextExportRead() { return holdNextExportRead(this.database); }
 
