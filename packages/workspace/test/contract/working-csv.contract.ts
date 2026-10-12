@@ -474,6 +474,22 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       ]);
     });
 
+    it('reads each row window from one snapshot when an edit lands during the read', async () => {
+      const workingCsv = await fixture.openSource('snapshot.csv', 'name\nAda\nGrace\nLinus\n');
+      const hold = fixture.holdNextRowRead();
+      const reading = workspace().call({ operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 });
+      await hold.entered;
+      try {
+        await workspace().call({ operation: 'csv.insert-row', workingCsvId: workingCsv.workingCsvId, placement: 'append', rowIds: [], hasActiveQuery: false });
+      } finally {
+        hold.release();
+      }
+      const window = await reading;
+
+      expect({ filteredRowCount: window.filteredRowCount, totalRowCount: window.totalRowCount, rowIds: rowIds(window.rows) })
+        .toEqual({ filteredRowCount: 4, totalRowCount: 4, rowIds: ['1', '2', '3', '4'] });
+    });
+
     it('fails a malformed engine row window as a data engine failure and recovers on the next read', async () => {
       const workingCsv = await fixture.openSource('malformed-window.csv', 'name\nAda\n');
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -517,6 +533,30 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
           },
         ],
       });
+    });
+
+    it('reports both counts for a window past the last matching row', async () => {
+      const workingCsv = await fixture.openSource('past-end.csv', 'name\nAda\nGrace\nLinus\n');
+      const window = await workspace().call({
+        operation: 'csv.get-rows',
+        workingCsvId: workingCsv.workingCsvId,
+        offset: 1,
+        limit: 10,
+        search: 'grace',
+      });
+
+      expect(window).toEqual({ workingCsvId: workingCsv.workingCsvId, offset: 1, filteredRowCount: 1, totalRowCount: 3, rows: [] });
+    });
+
+    it('keeps the values of columns named like the row window counts', async () => {
+      const workingCsv = await fixture.openSource(
+        'count-names.csv',
+        '__csvViewerFilteredRowCount,__CSVVIEWERTOTALROWCOUNT,name\n7,8,Ada\n',
+      );
+      const window = await workspace().call({ operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 });
+
+      expect({ filteredRowCount: window.filteredRowCount, totalRowCount: window.totalRowCount }).toEqual({ filteredRowCount: 1, totalRowCount: 1 });
+      expectVisibleRows(window.rows).toEqual([{ __csvViewerFilteredRowCount: '7', __CSVVIEWERTOTALROWCOUNT: '8', name: 'Ada' }]);
     });
 
     it('preserves text-like values and null values distinctly in row windows', async () => {

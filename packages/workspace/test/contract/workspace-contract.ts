@@ -55,6 +55,7 @@ export interface WorkspaceContractFixture {
   failNextSnapshotDrop(mode?: 'failure' | 'defect'): Promise<void>;
   /** Strip the internal row identifiers from the next row window the engine returns. */
   corruptNextRowWindow(): void;
+  /** Hold the read of the next row window's rows until released. */
   holdNextRowRead(): { entered: Promise<void>; release: () => void };
   /** Hold the next export's row read until released. */
   holdNextExportRead(): { entered: Promise<void>; release: () => void };

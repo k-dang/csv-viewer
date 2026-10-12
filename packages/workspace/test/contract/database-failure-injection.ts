@@ -76,22 +76,27 @@ export function failNextTableDrop(database: WorkspaceDatabase): void {
   };
 }
 
+function readsRowWindowRows(sql: string): boolean {
+  return sql.includes(quoteIdentifier(csvInternalRowIdField)) && sql.includes(' OFFSET ');
+}
+
 /** The next row window comes back from the real engine without its internal row identifiers. */
 export function corruptNextRowWindow(database: WorkspaceDatabase): void {
   const read = database.readObjects.bind(database);
   database.readObjects = (sql, values) => {
-    if (!sql.startsWith(`SELECT ${quoteIdentifier(csvInternalRowIdField)}, `)) return read(sql, values);
+    if (!readsRowWindowRows(sql)) return read(sql, values);
     database.readObjects = read;
     return read(sql, values).pipe(Effect.map((rows) => rows.map(({ [csvInternalRowIdField]: _rowId, ...row }) => row)));
   };
 }
 
+/** Holds the statement that reads the next row window's rows until released. */
 export function holdNextRowRead(database: WorkspaceDatabase) {
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
   const read = database.readObjects.bind(database);
   database.readObjects = (sql, values) => Effect.gen(function* () {
-    if (!sql.includes('AS filtered_row_count')) return yield* read(sql, values);
+    if (!readsRowWindowRows(sql)) return yield* read(sql, values);
     database.readObjects = read;
     entered.resolve();
     yield* Effect.promise(() => resume.promise);

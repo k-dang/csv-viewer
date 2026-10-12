@@ -72,7 +72,7 @@ import { WorkspaceArtifactRegistry } from '../workspace-artifact-registry';
 
 type WorkingCsvOperationError = WorkspaceRequestError | DataEngineError;
 
-const decodeFilteredRowCount = decodeEngineRow(Schema.Struct({ filtered_row_count: EngineNonNegativeInt }));
+const decodeRowWindowCounts = decodeEngineRow(Schema.Struct({ filtered: EngineNonNegativeInt, total: EngineNonNegativeInt }));
 const decodeCsvRows = decodeEngineRows(EngineCsvRow);
 const decodeColumnValueRows = decodeEngineRows(Schema.Struct({ column_value: EngineCell }));
 const decodeColumnValueCountRows = decodeEngineRows(Schema.Struct({
@@ -474,14 +474,24 @@ class WorkingCsvStore implements WorkingCsvs {
         offset,
       }));
 
-      const countRow = yield* this.database.readObjects(query.countSql, query.values).pipe(Effect.flatMap(decodeFilteredRowCount));
-      const rows = yield* this.database.readObjects(query.rowsSql, query.values).pipe(Effect.flatMap(decodeCsvRows));
+      const engineRows = yield* this.database.readObjects(query.sql, query.values);
+      const { countFields } = query;
+      const counts = yield* decodeRowWindowCounts(engineRows.slice(0, 1).map((row) => ({
+        filtered: row[countFields.filtered],
+        total: row[countFields.total],
+      })));
+      const rows = yield* decodeCsvRows(engineRows
+        .filter((row) => row[csvInternalRowIdField] !== null)
+        .map((row) => {
+          const { [countFields.filtered]: _filteredRowCount, [countFields.total]: _totalRowCount, ...cells } = row;
+          return cells;
+        }));
 
       return {
         workingCsvId: state.metadata.workingCsvId,
         offset,
-        filteredRowCount: countRow.filtered_row_count,
-        totalRowCount: state.metadata.rowCount,
+        filteredRowCount: counts.filtered,
+        totalRowCount: counts.total,
         rows: rows.map(normalizeRow),
       };
     }));
