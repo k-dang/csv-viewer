@@ -1,6 +1,7 @@
 import { chmod, link, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Effect, Exit } from 'effect';
+import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
@@ -23,13 +24,13 @@ describe('DesktopWorkspaceHost behavior', () => {
     expect(exit).toEqual(Exit.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'The CSV Source no longer exists.' })));
   });
 
-  it('keeps unexpected discard-prompt rejections as defects even when they use a source error class', async () => {
+  it('fails a rejected discard prompt as a request error without exposing what the prompt threw', async () => {
     const failure = new CsvSourceUnavailableError({ code: 'unreadable', message: 'PRIVATE prompt failure.' });
     fixture.prompts.holdDiscardPrompt = async () => { throw failure; };
 
     const exit = await Effect.runPromiseExit(fixture.host.confirmDiscardChanges('people.csv'));
 
-    expect(exit).toEqual(Exit.die(failure));
+    expect(exit).toEqual(Exit.fail(new WorkspaceRequestError({ message: 'CSV Viewer could not show the dialog. Try again.' })));
   });
 
   it('classifies an export filesystem failure without exposing the destination path', async () => {
