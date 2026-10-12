@@ -16,6 +16,7 @@ import {
   csvFilteredRowCountField,
   csvSourceOrderField,
   csvTotalRowCountField,
+  unusedCsvColumnName,
 } from '../working-csv/csv-storage-schema';
 
 export type QueryValues = Array<string | number | boolean | null>;
@@ -196,11 +197,14 @@ export function buildRowsQuery({
   sort: readonly CsvSortDescriptor[];
   limit: number;
   offset: number;
-}): QueryBuild<CsvStatement> {
+}): QueryBuild<CsvStatement & { countFields: { filtered: string; total: string } }> {
   return Result.gen(function* () {
     const knownColumns = new Set(columns.map((column) => column.name));
     const scope = yield* buildCountScopeWhere({ columns, knownColumns, filters, search });
     const orderSql = yield* buildOrderSql(sort, knownColumns);
+    const pageFields = [csvInternalRowIdField, ...knownColumns];
+    const filteredField = unusedCsvColumnName(csvFilteredRowCountField, pageFields);
+    const totalField = unusedCsvColumnName(csvTotalRowCountField, [...pageFields, filteredField]);
     const tableSql = quoteIdentifier(tableName);
     const filteredCountSql = `(SELECT count(*)::BIGINT FROM ${tableSql}${scope.whereSql})`;
     const totalCountSql = `(SELECT count(*)::BIGINT FROM ${tableSql} WHERE ${quoteIdentifier(csvDeletedField)} = false)`;
@@ -213,10 +217,11 @@ export function buildRowsQuery({
     // One statement reads one engine snapshot. The join does not preserve page order, so the outer ORDER BY repeats it.
     return {
       sql: `SELECT counts.*, page.* EXCLUDE (${quoteIdentifier(csvSourceOrderField)})
-FROM (SELECT ${filteredCountSql} AS ${quoteIdentifier(csvFilteredRowCountField)},
-             ${totalCountSql} AS ${quoteIdentifier(csvTotalRowCountField)}) AS counts
+FROM (SELECT ${filteredCountSql} AS ${quoteIdentifier(filteredField)},
+             ${totalCountSql} AS ${quoteIdentifier(totalField)}) AS counts
 LEFT JOIN (${pageSql}) AS page ON true${orderSql}`,
       values: [...scope.values, ...scope.values],
+      countFields: { filtered: filteredField, total: totalField },
     };
   });
 }
