@@ -1,8 +1,8 @@
 import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure } from './workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Schema, type Scope } from 'effect';
 import { rejected } from './comparison/comparison-key-rules';
 import { makeWorkspaceLayer } from './workspace-runtime';
-import { stoppedEngineMessage, type DataEngineError, type OpenWorkspaceDatabase } from './database';
+import { DatabaseReleaseError, stoppedEngineMessage, type DataEngineError, type OpenWorkspaceDatabase } from './database';
 import { Comparisons } from './comparison/csv-comparison-service';
 import { WorkingCsvs } from './working-csv/working-csv-store';
 import { CsvWorkspaceHost, type CsvSourceUnavailableError } from './workspace-host';
@@ -34,6 +34,7 @@ function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
   return request.operation === 'csv.export' || request.operation === 'csv.export-view';
 }
 type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>>;
+type WorkspaceRuntime = ManagedRuntime.ManagedRuntime<WorkspaceServices, Layer.Error<ReturnType<typeof makeWorkspaceLayer>>>;
 
 /** The opaque identifiers a request carries. Diagnostics drop anything that is not a UUID. */
 const RequestIdentifiers = Schema.Struct({
@@ -67,8 +68,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
 
   private constructor(
     private readonly workspaceId: string,
+    private readonly runtime: WorkspaceRuntime,
     private readonly context: Context.Context<WorkspaceServices>,
-    private readonly scope: Scope.Closeable,
     private readonly stopped: Deferred.Deferred<void> | undefined,
   ) {
     this.host = Context.get(context, CsvWorkspaceHost);
@@ -77,8 +78,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   }
 
   /**
-   * Builds the workspace runtime into its own scope. A failed build closes that scope, which
-   * releases whatever the database acquisition registered, and rejects with the build failure.
+   * Builds the workspace runtime. A failed build disposes it, which releases whatever the database
+   * acquisition registered, and rejects with the build failure.
    */
   static async create(
     openDatabase: OpenWorkspaceDatabase,
@@ -86,33 +87,31 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     { executor, diagnostics, startup }: CreateCsvViewerOptions,
   ): Promise<CsvWorkspaceImplementation> {
     const workspaceId = crypto.randomUUID();
-    const scope = Scope.makeUnsafe();
-    const building = Layer.buildWithScope(makeWorkspaceLayer(openDatabase, host, executor, diagnostics), scope).pipe(Effect.annotateSpans({ workspaceId }));
+    const layer = makeWorkspaceLayer(openDatabase, host, executor, diagnostics, startup?.stopped);
+    const runtime = ManagedRuntime.make(Layer.effectContext(Layer.build(layer).pipe(Effect.annotateSpans({ workspaceId }))));
     const build = startup
-      ? Effect.raceFirst(building, Deferred.await(startup.stopped).pipe(Effect.andThen(Effect.fail(workspaceStoppedError()))))
-      : building;
+      ? Effect.raceFirst(runtime.contextEffect, Deferred.await(startup.stopped).pipe(Effect.andThen(Effect.fail(workspaceStoppedError()))))
+      : runtime.contextEffect;
     const built = await Effect.runPromiseExit(build, { signal: startup?.signal });
     // The release stage reports a failed release; startup rejects with why the build failed.
-    const closeFailedStartup = (exit: Exit.Exit<unknown, unknown>) => Effect.runPromise(Effect.exit(Scope.close(scope, exit)));
+    const disposeFailedStartup = () => Effect.runPromise(Effect.exit(runtime.disposeEffect));
     if (Exit.isFailure(built)) {
-      await closeFailedStartup(built);
+      await disposeFailedStartup();
       throw Cause.squash(built.cause);
     }
     if (startup && Deferred.isDoneUnsafe(startup.stopped)) {
-      await closeFailedStartup(Exit.void);
+      await disposeFailedStartup();
       throw workspaceStoppedError();
     }
-    const workspace = new CsvWorkspaceImplementation(workspaceId, built.value, scope, startup?.stopped);
+    const workspace = new CsvWorkspaceImplementation(workspaceId, runtime, built.value, startup?.stopped);
     if (startup) {
-      const watcher = Effect.runForkWith(built.value)(Deferred.await(startup.stopped).pipe(
+      // Disposal interrupts the watcher, so a started notification finishes first.
+      runtime.runFork(Deferred.await(startup.stopped).pipe(
         Effect.andThen(observeStage('workspace.engine-stopped', workspace.emitEngineStopped().pipe(
           Effect.andThen(recordOutcome('failed')),
-        ))),
+        )).pipe(Effect.uninterruptible)),
         Effect.annotateSpans({ workspaceId }),
       ));
-      Effect.runSync(Scope.addFinalizer(scope, Effect.suspend(() =>
-        Deferred.isDoneUnsafe(startup.stopped) ? Fiber.await(watcher) : Fiber.interrupt(watcher)
-      )));
     }
     return workspace;
   }
@@ -225,8 +224,9 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   /**
    * The shared entry adapter. Runs one operation under a span named after it, with correlated
    * identifiers, its product outcome, and its cleanup result. Operations run with the workspace
-   * services but outside the workspace scope: disposal settles admitted work by its own rules
-   * rather than interrupting it. When operation and cleanup both fail, all causes are retained.
+   * services but not as runtime fibers: disposing the runtime would interrupt them, while disposal
+   * settles admitted work by its own rules, and requests that arrive after disposal still get a
+   * product answer. When operation and cleanup both fail, all causes are retained.
    */
   private async runEffect<A, E>(
     effect: Effect.Effect<A, E>,
@@ -492,27 +492,19 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   });
 
   /**
-   * Settles Comparisons and drains Working CSV work even if Comparison cleanup fails, then closes
-   * the runtime scope to release the database. A stopped engine took its tables with it, so its
-   * Comparisons settle before browser-held sources are released without querying those tables.
-   * A failed database release fails the scope close, which rejects disposal.
+   * Disposes the runtime, whose Layer finalizers release every service in order even when an
+   * earlier release fails. A failed database release is a defect and marks cleanup failed.
    */
   private disposeWorkspace(): Promise<void> {
-    return this.runEffect(Effect.gen({ self: this }, function* () {
-      const released = this.engineStopped ? yield* Effect.exit(
-        observeStage('comparison.stop', this.comparisons.stopAfterEngineStop()).pipe(
-          Effect.ensuring(Effect.sync(() => this.workingCsvs.releaseSourcesAfterEngineStop())),
-        ),
-      ) : Exit.asVoidAll([
-        yield* Effect.exit(observeStage('comparison.dispose', this.comparisons.dispose())),
-        yield* Effect.exit(observeStage('workspace.release-csvs', this.workingCsvs.disposeStore())),
-      ]);
-      const closed = yield* Effect.exit(Scope.close(this.scope, Exit.void));
-      if (Exit.isSuccess(closed)) return yield* released;
-      yield* markCleanupFailed;
-      yield* Exit.asVoidAll([released, closed]);
-    }), 'workspace.dispose');
+    return this.runEffect(Effect.exit(this.runtime.disposeEffect).pipe(
+      Effect.tap((closed) => Exit.isFailure(closed) && closed.cause.reasons.some(isDatabaseReleaseFailure) ? markCleanupFailed : Effect.void),
+      Effect.flatten,
+    ), 'workspace.dispose');
   }
+}
+
+function isDatabaseReleaseFailure(reason: Cause.Reason<unknown>): boolean {
+  return Cause.isDieReason(reason) && reason.defect instanceof DatabaseReleaseError;
 }
 
 /** The public rejection after a fatal stop never includes the Worker's error text. */
