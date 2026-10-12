@@ -130,6 +130,7 @@ export interface WorkingCsvs {
   closeWorkingCsv(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError>;
   disposeStore(): Effect.Effect<void, DataEngineError>;
   releaseSourcesAfterEngineStop(): void;
+  createComparisonExecutor(): ComparisonExecutor;
   hasUnexportedChanges(workingCsvId: WorkingCsvId): boolean;
   getEditState(request: CsvEditStateRequest): Effect.Effect<CsvEditState, WorkspaceRequestError>;
   getRows(request: CsvRowWindowRequest): Effect.Effect<CsvRowWindow, WorkingCsvOperationError>;
@@ -150,14 +151,13 @@ export interface WorkingCsvs {
 
 export const WorkingCsvs = Context.Service<WorkingCsvs>('csv-viewer/WorkingCsvs');
 
-/**
- * Builds the Working CSV store on the host and database, with the DuckDB Comparison executor that
- * shares its table leases, admission, and artifact registry.
- */
-export const workingCsvsLayer = Layer.effectContext(Effect.gen(function* () {
-  const store = new WorkingCsvStore(yield* CsvWorkspaceHost, yield* WorkspaceDatabase);
-  return Context.make(WorkingCsvs, store).pipe(Context.add(ComparisonExecutor, store.createComparisonExecutor()));
+/** Builds the Working CSV store on the host and database. */
+export const workingCsvsLayer = Layer.effect(WorkingCsvs, Effect.gen(function* () {
+  return new WorkingCsvStore(yield* CsvWorkspaceHost, yield* WorkspaceDatabase);
 }));
+
+/** The DuckDB Comparison executor, sharing the store's table leases, admission, and artifact registry. */
+export const duckDbComparisonExecutorLayer = Layer.effect(ComparisonExecutor, WorkingCsvs.useSync((csvs) => csvs.createComparisonExecutor()));
 
 class WorkingCsvStore implements WorkingCsvs {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
