@@ -155,6 +155,28 @@ function requestIdOf(message: FromServerEncoded): string | number | undefined {
   return undefined;
 }
 
+/** Exit is the terminal envelope for one request. Chunks keep the route until that Exit arrives. */
+export function releaseFinishedRequest(
+  requestClient: Map<string | number, number>,
+  message: FromServerEncoded,
+): void {
+  switch (message._tag) {
+    case 'Exit':
+      requestClient.delete(message.requestId);
+      return;
+    case 'Chunk':
+    case 'Defect':
+    case 'Pong':
+    case 'ClientProtocolError':
+    case 'Request':
+      return;
+    default: {
+      const unexpected: never = message;
+      return unexpected;
+    }
+  }
+}
+
 export const makeMessagePortClientProtocol = (port: CsvViewerMessagePort) =>
   RpcClient.Protocol.make(Effect.fnUntraced(function* (writeResponse, clientIds) {
     const requestClient = new Map<string | number, number>();
@@ -165,6 +187,7 @@ export const makeMessagePortClientProtocol = (port: CsvViewerMessagePort) =>
       const response = message as unknown as FromServerEncoded;
       const requestId = requestIdOf(response);
       const clientId = requestId === undefined ? undefined : requestClient.get(requestId);
+      releaseFinishedRequest(requestClient, response);
       const targets = clientId === undefined ? clientIds : [clientId];
       Effect.runFork(Effect.forEach(targets, (id) => deliver(id, response), { discard: true }));
     });
