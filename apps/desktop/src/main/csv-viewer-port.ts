@@ -29,12 +29,13 @@ export async function serveWorkspacePort(webContents: WebContents, workspace: Cs
   ));
   let posted = false;
   const post = () => {
-    if (posted || webContents.isDestroyed() || webContents.isLoading()) return;
+    if (posted || webContents.isDestroyed()) return;
     posted = true;
     webContents.postMessage('csv-viewer-port', { type: 'csv-viewer-port' }, [port2]);
   };
+  // isLoading() stays true while this event runs, so the handler posts unconditionally.
   webContents.on('did-finish-load', post);
-  post();
+  if (!webContents.isLoading()) post();
   return async () => {
     if (!webContents.isDestroyed()) webContents.removeListener('did-finish-load', post);
     await Effect.runPromise(Scope.close(scope, Exit.void));
