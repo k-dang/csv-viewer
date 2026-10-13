@@ -11,6 +11,9 @@ function mainMessagePort(port: MessagePortMain): CsvViewerMessagePort {
     onMessage: (listener) => {
       port.on('message', (event) => listener(event.data));
     },
+    onClose: (listener) => {
+      port.on('close', listener);
+    },
     start: () => port.start(),
     close: () => port.close(),
   };

@@ -11,6 +11,7 @@ import { CsvViewerRpcs } from './csv-viewer-rpcs';
 export interface CsvViewerMessagePort {
   postMessage(message: unknown): void;
   onMessage(listener: (message: unknown) => void): void;
+  onClose(listener: () => void): void;
   start(): void;
   close(): void;
 }
@@ -24,12 +25,14 @@ const safeDefect = { name: 'Error', message: genericWorkspaceFailure };
 export function dataMessagePort(port: {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (data: unknown) => void): void;
+  on(event: 'close', listener: () => void): void;
   start(): void;
   close(): void;
 }): CsvViewerMessagePort {
   return {
     postMessage: (message) => port.postMessage(message),
     onMessage: (listener) => { port.on('message', listener); },
+    onClose: (listener) => { port.on('close', listener); },
     start: () => port.start(),
     close: () => port.close(),
   };
@@ -40,10 +43,12 @@ export function browserMessagePort(port: {
   start(): void;
   close(): void;
   onmessage: ((event: { data: unknown }) => void) | null;
+  onclose: (() => void) | null;
 }): CsvViewerMessagePort {
   return {
     postMessage: (message) => port.postMessage(message),
     onMessage: (listener) => { port.onmessage = (event) => listener(event.data); },
+    onClose: (listener) => { port.onclose = () => listener(); },
     start: () => port.start(),
     close: () => port.close(),
   };
@@ -110,6 +115,10 @@ export const makeMessagePortServerProtocol = (port: CsvViewerMessagePort) =>
   RpcServer.Protocol.make(Effect.fnUntraced(function* (writeRequest) {
     const disconnects = yield* Queue.unbounded<number>();
     const clientIds = new Set<number>([0]);
+    // One renderer owns this port, so its client id is 0. RpcServer interrupts that client only when the queue receives the id.
+    port.onClose(() => {
+      Queue.offerUnsafe(disconnects, 0);
+    });
     yield* Effect.addFinalizer(() => Effect.sync(() => port.close()));
     port.onMessage((message) => {
       if (!isRecord(message) || typeof message._tag !== 'string') return;
