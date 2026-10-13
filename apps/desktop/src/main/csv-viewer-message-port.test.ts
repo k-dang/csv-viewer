@@ -124,6 +124,30 @@ describe('CSV Viewer MessagePort', () => {
     }
   });
 
+  it('interrupts the server fiber when the message port closes', async () => {
+    const entered = Deferred.makeUnsafe<void>();
+    const interrupted = Deferred.makeUnsafe<void>();
+    const workspace = await createCsvViewer(Effect.succeed(database()), host(), {
+      acquireDroppedPath: () => Effect.suspend(() => {
+        Deferred.doneUnsafe(entered, Exit.void);
+        return Effect.never;
+      }).pipe(Effect.onInterrupt(() => Deferred.done(interrupted, Exit.void))),
+    });
+    const { port1, port2 } = new MessageChannel();
+    const close = await serve(workspace, port1);
+    const viewer = await connectMessagePortClient(dataMessagePort(port2), capabilities);
+    const pending = viewer.acquireDroppedPath('/tmp/data.csv');
+    try {
+      await Effect.runPromise(Deferred.await(entered));
+      port2.close();
+      await Effect.runPromise(Deferred.await(interrupted).pipe(Effect.timeout('2 seconds')));
+    } finally {
+      pending.catch(() => undefined);
+      await close();
+      await workspace.dispose();
+    }
+  });
+
   it('drops the events listener when the client closes without unsubscribing', async () => {
     const workspace = await createCsvViewer(Effect.succeed(database()), host());
     const { port1, port2 } = new MessageChannel();
