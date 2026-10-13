@@ -2,6 +2,7 @@ import { MessageChannel, type MessagePort } from 'node:worker_threads';
 import { Deferred, Effect, Exit, Layer, Scope } from 'effect';
 import { RpcServer } from 'effect/rpc';
 import { describe, expect, it } from 'vitest';
+import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
 import type { WorkspaceDatabase } from '@csv-viewer/workspace/database';
 import { connectMessagePortClient } from '@csv-viewer/workspace/csv-viewer-client';
 import { dataMessagePort, messagePortServerLayer } from '@csv-viewer/workspace/csv-viewer-message-port';
@@ -89,4 +90,66 @@ describe('CSV Viewer MessagePort', () => {
     await close();
     await workspace.dispose();
   });
+
+  it('resolves a different in-flight call when one handler dies', async () => {
+    const entered = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const workspace = await createCsvViewer(Effect.succeed(database()), {
+      ...host(),
+      recentSources: () => Effect.die(new Error('recent sources exploded')),
+    }, {
+      acquireDroppedPath: () => Effect.gen(function* () {
+        Deferred.doneUnsafe(entered, Exit.void);
+        yield* Deferred.await(release);
+        return 'dropped-source';
+      }),
+    });
+    const { port1, port2 } = new MessageChannel();
+    const close = await serve(workspace, port1);
+    const viewer = await connectMessagePortClient(dataMessagePort(port2), capabilities);
+    const pending = viewer.acquireDroppedPath('/tmp/data.csv');
+    try {
+      await Effect.runPromise(Deferred.await(entered));
+      await expect(viewer.call({ operation: 'csv.get-recent-sources' })).rejects.toThrow(
+        'The CSV workspace could not complete the request.',
+      );
+      Deferred.doneUnsafe(release, Exit.void);
+      await expect(pending).resolves.toBe('dropped-source');
+    } finally {
+      if (!Deferred.isDoneUnsafe(release)) Deferred.doneUnsafe(release, Exit.void);
+      await pending.catch(() => undefined);
+      await viewer.close();
+      await close();
+      await workspace.dispose();
+    }
+  });
+
+  it('drops the events listener when the client closes without unsubscribing', async () => {
+    const workspace = await createCsvViewer(Effect.succeed(database()), host());
+    const { port1, port2 } = new MessageChannel();
+    const close = await serve(workspace, port1);
+    const viewer = await connectMessagePortClient(dataMessagePort(port2), capabilities);
+    const received = Promise.withResolvers<string>();
+    viewer.onEvent((event) => {
+      if (event.type === 'intent') received.resolve(event.intent);
+    });
+    try {
+      await expect.poll(() => eventListeners(workspace).size, { timeout: 2000 }).toBe(1);
+      workspace.publishIntent('open-csv');
+      await expect(received.promise).resolves.toBe('open-csv');
+      await viewer.close();
+      await expect.poll(() => eventListeners(workspace).size, { timeout: 2000 }).toBe(0);
+    } finally {
+      await close();
+      await workspace.dispose();
+    }
+  });
 });
+
+function eventListeners(workspace: CsvWorkspaceServer): ReadonlySet<(event: CsvViewerEvent) => void> {
+  // SAFETY: CsvWorkspaceImplementation stores `onEvent` subscribers on `listeners`. TypeScript marks that field private.
+  const implementation = workspace as CsvWorkspaceServer & {
+    readonly listeners: ReadonlySet<(event: CsvViewerEvent) => void>;
+  };
+  return implementation.listeners;
+}
