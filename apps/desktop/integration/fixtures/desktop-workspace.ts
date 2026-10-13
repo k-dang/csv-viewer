@@ -24,7 +24,8 @@ import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/wo
 import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
 import type { CsvSourceUnavailableError, CsvWorkspaceHost } from '../../../../packages/workspace/src/workspace-host';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
-import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
+import { connectRpcTestClient, type ConnectedCsvViewer } from '../../../../packages/workspace/src/csv-viewer-client';
+import { createCsvViewer, type CsvWorkspaceServer } from '../../../../packages/workspace/src/csv-workspace';
 import { DuckDbWorkspaceDatabase } from '../../src/main/duckdb-database';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
 import { WorkspaceContractObserver } from '../../../../packages/workspace/test/contract/workspace-contract-observer';
@@ -51,16 +52,17 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
 
   private constructor(
     readonly directory: string,
-    private readonly workspace: CsvWorkspaceOwner,
+    private readonly server: CsvWorkspaceServer,
+    private readonly client: ConnectedCsvViewer,
     private readonly database: DuckDbWorkspaceDatabase,
     readonly host: DesktopWorkspaceHost,
     readonly prompts: ScriptedPrompts,
   ) {
-    this.observer = new WorkspaceContractObserver(workspace);
+    this.observer = new WorkspaceContractObserver(client);
   }
 
   get viewer(): CsvViewer {
-    return this.workspace;
+    return this.client;
   }
 
   static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics, writeExport?: DesktopExportWriter): Promise<CsvWorkspaceFixture> {
@@ -94,8 +96,9 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
       );
       let database!: DuckDbWorkspaceDatabase;
       const open = DuckDbWorkspaceDatabase.open().pipe(Effect.tap((opened) => Effect.sync(() => { database = opened; })));
-      const workspace = await createCsvViewer(open, host, { executor, diagnostics });
-      return new CsvWorkspaceFixture(directory, workspace, database, host, prompts);
+      const server = await createCsvViewer(open, host, { executor, diagnostics });
+      const client = await connectRpcTestClient(server);
+      return new CsvWorkspaceFixture(directory, server, client, database, host, prompts);
     } catch (error) {
       await rm(directory, { recursive: true, force: true });
       throw error;
@@ -208,11 +211,11 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
-    return this.workspace.confirmClose(confirmedImpact);
+    return this.server.confirmClose(confirmedImpact);
   }
 
   disposeWorkspace(): Promise<void> {
-    return this.workspace.dispose();
+    return this.server.dispose();
   }
 
   awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
@@ -222,9 +225,13 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
   async dispose(): Promise<void> {
     this.observer.dispose();
     try {
-      await this.workspace.dispose();
+      await this.server.dispose();
     } finally {
-      await rm(this.directory, { recursive: true, force: true });
+      try {
+        await this.client.close();
+      } finally {
+        await rm(this.directory, { recursive: true, force: true });
+      }
     }
   }
 }

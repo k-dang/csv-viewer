@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  WorkspaceContractFactory,
-  WorkspaceContractFixture,
+import {
+  expectRpcFailure,
+  type WorkspaceContractFactory,
+  type WorkspaceContractFixture,
 } from './workspace-contract';
 
 export function defineCsvViewerRequestContract(factory: WorkspaceContractFactory): void {
@@ -18,9 +19,7 @@ export function defineCsvViewerRequestContract(factory: WorkspaceContractFactory
 
     it('does not expose workspace ownership through product requests', async () => {
       // SAFETY: This intentionally sends an operation outside the public union to test rejection.
-      await expect(
-        fixture.viewer.call({ operation: 'workspace.dispose' } as never),
-      ).rejects.toThrow(/^Malformed CSV Viewer request\.$/);
+      await expectRpcFailure(fixture.viewer.call({ operation: 'workspace.dispose' } as never), 'WorkspaceRequestError', /^Malformed CSV Viewer request\.$/);
     });
 
     it('rejects malformed requests before they change the Working CSV', async () => {
@@ -41,7 +40,7 @@ export function defineCsvViewerRequestContract(factory: WorkspaceContractFactory
       ];
       for (const request of malformed) {
         // SAFETY: Each payload is deliberately outside the public request union.
-        await expect(fixture.viewer.call(request as never)).rejects.toThrow(/^Malformed CSV Viewer request\.$/);
+        await expectRpcFailure(fixture.viewer.call(request as never), 'WorkspaceRequestError', /^Malformed CSV Viewer request\.$/);
       }
 
       await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId }))

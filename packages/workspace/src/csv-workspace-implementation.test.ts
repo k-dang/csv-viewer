@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CsvSourceId } from './csv-viewer';
 import type { WorkspaceDatabase } from './database';
 import type { CsvWorkspaceHost } from './workspace-host';
+import { connectInProcessClient } from './csv-viewer-client';
 import { createCsvViewer } from './csv-workspace';
 
 describe('CSV source selection during workspace disposal', () => {
@@ -32,7 +33,8 @@ describe('CSV source selection during workspace disposal', () => {
       readObjects: unexpected,
     };
     const workspace = await createCsvViewer(Effect.succeed(database), host);
-    const opening = workspace.call({ operation: 'csv.open' });
+    const viewer = await connectInProcessClient(workspace);
+    const opening = viewer.call({ operation: 'csv.open' });
     await pickerEntered.promise;
     let disposed = false;
     const disposal = workspace.dispose().then(() => { disposed = true; });
@@ -47,13 +49,14 @@ describe('CSV source selection during workspace disposal', () => {
     await expect(opening).resolves.toEqual({ status: 'failed', message: 'The CSV workspace is closing.' });
     expect(releaseSource).toHaveBeenCalledExactlyOnceWith('selected.csv');
 
-    await expect(workspace.call({ operation: 'csv.open', sourceId: 'reserved.csv' })).resolves.toEqual({
+    await expect(viewer.call({ operation: 'csv.open', sourceId: 'reserved.csv' })).resolves.toEqual({
       status: 'failed', message: 'The CSV workspace is closing.',
     });
     expect(releaseSource).toHaveBeenNthCalledWith(2, 'reserved.csv');
-    await expect(workspace.call({ operation: 'csv.open' })).resolves.toEqual({
+    await expect(viewer.call({ operation: 'csv.open' })).resolves.toEqual({
       status: 'failed', message: 'The CSV workspace is closing.',
     });
     expect(releaseSource).toHaveBeenCalledTimes(2);
+    await viewer.close();
   });
 });

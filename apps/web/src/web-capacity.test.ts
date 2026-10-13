@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { File as NodeFile } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import type { CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonView, WorkingCsvView } from '@csv-viewer/workspace/csv-viewer';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { startWebCsvViewer } from './web-composition';
 import type { WebCsvCapacityLimits } from './web-workspace-host';
 
-let viewer: CsvWorkspaceOwner | undefined;
+let viewer: CsvViewerSession | undefined;
 
 beforeEach(() => {
   // jsdom's File lacks arrayBuffer; Node's File supplies the browser API used by ingestion.
@@ -187,13 +187,13 @@ function csvFile(size: number): File {
 async function capacityViewer(
   selections: Array<File | null>,
   limits?: WebCsvCapacityLimits,
-): Promise<CsvWorkspaceOwner> {
+): Promise<CsvViewerSession> {
   const started = await startWebCsvViewer(createNodeDuckDbWasmDatabase(), async () => selections.shift() ?? null, { limits });
   if (started.status !== 'ready') throw new Error('Web startup check failed.');
   return started.viewer;
 }
 
-async function openWorkingCsv(workspace: CsvWorkspaceOwner): Promise<WorkingCsvView> {
+async function openWorkingCsv(workspace: CsvViewerSession): Promise<WorkingCsvView> {
   const result = await workspace.call({ operation: 'csv.open' });
   if (result.status !== 'opened') throw new Error(`CSV Source did not open: ${result.status}`);
   return result.workingCsv;

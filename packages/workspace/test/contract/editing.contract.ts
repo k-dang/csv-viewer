@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField, type CsvFilterDescriptor, type CsvRow } from '../../src/csv-viewer';
 import {
+  expectRpcFailure,
   expectVisibleRows,
   rowIds,
   type WorkspaceContractFactory,
@@ -259,9 +260,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
           canRedo: false,
         },
       );
-      await expect(
-        workspace().call({ operation: 'csv.redo', ...request }),
-      ).rejects.toThrow('No CSV edit is available to redo');
+      await expectRpcFailure(workspace().call({ operation: 'csv.redo', ...request }), 'WorkspaceRequestError', 'No CSV edit is available to redo');
     });
 
     it('deletes one selected source row and excludes it from row windows and counts', async () => {
@@ -438,20 +437,16 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
     it('rejects row deletion when no valid selected row identifiers are provided', async () => {
       const workingCsv = await fixture.openSource('delete-invalid.csv', ['name', 'Ada'].join('\n'));
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.delete-rows',
           workingCsvId: workingCsv.workingCsvId,
           rowIds: [],
-        }),
-      ).rejects.toThrow('At least one CSV row must be selected for deletion');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'At least one CSV row must be selected for deletion');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.delete-rows',
           workingCsvId: workingCsv.workingCsvId,
           rowIds: ['missing'],
-        }),
-      ).rejects.toThrow('CSV row no longer exists: missing');
+        }), 'WorkspaceRequestError', 'CSV row no longer exists: missing');
     });
 
     it('inserts empty rows above and below one selected source row', async () => {
@@ -563,42 +558,34 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       const workingCsv = await fixture.openSource('insert-invalid.csv', ['name', 'Ada', 'Grace'].join('\n'));
       const request = { workingCsvId: workingCsv.workingCsvId };
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.insert-row',
           ...request,
           placement: 'append',
           rowIds: [],
           hasActiveQuery: true,
-        }),
-      ).rejects.toThrow('cannot be inserted while sort, filter, or search is active');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'cannot be inserted while sort, filter, or search is active');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.insert-row',
           ...request,
           placement: 'below',
           rowIds: ['1', '2'],
           hasActiveQuery: false,
-        }),
-      ).rejects.toThrow('requires exactly one selected CSV row');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'requires exactly one selected CSV row');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.insert-row',
           ...request,
           placement: 'append',
           rowIds: ['1'],
           hasActiveQuery: false,
-        }),
-      ).rejects.toThrow('Append row requires no selected CSV rows');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'Append row requires no selected CSV rows');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.insert-row',
           ...request,
           placement: 'above',
           rowIds: ['missing'],
           hasActiveQuery: false,
-        }),
-      ).rejects.toThrow('CSV row no longer exists: missing');
+        }), 'WorkspaceRequestError', 'CSV row no longer exists: missing');
     });
 
     it('undoes and redoes row insertion', async () => {
@@ -736,78 +723,60 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(redoneWindow.rows[0]).toMatchObject({ name: 'Ada', sku: '001' });
       expect(redoneWindow.rows[0]).not.toHaveProperty('code');
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '',
-        }),
-      ).rejects.toThrow('CSV column name cannot be blank.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name cannot be blank.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '   ',
-        }),
-      ).rejects.toThrow('CSV column name cannot be blank.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name cannot be blank.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: 'name',
-        }),
-      ).rejects.toThrow('CSV column name already exists.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name already exists.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: 'Name',
-        }),
-      ).rejects.toThrow('CSV column name already exists.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name already exists.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '__csvViewerRowId',
-        }),
-      ).rejects.toThrow('CSV column name is reserved.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name is reserved.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '__CSVVIEWERROWID',
-        }),
-      ).rejects.toThrow('CSV column name is reserved.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name is reserved.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '__csvViewerSourceOrder',
-        }),
-      ).rejects.toThrow('CSV column name is reserved.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name is reserved.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'sku',
           name: '__csvViewerHidden_1',
-        }),
-      ).rejects.toThrow('CSV column name is reserved.');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'CSV column name is reserved.');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.rename-column',
           ...request,
           column: 'missing',
           name: 'other',
-        }),
-      ).rejects.toThrow('Unknown CSV column: missing');
+        }), 'WorkspaceRequestError', 'Unknown CSV column: missing');
 
       const sameName = await workspace().call({
         operation: 'csv.rename-column',
@@ -1098,22 +1067,18 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
     it('rejects unknown Working CSVs and oversized row windows', async () => {
       const workingCsv = await fixture.openSource('windows.csv', ['value', '1'].join('\n'));
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.get-rows',
           workingCsvId: 'unknown-workingCsv',
           offset: 0,
           limit: 1,
-        }),
-      ).rejects.toThrow('Working CSV is no longer active');
-      await expect(
-        workspace().call({
+        }), 'WorkspaceRequestError', 'Working CSV is no longer active');
+      await expectRpcFailure(workspace().call({
           operation: 'csv.get-rows',
           workingCsvId: workingCsv.workingCsvId,
           offset: 0,
           limit: 1001,
-        }),
-      ).rejects.toThrow('1000 or less');
+        }), 'WorkspaceRequestError', '1000 or less');
     });
 
     it('returns a clear error for missing CSV Sources without keeping a Working CSV', async () => {
@@ -1593,9 +1558,7 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       const request = { workingCsvId: workingCsv.workingCsvId };
       const before = await fixture.editState(workingCsv.workingCsvId);
 
-      await expect(
-        workspace().call({ operation: 'csv.delete-column', ...request, column: 'name' }),
-      ).rejects.toThrow('The last CSV column cannot be deleted.');
+      await expectRpcFailure(workspace().call({ operation: 'csv.delete-column', ...request, column: 'name' }), 'WorkspaceRequestError', 'The last CSV column cannot be deleted.');
 
       await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
       const searched = await readRows(workingCsv.workingCsvId, { search: 'Ada' });
@@ -1608,17 +1571,13 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       const request = { workingCsvId: workingCsv.workingCsvId };
       const before = await fixture.editState(workingCsv.workingCsvId);
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.insert-column',
           ...request,
           column: 'missing',
           placement: 'after',
-        }),
-      ).rejects.toThrow('Unknown CSV column: missing');
-      await expect(
-        workspace().call({ operation: 'csv.delete-column', ...request, column: 'missing' }),
-      ).rejects.toThrow('Unknown CSV column: missing');
+        }), 'WorkspaceRequestError', 'Unknown CSV column: missing');
+      await expectRpcFailure(workspace().call({ operation: 'csv.delete-column', ...request, column: 'missing' }), 'WorkspaceRequestError', 'Unknown CSV column: missing');
 
       await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
       const window = await readRows(workingCsv.workingCsvId);
@@ -1753,12 +1712,8 @@ export function defineCsvWorkspaceEditingContract(factory: WorkspaceContractFact
       expect(same.columns.map((column) => column.name)).toEqual(['name', 'team']);
       expect(same).toMatchObject({ hasUnexportedChanges: false, canUndo: false, canRedo: false });
 
-      await expect(
-        workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team', 'team'] }),
-      ).rejects.toThrow('CSV column order must list every column once.');
-      await expect(
-        workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team'] }),
-      ).rejects.toThrow('CSV column order must list every column once.');
+      await expectRpcFailure(workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team', 'team'] }), 'WorkspaceRequestError', 'CSV column order must list every column once.');
+      await expectRpcFailure(workspace().call({ operation: 'csv.reorder-columns', ...request, columns: ['team'] }), 'WorkspaceRequestError', 'CSV column order must list every column once.');
 
       await expect(fixture.editState(workingCsv.workingCsvId)).resolves.toEqual(before);
     });

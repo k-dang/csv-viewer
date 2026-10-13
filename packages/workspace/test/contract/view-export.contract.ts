@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorkspaceContractFactory, WorkspaceContractFixture } from './workspace-contract';
+import { expectRpcFailure, type WorkspaceContractFactory, type WorkspaceContractFixture } from './workspace-contract';
 
 export function defineViewExportContract(factory: WorkspaceContractFactory): void {
   describe(`${factory.name} Export Current View`, () => {
@@ -65,8 +65,8 @@ export function defineViewExportContract(factory: WorkspaceContractFactory): voi
       const exported = fixture.viewer.call({ operation: 'csv.export-view', workingCsvId });
       try {
         await held.entered;
-        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow('An export is already in progress');
-        await expect(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId })).rejects.toThrow('An export is already in progress');
+        await expectRpcFailure(fixture.viewer.call({ operation: 'csv.export', workingCsvId }), 'WorkspaceRequestError', 'An export is already in progress');
+        await expectRpcFailure(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId }), 'WorkspaceRequestError', 'An export is already in progress');
       } finally { held.release(); }
       await expect(exported).resolves.toEqual({ status: 'exported', rowCount: 1 });
       await expect(readExported()).resolves.toBe('id\n1\n');
@@ -86,7 +86,7 @@ export function defineViewExportContract(factory: WorkspaceContractFactory): voi
       const csv = await fixture.openSource('failure.tsv', 'id\tvalue\n1\tbefore\n2\tother\n');
       const workingCsvId = csv.workingCsvId;
       const released = fixture.failNextExportPreparation('read');
-      await expect(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId })).rejects.toThrow();
+      await expectRpcFailure(fixture.viewer.call({ operation: 'csv.export-view', workingCsvId }), 'DataEngineError', 'The data engine could not complete the operation.');
       expect(released()).toBe(true);
       await fixture.viewer.call({ operation: 'csv.edit-cell', workingCsvId, rowId: '1', column: 'value', value: 'after' });
       const readExported = fixture.captureNextExport('failure-view.tsv');
@@ -103,7 +103,7 @@ export function defineViewExportContract(factory: WorkspaceContractFactory): voi
       try {
         await held.entered;
         // Close waits for the export to settle, so its rejection must already be observed.
-        const rejected = expect(exported).rejects.toThrow('The data engine could not complete the operation.');
+        const rejected = expectRpcFailure(exported, 'DataEngineError', 'The data engine could not complete the operation.');
         await fixture.viewer.call({ operation: 'csv.close', workingCsvId: csv.workingCsvId });
         await rejected;
         await expect(readExported()).rejects.toThrow();

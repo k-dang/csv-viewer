@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { csvInternalRowIdField } from '../../src/csv-viewer';
 import { WorkspaceArtifactRegistry } from '../../src/workspace-artifact-registry';
 import {
+  expectRpcDefect,
+  expectRpcFailure,
   expectVisibleRows,
   rowIds,
   type WorkspaceContractFactory,
@@ -274,8 +276,10 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         return transition.call(this, tableName, role);
       });
       try {
-        await expect(workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }))
-          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        await expectRpcDefect(
+          workspace().call({ operation: 'csv.reopen', workingCsvId: original.workingCsvId }),
+          /^The CSV workspace could not complete the request\.$/,
+        );
       } finally {
         injected.mockRestore();
       }
@@ -387,12 +391,10 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         },
       });
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.undo',
           workingCsvId: second.workingCsvId,
-        }),
-      ).rejects.toThrow('No CSV edit is available to undo');
+        }), 'WorkspaceRequestError', 'No CSV edit is available to undo');
 
       await workspace().call({
         operation: 'csv.undo',
@@ -414,14 +416,12 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
         }),
       ).resolves.toMatchObject({ status: 'closed' });
 
-      await expect(
-        workspace().call({
+      await expectRpcFailure(workspace().call({
           operation: 'csv.get-rows',
           workingCsvId: first.workingCsvId,
           offset: 0,
           limit: 1,
-        }),
-      ).rejects.toThrow('Working CSV is no longer active');
+        }), 'WorkspaceRequestError', 'Working CSV is no longer active');
       await expect(
         workspace().call({
           operation: 'csv.open-recent',
@@ -496,7 +496,7 @@ export function defineCsvWorkspaceWorkingCsvContract(factory: WorkspaceContractF
       const request = { operation: 'csv.get-rows', workingCsvId: workingCsv.workingCsvId, offset: 0, limit: 10 } as const;
 
       fixture.corruptNextRowWindow();
-      await expect(workspace().call(request)).rejects.toThrow(/^The data engine could not complete the operation\.$/);
+      await expectRpcFailure(workspace().call(request), 'DataEngineError', /^The data engine could not complete the operation\.$/);
       error.mockRestore();
 
       expectVisibleRows((await workspace().call(request)).rows).toEqual([{ name: 'Ada' }]);

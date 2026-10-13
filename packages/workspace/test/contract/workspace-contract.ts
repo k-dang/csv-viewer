@@ -76,6 +76,33 @@ export type WorkspaceContractFactory = {
   create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WorkspaceContractFixture>;
 };
 
+/** A declared RPC failure keeps its tag. A defect stays a plain Error with no tag. */
+export async function expectRpcFailure(work: Promise<unknown>, tag: string, message: RegExp | string): Promise<void> {
+  const error = await rejected(work);
+  expect(error).toMatchObject({ _tag: tag });
+  expectMessage(error, message);
+}
+
+export async function expectRpcDefect(work: Promise<unknown>, message: RegExp | string): Promise<void> {
+  const error = await rejected(work);
+  expect(error).not.toHaveProperty('_tag');
+  expectMessage(error, message);
+}
+
+async function rejected(work: Promise<unknown>): Promise<Error> {
+  try {
+    await work;
+  } catch (caught) {
+    if (caught instanceof Error) return caught;
+  }
+  throw new Error('expected the RPC to fail');
+}
+
+function expectMessage(error: Error, message: RegExp | string): void {
+  if (message instanceof RegExp) expect(error.message).toMatch(message);
+  else expect(error.message).toContain(message);
+}
+
 /** The internal row identifiers of a row window, in order. */
 export function rowIds(rows: CsvRow[]): string[] {
   return rows.map((row) => row[csvInternalRowIdField]);

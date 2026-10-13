@@ -131,7 +131,7 @@ function documentWorkspaces(events: string[], prompt: () => Effect.Effect<boolea
     const id = ++opened;
     events.push(`open ${id}`);
     const workspace: DocumentWorkspace['workspace'] = {
-      receive: async () => [],
+      publishIntent: () => undefined,
       confirmClose: async (confirmed?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> =>
         confirmed ? { status: 'ready' } : { status: 'confirmation-required', impact },
       dispose: async () => { events.push(`dispose ${id}`); },

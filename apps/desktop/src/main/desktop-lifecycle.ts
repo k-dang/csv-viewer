@@ -1,4 +1,4 @@
-import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import type { CsvWorkspaceServer } from '@csv-viewer/workspace/csv-workspace';
 import type { WorkspaceCloseImpact } from '@csv-viewer/workspace/csv-viewer';
 import { toError } from '@csv-viewer/workspace/errors';
 import { Deferred, Effect, Exit, Logger } from 'effect';
@@ -11,7 +11,7 @@ export class DesktopLifecycle {
   private disposed = false;
 
   constructor(
-    private readonly workspace: Pick<CsvWorkspaceOwner, 'confirmClose' | 'dispose'>,
+    private readonly workspace: Pick<CsvWorkspaceServer, 'confirmClose' | 'dispose'>,
     private readonly prompt: (impact: WorkspaceCloseImpact) => Effect.Effect<boolean, Error>,
     private readonly forceExit: (code: number) => void,
   ) {}
@@ -64,7 +64,7 @@ export class DesktopLifecycle {
 }
 
 export type DocumentWorkspace = {
-  readonly workspace: Pick<CsvWorkspaceOwner, 'receive' | 'confirmClose' | 'dispose'>;
+  readonly workspace: Pick<CsvWorkspaceServer, 'confirmClose' | 'dispose' | 'publishIntent'>;
   readonly lifecycle: DesktopLifecycle;
   /** Stops forwarding workspace events to the document. */
   readonly detach: () => void;

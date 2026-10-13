@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Scope } from 'effect';
+import { Context, Data, Effect, Layer, Schema, Scope } from 'effect';
 import type { QueryValues } from './query/csv-query';
 import type { EngineRow } from './query/csv-result-normalization';
 import { observeStage } from './workspace-diagnostics';
@@ -92,9 +92,19 @@ export function workspaceDatabaseLayer(open: OpenWorkspaceDatabase) {
   }));
 }
 
-/** An expected engine failure, classified at the runtime edge. The fixed message keeps driver details from users. */
-export class DataEngineError extends Data.TaggedError('DataEngineError')<{ cause: unknown }> {
-  override readonly message = engineFailureMessage;
+/**
+ * An expected engine failure, classified at the runtime edge. The encoded message is fixed so
+ * driver details in `cause` never cross an RPC boundary.
+ */
+export class DataEngineError extends Schema.TaggedError<DataEngineError>()('DataEngineError', {
+  message: Schema.String,
+}) {
+  readonly cause: unknown;
+
+  constructor(props: { readonly message?: string; readonly cause?: unknown }) {
+    super({ message: props.message ?? engineFailureMessage });
+    this.cause = props.cause;
+  }
 }
 
 /**

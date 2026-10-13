@@ -7,8 +7,7 @@ import { CsvSourceUnavailableError } from '../../src/workspace-host';
 import { cleanupEffect } from '../../src/comparison/comparison-effects';
 import type { ComparisonExecutor } from '../../src/comparison/comparison-executor';
 import type { CloseWorkingCsvOutcome, ComparisonSummary } from '../../src/csv-viewer';
-import type { WorkspaceContractFixture } from './workspace-contract';
-import type { WorkspaceContractFactory } from './workspace-contract';
+import { expectRpcDefect, expectRpcFailure, type WorkspaceContractFactory, type WorkspaceContractFixture } from './workspace-contract';
 import { diagnosticCapture } from '../diagnostic-capture';
 import { stubConnection } from '../stub-connection';
 
@@ -56,9 +55,9 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         await fixture.viewer.call({ operation: 'csv.edit-cell', workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
         const exported = fixture.captureNextExport('exported.csv');
         const released = fixture.failNextExportPreparation(failure);
-        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow(
-          failure === 'defect' ? 'The CSV workspace could not complete the request.' : 'The data engine could not complete the operation.',
-        );
+        await (failure === 'defect'
+          ? expectRpcDefect(fixture.viewer.call({ operation: 'csv.export', workingCsvId }), 'The CSV workspace could not complete the request.')
+          : expectRpcFailure(fixture.viewer.call({ operation: 'csv.export', workingCsvId }), 'DataEngineError', 'The data engine could not complete the operation.'));
         expect(released()).toBe(true);
         expect(await fixture.editState(workingCsvId)).toMatchObject({ hasUnexportedChanges: true, canUndo: true });
         expect(capture.completed().find((record) => record.message === 'csv.export')?.annotations).toMatchObject({
@@ -83,7 +82,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         await fixture.viewer.call({ operation: 'csv.edit-cell', workingCsvId, rowId: '1', column: 'name', value: 'Grace' });
         const exported = fixture.captureNextExport('exported.csv');
         closed = fixture.failNextExportWorkerRelease(1);
-        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow('The data engine could not complete the operation.');
+        await expectRpcFailure(fixture.viewer.call({ operation: 'csv.export', workingCsvId }), 'DataEngineError', 'The data engine could not complete the operation.');
         await expect(exported()).rejects.toThrow();
         expect(closed()).toBe(false);
         expect(await fixture.editState(workingCsvId)).toMatchObject({ hasUnexportedChanges: true, canUndo: true });
@@ -101,7 +100,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       try {
         const { workingCsvId } = await fixture.openSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
         const closed = fixture.failNextExportWorkerRelease(2);
-        await expect(fixture.viewer.call({ operation: 'csv.export', workingCsvId })).rejects.toThrow('The data engine could not complete the operation.');
+        await expectRpcFailure(fixture.viewer.call({ operation: 'csv.export', workingCsvId }), 'DataEngineError', 'The data engine could not complete the operation.');
 
         const rejection = await fixture.disposeWorkspace().then(() => null, (error: Error) => error);
         expect(rejection?.message).toBe('The data engine could not complete the operation.');
@@ -133,8 +132,8 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         releaseExport = hold.release;
         fixture.failNextTableDrop();
 
-        const exportRejected = expect(exporting).rejects.toThrow('The data engine could not complete the operation.');
-        await expect(fixture.disposeWorkspace()).rejects.toThrow('The CSV workspace could not complete the request.');
+        const exportRejected = expectRpcFailure(exporting, 'DataEngineError', 'The data engine could not complete the operation.');
+        await expectRpcDefect(fixture.disposeWorkspace(), 'The CSV workspace could not complete the request.');
         await exportRejected;
         expect(closed()).toBe(true);
         expect(capture.logs.join('')).not.toContain('PRIVATE');
@@ -147,14 +146,23 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       try {
         const opened = await fixture.openSource('PRIVATE-failure.csv', 'name\nAda\n');
         const missingId = crypto.randomUUID();
-        await expect(fixture.viewer.call({ operation: 'csv.get-edit-state', workingCsvId: missingId }))
-          .rejects.toThrow(/^Working CSV is no longer active\.$/);
-        await expect(fixture.viewer.call({
-          operation: 'csv.rename-column', workingCsvId: opened.workingCsvId, column: 'name', name: ' ',
-        })).rejects.toThrow(/^CSV column name cannot be blank\.$/);
+        await expectRpcFailure(
+          fixture.viewer.call({ operation: 'csv.get-edit-state', workingCsvId: missingId }),
+          'WorkspaceRequestError',
+          /^Working CSV is no longer active\.$/,
+        );
+        await expectRpcFailure(
+          fixture.viewer.call({
+            operation: 'csv.rename-column', workingCsvId: opened.workingCsvId, column: 'name', name: ' ',
+          }),
+          'WorkspaceRequestError',
+          /^CSV column name cannot be blank\.$/,
+        );
         fixture.failNextRecentSources();
-        await expect(fixture.viewer.call({ operation: 'csv.get-recent-sources' }))
-          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        await expectRpcDefect(
+          fixture.viewer.call({ operation: 'csv.get-recent-sources' }),
+          /^The CSV workspace could not complete the request\.$/,
+        );
 
         const records = capture.completed();
         for (const operation of ['csv.get-edit-state', 'csv.rename-column']) {
@@ -180,7 +188,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         ];
         for (const request of malformed) {
           // SAFETY: Each payload is deliberately outside the public request union.
-          await expect(fixture.viewer.call(request as never)).rejects.toThrow(/^Malformed CSV Viewer request\.$/);
+          await expectRpcFailure(fixture.viewer.call(request as never), 'WorkspaceRequestError', 'Malformed CSV Viewer request.');
         }
 
         const records = capture.completed(acquired);
@@ -199,15 +207,17 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       try {
         const sourceId = await fixture.registerSource('PRIVATE-open.csv', 'name\nAda\n');
         fixture.failNextDescribeSource();
-        await expect(fixture.viewer.call({ operation: 'csv.open-recent', sourceId }))
-          .rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        await expectRpcDefect(
+          fixture.viewer.call({ operation: 'csv.open-recent', sourceId }),
+          /^The CSV workspace could not complete the request\.$/,
+        );
 
         const opened = await fixture.viewer.call({ operation: 'csv.open-recent', sourceId });
         if (opened.status !== 'opened') throw new Error(`Open was ${opened.status}.`);
         fixture.failNextDescribeSource();
-        await expect(fixture.viewer.call({
+        await expectRpcDefect(fixture.viewer.call({
           operation: 'csv.reopen', workingCsvId: opened.workingCsv.workingCsvId,
-        })).rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        }), /^The CSV workspace could not complete the request\.$/);
 
         const records = capture.completed();
         for (const operation of ['csv.open-recent', 'csv.reopen']) {
@@ -308,8 +318,11 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         const reopening = fixture.viewer.call({ operation: 'csv.reopen', workingCsvId });
         await reopenReserved.promise;
         const queuedEdit = fixture.viewer.call({ operation: 'csv.edit-cell', ...request, value: 'PRIVATE-EDIT' });
-        await expect(fixture.viewer.call({ operation: 'csv.edit-cell', ...request, column: 'PRIVATE-MISSING', value: 'PRIVATE-EDIT' }))
-          .rejects.toThrow('Unknown CSV column');
+        await expectRpcFailure(
+          fixture.viewer.call({ operation: 'csv.edit-cell', ...request, column: 'PRIVATE-MISSING', value: 'PRIVATE-EDIT' }),
+          'WorkspaceRequestError',
+          'Unknown CSV column',
+        );
         await Promise.all([reopening, queuedEdit]);
         await fixture.viewer.call({ operation: 'csv.undo', workingCsvId });
         fixture.captureNextExport('PRIVATE-EXPORT.csv');
@@ -646,9 +659,11 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
       try {
         await fixture.openSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
         fixture.failNextDatabaseRelease();
-        const rejection = await fixture.disposeWorkspace().then(() => null, (error: Error) => error.message);
-        expect(rejection).toBe('The CSV workspace could not complete the request.');
-        await expect(fixture.disposeWorkspace()).rejects.toThrow(rejection);
+        const rejection = await fixture.disposeWorkspace().then(() => null, (error: Error) => error);
+        expect(rejection).toBeInstanceOf(Error);
+        expect(rejection).not.toHaveProperty('_tag');
+        expect(rejection?.message).toBe('The CSV workspace could not complete the request.');
+        await expectRpcDefect(fixture.disposeWorkspace(), 'The CSV workspace could not complete the request.');
         const records = capture.completed();
         expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).toBe('succeeded');
         expect(records.filter((record) => record.message === 'workspace.release-database').map((record) => record.annotations.outcome))
@@ -717,7 +732,7 @@ export function defineDiagnosticsContract(factory: WorkspaceContractFactory): vo
         await fixture.openSource('PRIVATE-SOURCE.csv', 'name\nPRIVATE-CELL\n');
         fixture.failNextTableDrop();
         fixture.failNextDatabaseRelease();
-        await expect(fixture.disposeWorkspace()).rejects.toThrow(/^The CSV workspace could not complete the request\.$/);
+        await expectRpcDefect(fixture.disposeWorkspace(), /^The CSV workspace could not complete the request\.$/);
         const records = capture.completed();
         expect(records.find((record) => record.message === 'workspace.release-csvs')?.annotations.outcome).not.toBe('succeeded');
         expect(records.find((record) => record.message === 'workspace.release-database')?.annotations.outcome).toBe('cleanup-failed');

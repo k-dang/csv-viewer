@@ -3,7 +3,8 @@ import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-works
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { diagnosticCapture } from '../../../packages/workspace/test/diagnostic-capture';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
-import type { CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import { connectInProcessSession } from '@csv-viewer/workspace/csv-viewer-client';
+import type { CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonExecutor } from '../../../packages/workspace/src/comparison/comparison-executor';
 import { DataEngineError } from '@csv-viewer/workspace/database';
@@ -17,7 +18,7 @@ import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composit
 // The CsvViewer contract itself runs against this same Wasm engine from the integration suite,
 // so these cases only cover what the web composition root adds:
 // the startup gate, the browser capability set, browser-selection identity, and scoped source access.
-let viewer: CsvWorkspaceOwner | undefined;
+let viewer: CsvViewerSession | undefined;
 
 afterEach(async () => {
   await viewer?.dispose();
@@ -177,12 +178,14 @@ describe('web CsvViewer composition', () => {
     viewer.onEvent((event) => events.push(event));
 
     database.failWorker();
-    await expect(viewer.receive({ operation: 'PRIVATE malformed request' })).rejects.toThrow(
+    // SAFETY: The operation is deliberately outside the public request union.
+    await expect(viewer.call({ operation: 'PRIVATE malformed request' } as never)).rejects.toThrow(
       'Reload CSV Viewer to start a new workspace.',
     );
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(capture.outcome('workspace.engine-stopped')).toBe('failed');
-    expect(capture.outcome('workspace.notify-engine-stop')).toBe('defect');
+    // The throwing subscriber runs in the client shim. The server listener only offers the event.
+    expect(capture.outcome('workspace.notify-engine-stop')).toBeUndefined();
     expect(capture.logs.join('')).not.toContain('PRIVATE');
 
     expect(events).toEqual([
@@ -242,9 +245,9 @@ describe('web CsvViewer composition', () => {
       dropSnapshot: () => Effect.die(new Error('A stopped engine must not drop snapshots.')),
       dispose: () => Effect.die(new Error('A stopped engine must not run executor cleanup.')),
     };
-    viewer = await createCsvViewer(database.open(), host, {
+    viewer = await connectInProcessSession(await createCsvViewer(database.open(), host, {
       executor, diagnostics: capture.configuration, startup: { stopped: database.stopped },
-    });
+    }));
     const left = await viewer.call({ operation: 'csv.open' });
     const right = await viewer.call({ operation: 'csv.open' });
     if (left.status !== 'opened' || right.status !== 'opened') throw new Error('Both CSV Sources must open.');

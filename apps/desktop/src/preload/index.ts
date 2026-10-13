@@ -1,12 +1,23 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { createElectronCsvViewer } from './electron-csv-viewer';
-import { ipcChannels } from '../ipc-channels';
-import { unwrapCsvViewerIpcResponse, type CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
+import { authorizeDroppedPathChannel } from '../dropped-path-channel';
 
-contextBridge.exposeInMainWorld('csvViewer', createElectronCsvViewer(ipcRenderer));
-contextBridge.exposeInMainWorld('acquireDroppedCsvSource', (file: File) => {
+// The isolated preload global is not the page window. The port has to be posted on that window.
+declare const window: {
+  postMessage(
+    message: { type: 'csv-viewer-port' },
+    targetOrigin: string,
+    transfer?: ReadonlyArray<object>,
+  ): void;
+};
+
+ipcRenderer.on('csv-viewer-port', (event) => {
+  window.postMessage({ type: 'csv-viewer-port' }, '*', event.ports);
+});
+
+contextBridge.exposeInMainWorld('csvViewerPathForFile', (file: File) => {
   const filePath = webUtils.getPathForFile(file);
-  if (!filePath) throw new Error('Drop a file from your device.');
-  return ipcRenderer.invoke(ipcChannels.acquireDroppedSource, filePath)
-    .then((response: CsvViewerIpcResponse<string>) => unwrapCsvViewerIpcResponse(response));
+  if (!filePath) return '';
+  // The page receives the path only after main has recorded this native path.
+  const recorded = ipcRenderer.sendSync(authorizeDroppedPathChannel, filePath);
+  return recorded === true ? filePath : '';
 });
