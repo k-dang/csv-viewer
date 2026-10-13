@@ -359,7 +359,10 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
 
   async dispose(): Promise<void> {
     this.observer.dispose();
-    await this.disposeWorkspace();
-    await this.client.close();
+    try {
+      await this.disposeWorkspace();
+    } finally {
+      await this.client.close();
+    }
   }
 }

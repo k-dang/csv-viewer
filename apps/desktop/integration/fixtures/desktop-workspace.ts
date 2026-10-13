@@ -226,9 +226,12 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     this.observer.dispose();
     try {
       await this.server.dispose();
-      await this.client.close();
     } finally {
-      await rm(this.directory, { recursive: true, force: true });
+      try {
+        await this.client.close();
+      } finally {
+        await rm(this.directory, { recursive: true, force: true });
+      }
     }
   }
 }
