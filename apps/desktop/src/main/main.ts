@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   session,
   type BrowserWindowConstructorOptions,
@@ -9,14 +10,20 @@ import {
   type WebContents,
 } from 'electron';
 import path from 'node:path';
-import { Effect } from 'effect';
-import { toError, WorkspaceRequestError } from '@csv-viewer/workspace/errors';
+import { Effect, Schema } from 'effect';
+import { toError } from '@csv-viewer/workspace/errors';
+import { authorizeDroppedPathChannel } from '../dropped-path-channel';
 import { DesktopLifecycle, WindowWorkspace } from './desktop-lifecycle';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { serveWorkspacePort } from './csv-viewer-port';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
+import {
+  DroppedPathAuthorization,
+  openAuthorizedDroppedPath,
+  recordDroppedPathFromPreload,
+} from './dropped-path-authorization';
 import {
   supportedCsvFileExtensions,
   type WorkspaceCloseImpact,
@@ -70,6 +77,12 @@ const workspaceHost = new DesktopWorkspaceHost(
 );
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let documentContents: WebContents | undefined;
+const droppedPaths = new DroppedPathAuthorization();
+
+ipcMain.on(authorizeDroppedPathChannel, (event, payload) => {
+  event.returnValue = Schema.is(Schema.String)(payload)
+    && recordDroppedPathFromPreload(droppedPaths, event.sender.id, documentContents?.id, payload);
+});
 
 function focusedWindow(): BrowserWindow | undefined {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -122,9 +135,11 @@ const createWindow = Effect.fnUntraced(function* () {
 
   const mainWindow = new BrowserWindow(windowOptions);
   const { webContents } = mainWindow;
+  droppedPaths.clear();
   documentContents = webContents;
   webContents.on('did-start-navigation', (details) => {
     if (!details.isMainFrame || details.isSameDocument || quit.allowed) return;
+    droppedPaths.clear();
     documentWorkspace.replace().catch(() => {
       console.error('CSV Viewer could not open its workspace.');
       app.exit(1);
@@ -226,9 +241,11 @@ const documentWorkspace = new WindowWorkspace(async () => {
   const contents = documentContents;
   if (!contents) throw new Error('CSV Viewer has no document to serve.');
   const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost, {
-    acquireDroppedPath: (filePath) => path.isAbsolute(filePath)
-      ? workspaceHost.acquireDroppedSource(filePath)
-      : Effect.fail(new WorkspaceRequestError({ message: 'Drop a file from your device.' })),
+    acquireDroppedPath: (filePath) => openAuthorizedDroppedPath(
+      droppedPaths,
+      (authorizedPath) => workspaceHost.acquireDroppedSource(authorizedPath),
+      filePath,
+    ),
   });
   const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
     try: () => confirmWorkspaceClose(impact), catch: toError,

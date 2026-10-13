@@ -46,7 +46,11 @@ export interface CreateCsvViewerOptions {
   readonly executor?: ComparisonExecutor;
   readonly diagnostics?: WorkspaceDiagnostics;
   readonly startup?: WorkspaceStartup;
-  /** Desktop drop acquisition. Absent on web, where a `File` never becomes a path. */
+  /**
+   * Desktop drop acquisition. The renderer can send any string. The desktop
+   * callback must reject a path the preload did not derive from a dropped File.
+   * Absent on web, where a File never becomes a path.
+   */
   readonly acquireDroppedPath?: (filePath: string) => Effect.Effect<CsvSourceId, WorkspaceRequestError | CsvSourceUnavailableError>;
 }
 

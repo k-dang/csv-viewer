@@ -7,6 +7,7 @@ declare global {
   }
 }
 
+/** Returns the native path after the preload has recorded it with main. */
 export function pathForDroppedFile(file: File): string {
   const filePath = window.csvViewerPathForFile(file);
   if (!filePath) throw new Error('Drop a file from your device.');
