@@ -13,9 +13,10 @@ import type {
   ReadComparisonSnapshotWindowRequest,
   StoredComparisonWindow,
 } from '../../src/comparison/comparison-executor';
-import type {
-  WorkspaceContractFactory,
-  WorkspaceContractFixture,
+import {
+  expectRpcFailure,
+  type WorkspaceContractFactory,
+  type WorkspaceContractFixture,
 } from './workspace-contract';
 
 const validDiagnostics: SourceKeyDiagnostics = {
@@ -322,7 +323,7 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         workspace.call({ operation: 'csv.get-edit-state', ...request }),
       ];
       for (const mutation of mutations)
-        await expect(mutation).rejects.toThrow('closing');
+        await expectRpcFailure(mutation, 'WorkspaceRequestError', 'closing');
 
       executor.releaseCancellation();
       await expect(closing).resolves.toEqual({
@@ -574,14 +575,12 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         status: 'failed',
         message: 'The CSV workspace is closing.',
       });
-      await expect(
-        workspace.call({
+      await expectRpcFailure(workspace.call({
           operation: 'csv.get-rows',
           workingCsvId: baseline.workingCsvId,
           offset: 0,
           limit: 100,
-        }),
-      ).rejects.toThrow('CSV workspace is disposing.');
+        }), 'WorkspaceRequestError', 'CSV workspace is disposing.');
     });
 
     it('waits for a Working CSV open admitted before disposal', async () => {
@@ -628,14 +627,12 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
         workingCsvId: workingCsv.workingCsvId,
       });
 
-      await expect(
-        workspace.call({
+      await expectRpcFailure(workspace.call({
           operation: 'csv.get-rows',
           workingCsvId: workingCsv.workingCsvId,
           offset: 0,
           limit: 100,
-        }),
-      ).rejects.toThrow('Working CSV is closing.');
+        }), 'WorkspaceRequestError', 'Working CSV is closing.');
       await expect(admittedRead).resolves.toMatchObject({
         filteredRowCount: 2,
       });
@@ -715,9 +712,9 @@ export function defineCsvWorkspaceLifecycleContract(factory: WorkspaceContractFa
       }
       await expect(terminal).resolves.toMatchObject({ status: 'cancelled' });
       expect(value.latestComparison(comparisonId)).toBeNull();
-      await expect(value.viewer.call({
+      await expectRpcFailure(value.viewer.call({
         operation: 'csv.get-rows', workingCsvId: baseline.workingCsvId, offset: 0, limit: 10,
-      })).rejects.toThrow('CSV workspace is disposing.');
+      }), 'WorkspaceRequestError', 'CSV workspace is disposing.');
     });
   });
 }

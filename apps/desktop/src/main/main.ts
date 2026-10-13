@@ -2,25 +2,23 @@ import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   Menu,
   session,
   type BrowserWindowConstructorOptions,
   type MessageBoxOptions,
+  type WebContents,
 } from 'electron';
 import path from 'node:path';
 import { Effect } from 'effect';
-import { toError } from '@csv-viewer/workspace/errors';
+import { toError, WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { DesktopLifecycle, WindowWorkspace } from './desktop-lifecycle';
 import { buildApplicationMenuTemplate } from './application-menu';
-import { registerCsvViewerRequestHandler, registerDroppedSourceHandler } from './csv-viewer-ipc';
-import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import { serveWorkspacePort } from './csv-viewer-port';
+import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
 import { DesktopWorkspaceHost } from './desktop-workspace-host';
-import { ipcChannels } from '../ipc-channels';
 import {
   supportedCsvFileExtensions,
-  type CsvViewerEvent,
   type WorkspaceCloseImpact,
 } from '@csv-viewer/workspace/csv-viewer';
 
@@ -71,6 +69,7 @@ const workspaceHost = new DesktopWorkspaceHost(
   path.join(app.getPath('userData'), 'recent-files.json'),
 );
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+let documentContents: WebContents | undefined;
 
 function focusedWindow(): BrowserWindow | undefined {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -123,6 +122,7 @@ const createWindow = Effect.fnUntraced(function* () {
 
   const mainWindow = new BrowserWindow(windowOptions);
   const { webContents } = mainWindow;
+  documentContents = webContents;
   webContents.on('did-start-navigation', (details) => {
     if (!details.isMainFrame || details.isSameDocument || quit.allowed) return;
     documentWorkspace.replace().catch(() => {
@@ -157,8 +157,9 @@ function createApplicationMenu() {
     appName: app.name,
     isDevelopment,
     onIntent: (intent) => {
-      // A menu command acts on the window the user is looking at, not on every open window.
-      focusedWindow()?.webContents.send(ipcChannels.event, { type: 'intent', intent } satisfies CsvViewerEvent);
+      const current = documentWorkspace.get();
+      if (!current) return;
+      void current.then((document) => document.workspace.publishIntent(intent));
     },
     onAbout: () => {
       void showMessageBox({
@@ -171,13 +172,6 @@ function createApplicationMenu() {
   });
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
-
-function sendEvent(event: CsvViewerEvent) {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-    window.webContents.send(ipcChannels.event, event);
-  }
 }
 
 async function confirmDiscardChanges(sourceName: string): Promise<boolean> {
@@ -229,20 +223,19 @@ function reportCloseFailure() {
 
 /** The one window's document owns the workspace; closing the window or loading a new document ends it. */
 const documentWorkspace = new WindowWorkspace(async () => {
-  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost);
+  const contents = documentContents;
+  if (!contents) throw new Error('CSV Viewer has no document to serve.');
+  const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost, {
+    acquireDroppedPath: (filePath) => path.isAbsolute(filePath)
+      ? workspaceHost.acquireDroppedSource(filePath)
+      : Effect.fail(new WorkspaceRequestError({ message: 'Drop a file from your device.' })),
+  });
   const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
     try: () => confirmWorkspaceClose(impact), catch: toError,
   }), (code) => app.exit(code));
-  return { workspace, lifecycle, detach: workspace.onEvent(sendEvent) };
+  const detach = await serveWorkspacePort(contents, workspace);
+  return { workspace, lifecycle, detach };
 });
-
-const workspaceRequests: Pick<CsvWorkspaceOwner, 'receive'> = {
-  receive: async (payload) => {
-    const current = documentWorkspace.get();
-    if (!current) throw new Error('The CSV workspace is closing.');
-    return (await current).workspace.receive(payload);
-  },
-};
 
 /** Registered before startup, so a quit while the workspace opens still waits for it and disposes it. */
 const quit = { allowed: false, requested: false };
@@ -269,8 +262,6 @@ const startup = Effect.gen(function* () {
   yield* Effect.tryPromise({ try: () => app.whenReady(), catch: toError });
   registerContentSecurityPolicy();
   createApplicationMenu();
-  registerCsvViewerRequestHandler(ipcMain, workspaceRequests);
-  registerDroppedSourceHandler(ipcMain, (filePath) => workspaceHost.acquireDroppedSource(filePath));
   yield* createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

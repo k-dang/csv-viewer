@@ -20,7 +20,8 @@ import type {
   WorkingCsvView,
   WorkspaceCloseImpact,
 } from '../../../../packages/workspace/src/csv-viewer';
-import { createCsvViewer, type CsvWorkspaceOwner } from '../../../../packages/workspace/src/csv-workspace';
+import { connectRpcTestClient, type ConnectedCsvViewer } from '../../../../packages/workspace/src/csv-viewer-client';
+import { createCsvViewer, type CsvWorkspaceServer } from '../../../../packages/workspace/src/csv-workspace';
 import type { WorkspaceDiagnostics } from '../../../../packages/workspace/src/workspace-diagnostics';
 import type { WorkspaceRequestError } from '../../../../packages/workspace/src/errors';
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
@@ -233,22 +234,24 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   private readonly observer: WorkspaceContractObserver;
 
   private constructor(
-    private readonly workspace: CsvWorkspaceOwner,
+    private readonly server: CsvWorkspaceServer,
+    private readonly client: ConnectedCsvViewer,
     private readonly database: DuckDbWasmWorkspaceDatabase,
     private readonly host: WasmContractHost,
   ) {
-    this.observer = new WorkspaceContractObserver(workspace);
+    this.observer = new WorkspaceContractObserver(client);
   }
 
   get viewer(): CsvViewer {
-    return this.workspace;
+    return this.client;
   }
 
   static async create(executor?: ComparisonExecutor, diagnostics?: WorkspaceDiagnostics): Promise<WasmWorkspaceFixture> {
     const database = new SharedEngineWasmDatabase();
     const host = new WasmContractHost(database);
-    const workspace = await createCsvViewer(database.open(), host, { executor, diagnostics });
-    return new WasmWorkspaceFixture(workspace, database, host);
+    const server = await createCsvViewer(database.open(), host, { executor, diagnostics });
+    const client = await connectRpcTestClient(server);
+    return new WasmWorkspaceFixture(server, client, database, host);
   }
 
   failNextMetadataRead(): void { failNextMetadataRead(this.database); }
@@ -343,11 +346,11 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   }
 
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
-    return this.workspace.confirmClose(confirmedImpact);
+    return this.server.confirmClose(confirmedImpact);
   }
 
   async disposeWorkspace(): Promise<void> {
-    await this.workspace.dispose();
+    await this.server.dispose();
   }
 
   awaitComparisonOutcome(operationId: ComparisonOperationId): Promise<ComparisonAttemptOutcomeView> {
@@ -357,5 +360,6 @@ export class WasmWorkspaceFixture implements WorkspaceContractFixture {
   async dispose(): Promise<void> {
     this.observer.dispose();
     await this.disposeWorkspace();
+    await this.client.close();
   }
 }

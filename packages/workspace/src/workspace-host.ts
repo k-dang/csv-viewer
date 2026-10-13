@@ -1,5 +1,5 @@
 import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './csv-viewer';
-import { Context, Data, type Effect, type Scope } from 'effect';
+import { Context, Schema, type Effect, type Scope } from 'effect';
 import type { DataEngineError } from './database';
 import type { WorkspaceRequestError } from './errors';
 
@@ -58,7 +58,7 @@ export interface CsvWorkspaceHost {
 export const CsvWorkspaceHost = Context.Service<CsvWorkspaceHost>('csv-viewer/Host');
 
 /** An expected CSV Source or export destination access failure, classified by the host. Its message is safe to show. */
-export class CsvSourceUnavailableError extends Data.TaggedError('CsvSourceUnavailableError')<{
-  code: CsvSourceUnavailableCode;
-  message: string;
-}> {}
+export class CsvSourceUnavailableError extends Schema.TaggedError<CsvSourceUnavailableError>()('CsvSourceUnavailableError', {
+  code: Schema.Literals(['missing-source', 'permission-denied', 'unreadable']),
+  message: Schema.String,
+}) {}

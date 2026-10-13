@@ -1,16 +1,20 @@
 import type { WorkspaceDiagnostics } from './workspace-diagnostics';
-import type { Deferred } from 'effect';
+import type { Context, Deferred, Effect } from 'effect';
+import type { Rpc, RpcGroup } from 'effect/rpc';
 import type {
   ConfirmWorkspaceCloseOutcome,
+  CsvSourceId,
   CsvViewer,
-  CsvViewerRequest,
-  CsvViewerResult,
+  CsvViewerCapabilities,
+  CsvViewerIntent,
   WorkspaceCloseImpact,
 } from './csv-viewer';
 import type { ComparisonExecutor } from './comparison/comparison-executor';
 import { CsvWorkspaceImplementation } from './csv-workspace-implementation';
+import type { CsvViewerRpcs } from './csv-viewer-rpcs';
 import type { OpenWorkspaceDatabase } from './database';
-import type { CsvWorkspaceHost } from './workspace-host';
+import type { CsvSourceUnavailableError, CsvWorkspaceHost } from './workspace-host';
+import type { WorkspaceRequestError } from './errors';
 
 /** Web startup stays in the same Layer build while the page may interrupt it. */
 export interface WorkspaceStartup {
@@ -19,11 +23,20 @@ export interface WorkspaceStartup {
   readonly stopped: Deferred.Deferred<void>;
 }
 
-/** Main-side ownership operations never cross the renderer protocol. */
-export interface CsvWorkspaceOwner extends CsvViewer {
-  /** Decodes an untrusted request payload, then dispatches it. `call` is its typed form. */
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters
-  receive(payload: unknown): Promise<CsvViewerResult<CsvViewerRequest>>;
+/**
+ * The process that owns the services. Renderer calls go through `handlerContext`.
+ * `confirmClose` and `dispose` stay on this side of the protocol.
+ */
+export interface CsvWorkspaceServer {
+  readonly capabilities: CsvViewerCapabilities;
+  readonly handlerContext: Context.Context<Rpc.ToHandler<RpcGroup.Rpcs<typeof CsvViewerRpcs>>>;
+  confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome>;
+  dispose(): Promise<void>;
+  publishIntent(intent: CsvViewerIntent): void;
+}
+
+/** Renderer Promise surface plus the owner methods the page calls on the same object. */
+export interface CsvViewerSession extends CsvViewer {
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome>;
   dispose(): Promise<void>;
 }
@@ -33,6 +46,8 @@ export interface CreateCsvViewerOptions {
   readonly executor?: ComparisonExecutor;
   readonly diagnostics?: WorkspaceDiagnostics;
   readonly startup?: WorkspaceStartup;
+  /** Desktop drop acquisition. Absent on web, where a `File` never becomes a path. */
+  readonly acquireDroppedPath?: (filePath: string) => Effect.Effect<CsvSourceId, WorkspaceRequestError | CsvSourceUnavailableError>;
 }
 
 /**
@@ -45,6 +60,6 @@ export function createCsvViewer(
   openDatabase: OpenWorkspaceDatabase,
   host: CsvWorkspaceHost,
   options: CreateCsvViewerOptions = {},
-): Promise<CsvWorkspaceOwner> {
+): Promise<CsvWorkspaceServer> {
   return CsvWorkspaceImplementation.create(openDatabase, host, options);
 }

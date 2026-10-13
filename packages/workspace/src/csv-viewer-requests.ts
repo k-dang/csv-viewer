@@ -2,9 +2,8 @@ import { Schema, Tuple } from 'effect';
 
 /**
  * Runtime definitions of every CsvViewer request. Each request type is derived from the constant of
- * the same name, so a request's type and its validation cannot drift apart. The workspace decodes
- * every request against `CsvViewerRequest` before dispatch. `csv-viewer.ts` re-exports only the
- * types, so the renderer never bundles Effect.
+ * the same name, so a request's type and its validation cannot drift apart. RPC payloads reuse
+ * these structs without the `operation` tag, which is the RPC tag instead.
  */
 
 export const CsvDialectOptions = Schema.Struct({

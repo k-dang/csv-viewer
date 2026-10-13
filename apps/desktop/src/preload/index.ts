@@ -1,12 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { createElectronCsvViewer } from './electron-csv-viewer';
-import { ipcChannels } from '../ipc-channels';
-import { unwrapCsvViewerIpcResponse, type CsvViewerIpcResponse } from '../csv-viewer-ipc-response';
 
-contextBridge.exposeInMainWorld('csvViewer', createElectronCsvViewer(ipcRenderer));
-contextBridge.exposeInMainWorld('acquireDroppedCsvSource', (file: File) => {
-  const filePath = webUtils.getPathForFile(file);
-  if (!filePath) throw new Error('Drop a file from your device.');
-  return ipcRenderer.invoke(ipcChannels.acquireDroppedSource, filePath)
-    .then((response: CsvViewerIpcResponse<string>) => unwrapCsvViewerIpcResponse(response));
+// SAFETY: The preload and the page share this window. postMessage transfers the MessagePort.
+const page = globalThis as typeof globalThis & {
+  postMessage(message: { type: 'csv-viewer-port' }, targetOrigin: string, transfer?: ReadonlyArray<object>): void;
+};
+
+ipcRenderer.on('csv-viewer-port', (event) => {
+  page.postMessage({ type: 'csv-viewer-port' }, '*', event.ports);
 });
+
+contextBridge.exposeInMainWorld('csvViewerPathForFile', (file: File) => webUtils.getPathForFile(file));

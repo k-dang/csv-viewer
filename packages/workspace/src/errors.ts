@@ -1,15 +1,27 @@
-import { Data } from 'effect';
+import { Schema } from 'effect';
 import { DataEngineError } from './database';
 import { CsvSourceUnavailableError } from './workspace-host';
 
-/** A deliberate request rejection whose message is safe to show to the user. `cause` is never shown. */
-export class WorkspaceRequestError extends Data.TaggedError('WorkspaceRequestError')<{ message: string; cause?: unknown }> {}
+/**
+ * A deliberate request rejection whose message is safe to show. `cause` stays off the schema so
+ * the RPC encoder cannot send it to the renderer.
+ */
+export class WorkspaceRequestError extends Schema.TaggedError<WorkspaceRequestError>()('WorkspaceRequestError', {
+  message: Schema.String,
+}) {
+  readonly cause?: unknown;
+
+  constructor(props: { readonly message: string; readonly cause?: unknown }) {
+    super({ message: props.message });
+    this.cause = props.cause;
+  }
+}
 
 /** A CSV Source that could not become a Working CSV, with product guidance and a diagnostic category. */
-export class CsvOpenError extends Data.TaggedError('CsvOpenError')<{
-  message: string;
-  category: 'source-access' | 'dialect' | 'engine';
-}> {}
+export class CsvOpenError extends Schema.TaggedError<CsvOpenError>()('CsvOpenError', {
+  message: Schema.String,
+  category: Schema.Literals(['source-access', 'dialect', 'engine']),
+}) {}
 
 export const genericWorkspaceFailure = 'The CSV workspace could not complete the request.';
 

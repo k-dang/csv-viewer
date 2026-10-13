@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-10-13T00:02:27Z	start	step 4 RPC pivot from main 747d557	one protocol replaces the promise adapter and the IPC envelope	bc-3e51d7a2-80b7-584f-9068-1f59f475b2d9	open
+2026-10-13T00:03:18Z	frame	one PR for the protocol, both transports, the shim, and the deletion	an intermediate PR either keeps the envelope or fails desktop and browser checks	.audit/csv-viewer-rpc.tsv	open
+2026-10-13T00:03:18Z	harness	measured renderer bundles on main before the RPC change	the delta needs a production build of the same vite config	desktop index js 1462.23 kB gzip 434.27 kB; web index js 1834.75 kB gzip 534.56 kB	baseline
+2026-10-13T02:16:52Z	prove	events reach onEvent before the call promise resolves	comparison contracts read the view on the next line	offer wakes the events fiber before scheduleTask returns; pnpm test 640 passed	passed
+2026-10-13T02:16:52Z	harness	renderer index js after the RPC client	one vite production build each, same config as the baseline	desktop 1584.76 kB gzip 474.21 kB (+122.53 / +39.94); web 1874.34 kB gzip 546.94 kB (+39.59 / +12.38)	measured

@@ -1,4 +1,5 @@
-import { createCsvViewer, type CsvWorkspaceOwner } from '@csv-viewer/workspace/csv-workspace';
+import { connectInProcessSession } from '@csv-viewer/workspace/csv-viewer-client';
+import { createCsvViewer, type CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
 import type {
   CsvCapacityExceeded,
   CsvSourceId,
@@ -9,7 +10,7 @@ import type { WebCsvCapacityLimits, WebCsvFilePicker } from './web-workspace-hos
 import { WebWorkspaceHost } from './web-workspace-host';
 
 export type WebCsvViewerStartup =
-  | { status: 'ready'; viewer: CsvWorkspaceOwner; acquireDroppedSource: (file: File) => Promise<CsvSourceId | CsvCapacityExceeded> }
+  | { status: 'ready'; viewer: CsvViewerSession; acquireDroppedSource: (file: File) => Promise<CsvSourceId | CsvCapacityExceeded> }
   | { status: 'unsupported' };
 
 export interface WebCsvViewerOptions {
@@ -33,7 +34,7 @@ export async function startWebCsvViewer(
     });
     return {
       status: 'ready',
-      viewer: workspace,
+      viewer: await connectInProcessSession(workspace),
       acquireDroppedSource: async (file) => host.registerSource(file),
     };
   } catch {
@@ -43,7 +44,7 @@ export async function startWebCsvViewer(
 
 /** Releases the page-scoped Worker and in-memory workspace when navigation completes. */
 export function disposeWorkspaceWhenPageHides(
-  workspace: Pick<CsvWorkspaceOwner, 'dispose'>,
+  workspace: Pick<CsvViewerSession, 'dispose'>,
   page: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = window,
   reload: () => void = () => window.location.reload(),
 ): () => void {

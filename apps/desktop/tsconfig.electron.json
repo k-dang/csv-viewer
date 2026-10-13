@@ -10,7 +10,6 @@
     "src/main",
     "src/preload",
     "src/electron-csv-viewer-capabilities.ts",
-    "src/ipc-channels.ts",
     "vite.electron.config.ts"
   ],
   "exclude": ["**/*.test.*"]

@@ -1,25 +1,25 @@
 import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure } from './workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope } from 'effect';
+import type { Rpc, RpcGroup } from 'effect/rpc';
 import { rejected } from './comparison/comparison-key-rules';
 import { makeWorkspaceLayer } from './workspace-runtime';
 import { DatabaseReleaseError, stoppedEngineMessage, type DataEngineError, type OpenWorkspaceDatabase } from './database';
 import { Comparisons } from './comparison/csv-comparison-service';
 import { WorkingCsvs } from './working-csv/working-csv-store';
 import { CsvWorkspaceHost, type CsvSourceUnavailableError } from './workspace-host';
-import type { CreateCsvViewerOptions, CsvWorkspaceOwner } from './csv-workspace';
-import { genericWorkspaceFailure, type CsvOpenError, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError, type ExpectedWorkspaceError } from './errors';
-import { CloseImpact, CsvViewerRequest } from './csv-viewer-requests';
+import type { CreateCsvViewerOptions, CsvWorkspaceServer } from './csv-workspace';
+import { CsvViewerRpcs } from './csv-viewer-rpcs';
+import { genericWorkspaceFailure, type CsvOpenError, isExpectedWorkspaceError, malformedRequestMessage, WorkspaceRequestError } from './errors';
+import { CloseImpact, type BeginComparisonRequest, type CloseWorkingCsvRequest } from './csv-viewer-requests';
 import type {
   BeginComparisonResult,
-  BeginComparisonRequest,
   CloseWorkingCsvOutcome,
-  CloseWorkingCsvRequest,
   ComparisonId,
   CsvDialectOptions,
   CsvExportOutcome,
   CsvSourceId,
   CsvViewerEvent,
-  CsvViewerResult,
+  CsvViewerIntent,
   OpenCsvResult,
   WorkingCsvId,
   WorkingCsvView,
@@ -27,13 +27,11 @@ import type {
   ConfirmWorkspaceCloseOutcome,
 } from './csv-viewer';
 
-type ComparisonRequest = Extract<CsvViewerRequest, { operation: `comparison.${string}` }>;
-type ExportRequest = Extract<CsvViewerRequest, { operation: 'csv.export' | 'csv.export-view' }>;
-
-function isExportRequest(request: CsvViewerRequest): request is ExportRequest {
-  return request.operation === 'csv.export' || request.operation === 'csv.export-view';
-}
 type WorkspaceServices = Layer.Success<ReturnType<typeof makeWorkspaceLayer>>;
+type HandlerContext = Context.Context<Rpc.ToHandler<RpcGroup.Rpcs<typeof CsvViewerRpcs>>>;
+type DroppedPath = (
+  filePath: string,
+) => Effect.Effect<CsvSourceId, WorkspaceRequestError | CsvSourceUnavailableError>;
 
 /** Disposal closes the build scope. Forked fibers live in a child of that scope, so closing it interrupts them. */
 interface WorkspaceRuntime {
@@ -50,7 +48,6 @@ const RequestIdentifiers = Schema.Struct({
   candidateId: Schema.optional(Schema.String),
 });
 const ProductResult = Schema.Struct({ status: Schema.String });
-const decodeRequest = Schema.decodeUnknownOption(CsvViewerRequest);
 const decodeIdentifiers = Schema.decodeUnknownOption(RequestIdentifiers);
 const sameCloseImpact = Schema.toEquivalence(CloseImpact);
 const engineStoppedEvent: Extract<CsvViewerEvent, { type: 'fatal-error' }> = {
@@ -59,27 +56,31 @@ const engineStoppedEvent: Extract<CsvViewerEvent, { type: 'fatal-error' }> = {
 };
 
 /**
- * The one shared, runtime-neutral domain seam. Every operation is asynchronous and every request,
- * result, and event is structured-clone-safe, so desktop can reach it over IPC while web wires it
- * up in the page. Everything below it - the Working CSV store, edit history, query construction,
- * comparison orchestration, and database access - is internal implementation.
+ * The services behind CsvViewerRpcs. Handlers run with those services and not as runtime fibers:
+ * disposing the runtime would interrupt them, while disposal settles admitted work by its own rules.
  */
-export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
+export class CsvWorkspaceImplementation implements CsvWorkspaceServer {
   private disposal: Promise<void> | null = null;
   private readonly host: CsvWorkspaceHost;
   private readonly workingCsvs: WorkingCsvs;
   private readonly comparisons: Comparisons;
   private readonly listeners = new Set<(event: CsvViewerEvent) => void>();
+  private readonly acquireDroppedPath: DroppedPath;
+  handlerContext!: HandlerContext;
 
   private constructor(
     private readonly workspaceId: string,
     private readonly runtime: WorkspaceRuntime,
     private readonly context: Context.Context<WorkspaceServices>,
     private readonly stopped: Deferred.Deferred<void> | undefined,
+    acquireDroppedPath: DroppedPath | undefined,
   ) {
     this.host = Context.get(context, CsvWorkspaceHost);
     this.workingCsvs = Context.get(context, WorkingCsvs);
     this.comparisons = Context.get(context, Comparisons);
+    this.acquireDroppedPath = acquireDroppedPath ?? (() => Effect.fail(new WorkspaceRequestError({
+      message: 'Drop a file from your device.',
+    })));
   }
 
   /**
@@ -89,7 +90,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   static async create(
     openDatabase: OpenWorkspaceDatabase,
     host: CsvWorkspaceHost,
-    { executor, diagnostics, startup }: CreateCsvViewerOptions,
+    { executor, diagnostics, startup, acquireDroppedPath }: CreateCsvViewerOptions,
   ): Promise<CsvWorkspaceImplementation> {
     const workspaceId = crypto.randomUUID();
     const layer = makeWorkspaceLayer(openDatabase, host, executor, diagnostics, startup?.stopped);
@@ -120,7 +121,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         onFiberStart: Fiber.runIn(fiberScope),
       }),
     };
-    const workspace = new CsvWorkspaceImplementation(workspaceId, runtime, context, startup?.stopped);
+    const workspace = new CsvWorkspaceImplementation(workspaceId, runtime, context, startup?.stopped, acquireDroppedPath);
     if (startup) {
       // Disposal interrupts the watcher, so a started notification finishes first.
       runtime.runFork(Deferred.await(startup.stopped).pipe(
@@ -130,6 +131,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
         Effect.annotateSpans({ workspaceId }),
       ));
     }
+    await workspace.attachHandlers();
     return workspace;
   }
 
@@ -137,123 +139,98 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
     return this.host.capabilities;
   }
 
-  call<Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>>;
-  call(request: CsvViewerRequest): Promise<CsvViewerResult<CsvViewerRequest>> {
-    return this.receive(request);
+  private async attachHandlers(): Promise<void> {
+    // SAFETY: Each handler closes over this workspace. Building the table requires no service context.
+    this.handlerContext = await Effect.runPromise(CsvViewerRpcs.toHandlers(this.rpcHandlers()) as Effect.Effect<HandlerContext>);
+  }
+
+  private rpcHandlers(): RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof CsvViewerRpcs>> {
+    return {
+      'csv.open': (payload) => this.request(this.openCsv(payload), 'csv.open', payload),
+      'csv.open-recent': (payload) => this.request(
+        this.openSource(payload.sourceId, payload.options).pipe(Effect.uninterruptible),
+        'csv.open-recent',
+        payload,
+      ),
+      'csv.reopen': (payload) => this.request(this.reopenCsv(payload.workingCsvId, payload.options), 'csv.reopen', payload),
+      'csv.get-recent-sources': () => this.request(Effect.suspend(() => this.host.recentSources()), 'csv.get-recent-sources', {}),
+      'csv.get-rows': (payload) => this.request(this.workingCsvs.getRows(payload), 'csv.get-rows', payload),
+      'csv.get-column-values': (payload) => this.request(this.workingCsvs.getColumnValues(payload), 'csv.get-column-values', payload),
+      'csv.get-column-value-counts': (payload) => this.request(this.workingCsvs.getColumnValueCounts(payload), 'csv.get-column-value-counts', payload),
+      'csv.edit-cell': (payload) => this.request(this.workingCsvs.editCell(payload), 'csv.edit-cell', payload),
+      'csv.delete-rows': (payload) => this.request(this.workingCsvs.deleteRows(payload), 'csv.delete-rows', payload),
+      'csv.insert-row': (payload) => this.request(this.workingCsvs.insertRow(payload), 'csv.insert-row', payload),
+      'csv.rename-column': (payload) => this.request(this.workingCsvs.renameColumn(payload), 'csv.rename-column', payload),
+      'csv.insert-column': (payload) => this.request(this.workingCsvs.insertColumn(payload), 'csv.insert-column', payload),
+      'csv.delete-column': (payload) => this.request(this.workingCsvs.deleteColumn(payload), 'csv.delete-column', payload),
+      'csv.reorder-columns': (payload) => this.request(this.workingCsvs.reorderColumns(payload), 'csv.reorder-columns', payload),
+      'csv.get-edit-state': (payload) => this.request(this.workingCsvs.getEditState(payload), 'csv.get-edit-state', payload),
+      'csv.undo': (payload) => this.request(this.workingCsvs.undo(payload.workingCsvId), 'csv.undo', payload),
+      'csv.redo': (payload) => this.request(this.workingCsvs.redo(payload.workingCsvId), 'csv.redo', payload),
+      'csv.export': (payload) => this.request(Effect.suspend(() => this.workingCsvs.has(payload.workingCsvId)
+        ? this.workingCsvs.exportCsv(payload.workingCsvId)
+        : Effect.succeed({ status: 'cancelled' } satisfies CsvExportOutcome)), 'csv.export', payload),
+      'csv.export-view': (payload) => this.request(this.workingCsvs.exportView(payload), 'csv.export-view', payload),
+      'csv.close': (payload) => this.request(this.closeCsv(payload), 'csv.close', payload),
+      'comparison.get-candidates': (payload) => this.request(
+        Effect.sync(() => this.comparisons.candidatesFor(payload.baselineId)),
+        'comparison.get-candidates',
+        payload,
+      ),
+      'comparison.open': (payload) => this.request(Effect.sync(() => this.comparisons.open(payload)), 'comparison.open', payload),
+      'comparison.begin': (payload) => this.request(Effect.suspend(() => this.disposal
+        ? Effect.succeed(rejected('source-not-found', 'The CSV workspace is closing.'))
+        : this.beginComparison(payload)), 'comparison.begin', payload),
+      'comparison.cancel': (payload) => this.request(Effect.suspend(() => this.comparisons.getState(payload.comparisonId)
+        ? this.comparisons.cancel(payload)
+        : Effect.succeed({ status: 'comparison-not-found' } as const)), 'comparison.cancel', payload),
+      'comparison.get-window': (payload) => this.request(Effect.suspend(() => this.disposal
+        ? Effect.succeed(rejected('source-not-found', 'The CSV workspace is closing.'))
+        : this.comparisons.getWindow(payload)), 'comparison.get-window', payload),
+      'comparison.swap': (payload) => this.request(
+        Effect.sync(() => this.comparisons.swap(payload.comparisonId)),
+        'comparison.swap',
+        payload,
+      ),
+      'comparison.close': (payload) => this.request(Effect.suspend(() => this.comparisons.getState(payload.comparisonId)
+        ? this.comparisons.close(payload.comparisonId)
+        : Effect.succeed({ status: 'closed', comparisonId: payload.comparisonId } as const)), 'comparison.close', payload),
+      'csvViewer.malformed': () => this.request(
+        Effect.fail(new WorkspaceRequestError({ message: malformedRequestMessage })),
+        'csv-viewer.request',
+        {},
+        'malformed-request',
+      ),
+      'csv.acquire-dropped-source': (payload) => this.request(this.acquireDroppedPath(payload.path), 'csv.acquire-dropped-source', payload),
+      'workspace.events': () => this.events(),
+    };
   }
 
   /**
-   * Decodes an untrusted payload, then dispatches it. A malformed payload never names a span or
-   * log: it records the fixed `csv-viewer.request` stage and rejects with one fixed message.
+   * Runs one operation under a span named after it. A stopped engine rejects before any span.
+   * Requests that arrive after disposal still get a product answer from the handler.
    */
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters
-  receive(payload: unknown): Promise<CsvViewerResult<CsvViewerRequest>> {
-    if (this.engineStopped) return Promise.reject(workspaceStoppedError());
-    const request = decodeRequest(payload);
-    if (Option.isNone(request)) {
-      const malformed = Effect.fail(new WorkspaceRequestError({ message: malformedRequestMessage }));
-      return this.runEffect(malformed, 'csv-viewer.request', {}, 'malformed-request');
-    }
-    const identifiers = Option.getOrElse(decodeIdentifiers(request.value), () => ({}));
-    return this.runEffect(Effect.suspend(() => this.handle(request.value)), request.value.operation, identifiers);
-  }
-
-  private handle(request: CsvViewerRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, ExpectedWorkspaceError> {
-    if (isExportRequest(request)) return this.handleExport(request);
-    switch (request.operation) {
-      case 'csv.open':
-        return this.openCsv(request);
-      case 'csv.open-recent':
-        return this.openSource(request.sourceId, request.options).pipe(Effect.uninterruptible);
-      case 'csv.reopen':
-        return this.reopenCsv(request.workingCsvId, request.options);
-      case 'csv.get-recent-sources':
-        return this.host.recentSources();
-      case 'csv.get-rows':
-        return this.workingCsvs.getRows(request);
-      case 'csv.get-column-values':
-        return this.workingCsvs.getColumnValues(request);
-      case 'csv.get-column-value-counts':
-        return this.workingCsvs.getColumnValueCounts(request);
-      case 'csv.edit-cell':
-        return this.workingCsvs.editCell(request);
-      case 'csv.delete-rows':
-        return this.workingCsvs.deleteRows(request);
-      case 'csv.insert-row':
-        return this.workingCsvs.insertRow(request);
-      case 'csv.rename-column':
-        return this.workingCsvs.renameColumn(request);
-      case 'csv.insert-column':
-        return this.workingCsvs.insertColumn(request);
-      case 'csv.delete-column':
-        return this.workingCsvs.deleteColumn(request);
-      case 'csv.reorder-columns':
-        return this.workingCsvs.reorderColumns(request);
-      case 'csv.get-edit-state':
-        return this.workingCsvs.getEditState(request);
-      case 'csv.undo':
-        return this.workingCsvs.undo(request.workingCsvId);
-      case 'csv.redo':
-        return this.workingCsvs.redo(request.workingCsvId);
-      case 'csv.close':
-        return this.closeCsv(request);
-      default:
-        return this.handleComparison(request);
-    }
-  }
-
-  private handleExport(request: ExportRequest): Effect.Effect<CsvViewerResult<ExportRequest>, ExpectedWorkspaceError> {
-    switch (request.operation) {
-      case 'csv.export':
-        return Effect.suspend(() => this.workingCsvs.has(request.workingCsvId)
-          ? this.workingCsvs.exportCsv(request.workingCsvId)
-          : Effect.succeed({ status: 'cancelled' } satisfies CsvExportOutcome));
-      case 'csv.export-view':
-        return this.workingCsvs.exportView(request);
-    }
-  }
-
-  private handleComparison(request: ComparisonRequest): Effect.Effect<CsvViewerResult<CsvViewerRequest>, ExpectedWorkspaceError> {
-    const closing = this.disposal && (request.operation === 'comparison.begin' || request.operation === 'comparison.get-window');
-    if (closing) return Effect.succeed(rejected('source-not-found', 'The CSV workspace is closing.'));
-    switch (request.operation) {
-      case 'comparison.get-candidates':
-        return Effect.sync(() => this.comparisons.candidatesFor(request.baselineId));
-      case 'comparison.open':
-        return Effect.sync(() => this.comparisons.open(request));
-      case 'comparison.begin':
-        return this.beginComparison(request);
-      case 'comparison.cancel':
-        return Effect.suspend(() => this.comparisons.getState(request.comparisonId)
-          ? this.comparisons.cancel(request)
-          : Effect.succeed({ status: 'comparison-not-found' } as const));
-      case 'comparison.get-window':
-        return this.comparisons.getWindow(request);
-      case 'comparison.swap':
-        return Effect.sync(() => this.comparisons.swap(request.comparisonId));
-      case 'comparison.close':
-        return Effect.suspend(() => this.comparisons.getState(request.comparisonId)
-          ? this.comparisons.close(request.comparisonId)
-          : Effect.succeed({ status: 'closed', comparisonId: request.comparisonId } as const));
-    }
-  }
-
-  /**
-   * The shared entry adapter. Runs one operation under a span named after it, with correlated
-   * identifiers, its product outcome, and its cleanup result. Operations run with the workspace
-   * services but not as runtime fibers: disposing the runtime would interrupt them, while disposal
-   * settles admitted work by its own rules, and requests that arrive after disposal still get a
-   * product answer. When operation and cleanup both fail, all causes are retained.
-   */
-  private async runEffect<A, E>(
+  private request<A, E>(
     effect: Effect.Effect<A, E>,
     stage: string,
-    identifiers: typeof RequestIdentifiers.Type = {},
+    // oxlint-disable-next-line anti-slop/no-object-parameters -- schema payloads vary; identifiers are the UUID fields they carry
+    payload: object,
     failureOutcome: 'failed' | 'malformed-request' = 'failed',
-  ): Promise<A> {
+  ): Effect.Effect<A, E | WorkspaceRequestError> {
+    if (this.engineStopped) return Effect.fail(new WorkspaceRequestError({ message: stoppedEngineMessage }));
+    const identifiers = Option.getOrElse(decodeIdentifiers(payload), () => ({}));
+    return this.observe(effect, stage, identifiers, failureOutcome);
+  }
+
+  private observe<A, E>(
+    effect: Effect.Effect<A, E>,
+    stage: string,
+    identifiers: typeof RequestIdentifiers.Type,
+    failureOutcome: 'failed' | 'malformed-request' = 'failed',
+  ): Effect.Effect<A, E> {
     const cleanup = { failed: false };
     const cleanupResult = () => cleanup.failed ? 'cleanup-failed' : 'succeeded';
-    const observed = observeStage(stage, effect.pipe(
+    return observeStage(stage, effect.pipe(
       Effect.onExit((exit) => Exit.isFailure(exit)
         ? recordOutcome(failureOutcome, exit.cause, cleanupResult())
         : Effect.annotateCurrentSpan({
@@ -261,15 +238,47 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
             cleanup: cleanupResult(),
           })),
       Effect.provideService(OperationCleanup, cleanup),
-    )).pipe(Effect.annotateSpans({ workspaceId: this.workspaceId, requestId: crypto.randomUUID(), ...identifiers }));
-    const result = await Effect.runPromiseExitWith(this.context)(observed);
-    if (Exit.isSuccess(result)) return result.value;
-    const [reason] = result.cause.reasons;
-    if (result.cause.reasons.length === 1 && reason._tag === 'Fail' && isExpectedWorkspaceError(reason.error)) {
-      throw new Error(reason.error.message);
-    }
-    throw new Error(genericWorkspaceFailure);
+    )).pipe(
+      Effect.annotateSpans({ workspaceId: this.workspaceId, requestId: crypto.randomUUID(), ...identifiers }),
+      Effect.provideContext(this.context),
+    );
   }
+
+  /** Owner methods keep declared failures. A defect becomes the generic message. */
+  private runOwner<A, E>(effect: Effect.Effect<A, E>, stage: string): Promise<A> {
+    return Effect.runPromise(Effect.exit(this.observe(effect, stage, {}))).then((exit) => {
+      if (Exit.isSuccess(exit)) return exit.value;
+      const [reason] = exit.cause.reasons;
+      if (exit.cause.reasons.length === 1 && reason && reason._tag === 'Fail' && isExpectedWorkspaceError(reason.error)) {
+        throw reason.error;
+      }
+      throw new Error(genericWorkspaceFailure);
+    });
+  }
+
+  publishIntent(intent: CsvViewerIntent): void {
+    const event: CsvViewerEvent = { type: 'intent', intent };
+    for (const listener of this.listeners) {
+      Effect.runFork(Effect.sync(() => listener(event)).pipe(
+        Effect.catchCause((cause) => reportFailure('workspace.notify-intent', cause)),
+      ));
+    }
+  }
+
+  /**
+   * The queue exists before the take loop, so the listener is registered before the stream waits.
+   * A stopped engine replays into that buffer. Later offers wake the loop on the caller's stack.
+   */
+  private readonly events = Effect.fnUntraced(function* (this: CsvWorkspaceImplementation) {
+    const queue = yield* Queue.unbounded<CsvViewerEvent>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() => this.onEvent((event) => {
+        Queue.offerUnsafe(queue, event);
+      })),
+      (stop) => Effect.sync(stop),
+    );
+    return queue;
+  });
 
   /** The stop watcher emits `fatal-error` to current listeners; a later listener gets it replayed once. */
   onEvent(listener: (event: CsvViewerEvent) => void): () => void {
@@ -300,7 +309,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
 
   private readonly openCsv = Effect.fnUntraced(function* (
     this: CsvWorkspaceImplementation,
-    { options, sourceId: reservedSourceId }: Extract<CsvViewerRequest, { operation: 'csv.open' }>,
+    { options, sourceId: reservedSourceId }: { readonly sourceId?: CsvSourceId; readonly options?: CsvDialectOptions },
   ): Effect.fn.Return<OpenCsvResult, CsvSourceUnavailableError | WorkspaceRequestError | CsvOpenError> {
     if (this.disposal) {
       if (reservedSourceId !== undefined) this.host.releaseSource(reservedSourceId);
@@ -433,8 +442,8 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
   ));
 
   confirmClose(confirmedImpact?: WorkspaceCloseImpact): Promise<ConfirmWorkspaceCloseOutcome> {
-    if (this.engineStopped) return Promise.reject(workspaceStoppedError());
-    return this.runEffect(Effect.gen({ self: this }, function* () {
+    if (this.engineStopped) return Promise.reject(new WorkspaceRequestError({ message: stoppedEngineMessage }));
+    return this.runOwner(Effect.gen({ self: this }, function* () {
       const impact = yield* this.windowCloseImpact();
       if (requiresWorkspaceConfirmation(impact) && !sameWorkspaceCloseImpact(impact, confirmedImpact)) {
         return { status: 'confirmation-required', impact } satisfies ConfirmWorkspaceCloseOutcome;
@@ -513,7 +522,7 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceOwner {
    * earlier release fails. A failed database release is a defect and marks cleanup failed.
    */
   private disposeWorkspace(): Promise<void> {
-    return this.runEffect(Effect.exit(this.runtime.disposeEffect).pipe(
+    return this.runOwner(Effect.exit(this.runtime.disposeEffect).pipe(
       Effect.tap((closed) => Exit.isFailure(closed) && closed.cause.reasons.some(isDatabaseReleaseFailure) ? markCleanupFailed : Effect.void),
       Effect.flatten,
     ), 'workspace.dispose');
@@ -525,8 +534,8 @@ function isDatabaseReleaseFailure(reason: Cause.Reason<unknown>): boolean {
 }
 
 /** The public rejection after a fatal stop never includes the Worker's error text. */
-function workspaceStoppedError(): Error {
-  return new Error(stoppedEngineMessage);
+function workspaceStoppedError(): WorkspaceRequestError {
+  return new WorkspaceRequestError({ message: stoppedEngineMessage });
 }
 
 function requiresConfirmation(impact: CloseImpact): boolean {

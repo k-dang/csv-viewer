@@ -1,17 +1,14 @@
-import type { CsvSourceId, CsvViewer } from '@csv-viewer/workspace/csv-viewer';
+import type { ConnectedCsvViewer } from '@csv-viewer/workspace/csv-viewer-client';
 
 declare global {
   interface Window {
-    csvViewer: CsvViewer;
-    acquireDroppedCsvSource: (file: File) => Promise<CsvSourceId>;
+    csvViewer?: ConnectedCsvViewer;
+    csvViewerPathForFile: (file: File) => string;
   }
 }
 
-/** The composition root is the only renderer module that reads the Electron preload bridge. */
-export function electronCsvViewer(): CsvViewer {
-  return window.csvViewer;
-}
-
-export function acquireDroppedCsvSource(file: File): Promise<CsvSourceId> {
-  return window.acquireDroppedCsvSource(file);
+export function pathForDroppedFile(file: File): string {
+  const filePath = window.csvViewerPathForFile(file);
+  if (!filePath) throw new Error('Drop a file from your device.');
+  return filePath;
 }
