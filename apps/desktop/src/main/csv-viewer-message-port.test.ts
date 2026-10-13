@@ -34,7 +34,7 @@ function database(): WorkspaceDatabase {
 async function serve(workspace: CsvWorkspaceServer, port: MessagePort): Promise<() => Promise<void>> {
   const scope = await Effect.runPromise(Scope.make());
   await Effect.runPromise(Layer.buildWithScope(
-    RpcServer.layer(CsvViewerRpcs).pipe(
+    RpcServer.layer(CsvViewerRpcs, { disableFatalDefects: true }).pipe(
       Layer.provide(messagePortServerLayer(dataMessagePort(port))),
       Layer.provide(Layer.succeedContext(workspace.handlerContext)),
     ),

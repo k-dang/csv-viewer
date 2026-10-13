@@ -46,12 +46,16 @@ export function runWorkspaceRequest<A, E>(effect: Effect.Effect<A, E>): Promise<
  * The one Promise surface RendererWorkspace, CsvTab, and ComparisonTab already call.
  * React stays on that surface; interruption belongs to the fiber that runs the client.
  */
-export function csvViewerFromRpcClient(client: CsvViewerRpcClient, capabilities: CsvViewerCapabilities): CsvViewer {
+export function csvViewerFromRpcClient(
+  client: CsvViewerRpcClient,
+  capabilities: CsvViewerCapabilities,
+  scope: Scope.Scope,
+): CsvViewer {
   const call = <Request extends CsvViewerRequest>(request: Request): Promise<CsvViewerResult<Request>> => {
     // SAFETY: Schema success types are the runtime values CsvViewerResult names. Arrays are mutable.
     return dispatch(client, request) as Promise<CsvViewerResult<Request>>;
   };
-  return { capabilities, call, onEvent: (listener) => subscribe(client, listener) };
+  return { capabilities, call, onEvent: (listener) => subscribe(client, listener, scope) };
 }
 
 export interface ConnectedCsvViewer extends CsvViewer {
@@ -113,7 +117,7 @@ function connect(
   return Effect.runPromise(Effect.gen(function* () {
     const scope = yield* Scope.make();
     const client = yield* open(scope);
-    const viewer = csvViewerFromRpcClient(client, capabilities);
+    const viewer = csvViewerFromRpcClient(client, capabilities, scope);
     return {
       ...viewer,
       acquireDroppedPath: (path: string) => runWorkspaceRequest(client['csv.acquire-dropped-source']({ path })),
@@ -125,6 +129,7 @@ function connect(
 const inProcessClient = Effect.fnUntraced(function* (host: CsvViewerHandlerHost) {
   let client!: Effect.Success<ReturnType<typeof RpcClient.makeNoSerialization<RpcGroup.Rpcs<typeof CsvViewerRpcs>, never, false>>>;
   const server = yield* RpcServer.makeNoSerialization(CsvViewerRpcs, {
+    disableFatalDefects: true,
     onFromServer: (response) => client.write(response),
   }).pipe(Effect.provideContext(host.handlerContext));
   client = yield* RpcClient.makeNoSerialization(CsvViewerRpcs, {
@@ -177,7 +182,7 @@ class WorkspaceEventScheduler implements Scheduler.Scheduler {
 
 const workspaceEventScheduler = new WorkspaceEventScheduler();
 
-function subscribe(client: CsvViewerRpcClient, listener: (event: CsvViewerEvent) => void): () => void {
+function subscribe(client: CsvViewerRpcClient, listener: (event: CsvViewerEvent) => void, scope: Scope.Scope): () => void {
   const fiber = Effect.runFork(Stream.runForEach(client['workspace.events']({}), (event) => Effect.sync(() => {
     try {
       // SAFETY: The events RPC success schema is CsvViewerEvent.
@@ -186,6 +191,8 @@ function subscribe(client: CsvViewerRpcClient, listener: (event: CsvViewerEvent)
       // One subscriber cannot end the stream or copy its exception into diagnostics.
     }
   })), { scheduler: workspaceEventScheduler });
+  // The server interrupt is a finalizer on this fiber. Close only closes `scope`.
+  Fiber.runIn(fiber, scope);
   workspaceEventScheduler.makeDispatcher().flush();
   return () => {
     Effect.runFork(Fiber.interrupt(fiber), { scheduler: workspaceEventScheduler });

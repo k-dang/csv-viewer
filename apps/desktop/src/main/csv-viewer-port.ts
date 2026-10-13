@@ -21,7 +21,7 @@ export async function serveWorkspacePort(webContents: WebContents, workspace: Cs
   const { port1, port2 } = new MessageChannelMain();
   const scope = await Effect.runPromise(Scope.make());
   await Effect.runPromise(Layer.buildWithScope(
-    RpcServer.layer(CsvViewerRpcs).pipe(
+    RpcServer.layer(CsvViewerRpcs, { disableFatalDefects: true }).pipe(
       Layer.provide(messagePortServerLayer(mainMessagePort(port1))),
       Layer.provide(Layer.succeedContext(workspace.handlerContext)),
     ),
