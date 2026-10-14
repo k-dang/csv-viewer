@@ -6,6 +6,7 @@ import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
 import { diagnosticCapture } from '../../../../packages/workspace/test/diagnostic-capture';
+import * as fileIdentity from './desktop-csv-export';
 
 describe('DesktopWorkspaceHost behavior', () => {
   let fixture: CsvWorkspaceFixture;
@@ -316,6 +317,33 @@ describe('DesktopWorkspaceHost behavior', () => {
     await expect(fixture.viewer.call({ operation: 'csv.undo', ...request })).resolves.toMatchObject({
       hasUnexportedChanges: false,
     });
+  });
+
+  it('gives one id when two registrations overlap a file that appears during identity capture', async () => {
+    const filePath = fixture.file('overlap.csv');
+    const realCapture = fileIdentity.captureFileIdentity;
+    let captures = 0;
+    const bothCapturing = Promise.withResolvers<void>();
+    vi.spyOn(fileIdentity, 'captureFileIdentity').mockImplementation(async (candidate) => {
+      if (candidate !== filePath) return realCapture(candidate);
+      captures += 1;
+      const order = captures;
+      if (captures === 2) bothCapturing.resolve();
+      await bothCapturing.promise;
+      if (order === 1) return null;
+      await writeFile(filePath, 'value\n1\n');
+      return realCapture(filePath);
+    });
+
+    try {
+      const ids = await Promise.all([
+        Effect.runPromise(fixture.host.registerSource(filePath)),
+        Effect.runPromise(fixture.host.registerSource(filePath)),
+      ]);
+      expect(ids[0]).toBe(ids[1]);
+    } finally {
+      vi.mocked(fileIdentity.captureFileIdentity).mockRestore();
+    }
   });
 });
 
