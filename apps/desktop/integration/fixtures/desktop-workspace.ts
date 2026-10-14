@@ -4,7 +4,7 @@ import { vi } from 'vitest';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DesktopWorkspaceHost, type DesktopExportWriter } from '../../src/main/desktop-workspace-host';
+import { openDesktopWorkspace, type DesktopExportWriter, type DesktopWorkspaceSession } from '../../src/main/desktop-workspace-host';
 import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
 import type {
   ComparisonAttemptOutcomeView,
@@ -55,7 +55,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
     private readonly server: CsvWorkspaceServer,
     private readonly client: ConnectedCsvViewer,
     private readonly database: DuckDbWorkspaceDatabase,
-    readonly host: DesktopWorkspaceHost,
+    readonly host: DesktopWorkspaceSession,
     readonly prompts: ScriptedPrompts,
   ) {
     this.observer = new WorkspaceContractObserver(client);
@@ -75,7 +75,7 @@ export class CsvWorkspaceFixture implements WorkspaceContractFixture {
       sourceConflictCount: 0,
     };
     try {
-      const host = new DesktopWorkspaceHost(
+      const host = openDesktopWorkspace(
         {
           chooseSource: async () => prompts.sourceChoices.shift() ?? null,
           chooseExportDestination: async (defaultPath) => {

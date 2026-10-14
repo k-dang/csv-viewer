@@ -18,7 +18,7 @@ import { buildApplicationMenuTemplate } from './application-menu';
 import { serveWorkspacePort } from './csv-viewer-port';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import { DuckDbWorkspaceDatabase } from './duckdb-database';
-import { DesktopWorkspaceHost } from './desktop-workspace-host';
+import { openDesktopWorkspace } from './desktop-workspace-host';
 import {
   DroppedPathAuthorization,
   openAuthorizedDroppedPath,
@@ -30,7 +30,7 @@ import {
 } from '@csv-viewer/workspace/csv-viewer';
 
 const electronRoot = __dirname;
-const workspaceHost = new DesktopWorkspaceHost(
+const workspaceHost = openDesktopWorkspace(
   {
     chooseSource: async () => {
       const result = await dialog.showOpenDialog({

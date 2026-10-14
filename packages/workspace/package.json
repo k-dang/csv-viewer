@@ -14,6 +14,7 @@
     "./database": "./src/database.ts",
     "./errors": "./src/errors.ts",
     "./engine-source": "./src/engine-source.ts",
+    "./source-table": "./src/source-table.ts",
     "./workspace-diagnostics": "./src/workspace-diagnostics.ts",
     "./workspace-host": "./src/workspace-host.ts"
   },
