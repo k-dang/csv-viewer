@@ -53,7 +53,6 @@ type RegisteredSource = {
 export class DesktopWorkspaceHost implements CsvWorkspaceHost {
   readonly capabilities = electronCsvViewerCapabilities;
   private readonly sources = new Map<CsvSourceId, RegisteredSource>();
-  private readonly sourceIdsByIdentity = new Map<string, CsvSourceId>();
   private readonly recentEntriesLock = Semaphore.makeUnsafe(1);
 
   constructor(
@@ -67,11 +66,14 @@ export class DesktopWorkspaceHost implements CsvWorkspaceHost {
     return filesystemEffect(() => captureFileIdentity(filePath)).pipe(
       Effect.mapError(toSourceUnavailableError),
       Effect.map((identity) => {
-        const identityKey = buildIdentityKey(identity, filePath);
-        const existingId = this.sourceIdsByIdentity.get(identityKey);
-        const sourceId = existingId ?? crypto.randomUUID();
+        const incoming = { filePath, identity };
+        for (const [existingId, existing] of this.sources) {
+          if (!sameRegisteredFile(existing, incoming)) continue;
+          this.sources.set(existingId, { sourceId: existingId, filePath, identity });
+          return existingId;
+        }
+        const sourceId = crypto.randomUUID();
         this.sources.set(sourceId, { sourceId, filePath, identity });
-        this.sourceIdsByIdentity.set(identityKey, sourceId);
         return sourceId;
       }),
     );
@@ -278,9 +280,13 @@ function warnRecentSourceFailure(action: 'read' | 'write', category: 'invalid-fo
   console.warn(`Unable to ${action} Recent CSV Sources (${category}).`);
 }
 
-function buildIdentityKey(identity: CanonicalFileIdentity | null, filePath: string): string {
-  if (identity && identity.inode !== 0n) return `inode:${identity.device}:${identity.inode}`;
-  return `path:${normalizeCanonicalPath(identity?.canonicalPath ?? path.resolve(filePath))}`;
+function sameRegisteredFile(
+  existing: RegisteredSource,
+  incoming: { filePath: string; identity: CanonicalFileIdentity | null },
+): boolean {
+  const samePath = normalizeCanonicalPath(path.resolve(existing.filePath)) === normalizeCanonicalPath(path.resolve(incoming.filePath));
+  if (samePath) return true;
+  return existing.identity !== null && incoming.identity !== null && sameFileIdentity(existing.identity, incoming.identity);
 }
 
 function buildDefaultExportName(sourceName: string): string {
