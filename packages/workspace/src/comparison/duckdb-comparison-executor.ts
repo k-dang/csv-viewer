@@ -1,5 +1,5 @@
 import { observeStage, retainDiagnosticContext } from '../workspace-diagnostics';
-import { Deferred, Effect, Exit, Cause, Schema, type Array as Arr, type Scope } from 'effect';
+import { Deferred, Effect, Exit, Cause, Schema, SynchronizedRef, type Array as Arr, type Scope } from 'effect';
 import { cleanupEffect } from './comparison-effects';
 import type {
   ComparisonRow,
@@ -18,6 +18,18 @@ import type {
   StoredComparisonWindow,
 } from './comparison-executor';
 import type { DataEngineError, WorkspaceDatabaseConnection } from '../database';
+
+type ReaderLease = {
+  readonly count: number;
+  readonly drained: Deferred.Deferred<void>;
+};
+
+type ExecutorState = {
+  readonly failedWorkers: ReadonlyMap<WorkspaceDatabaseConnection, Effect.Effect<void>>;
+  readonly readers: ReadonlyMap<ComparisonOperationId, ReaderLease>;
+  readonly snapshotReleases: ReadonlyMap<ComparisonOperationId, Effect.Effect<void, DataEngineError>>;
+  readonly retirements: ReadonlyMap<ComparisonOperationId, Effect.Effect<void, DataEngineError>>;
+};
 import { WorkspaceRequestError } from '../errors';
 import {
   buildDropTableSql,
@@ -62,18 +74,34 @@ export type DuckDbComparisonAccess = {
 };
 
 export class DuckDbComparisonExecutor implements ComparisonExecutor {
-  private readonly failedWorkers = new Map<WorkspaceDatabaseConnection, Effect.Effect<void>>();
-  private readonly readers = new Map<ComparisonOperationId, {
-    count: number;
-    drained: Deferred.Deferred<void>;
-  }>();
-  private readonly snapshotReleases = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
-  private readonly retirements = new Map<ComparisonOperationId, Effect.Effect<void, DataEngineError>>();
+  private readonly state: SynchronizedRef.SynchronizedRef<ExecutorState>;
 
   constructor(
     private readonly database: DuckDbComparisonAccess,
     private readonly artifactRegistry = new WorkspaceArtifactRegistry(),
-  ) {}
+  ) {
+    this.state = Effect.runSync(SynchronizedRef.make<ExecutorState>({
+      failedWorkers: new Map(),
+      readers: new Map(),
+      snapshotReleases: new Map(),
+      retirements: new Map(),
+    }));
+  }
+
+  private get documents(): ExecutorState {
+    return SynchronizedRef.getUnsafe(this.state);
+  }
+
+  private update(next: (state: ExecutorState) => ExecutorState): void {
+    Effect.runSync(SynchronizedRef.update(this.state, next));
+  }
+
+  private modify<A>(next: (state: ExecutorState) => readonly [A, ExecutorState]): A {
+    return Effect.runSync(SynchronizedRef.modify(this.state, (state) => {
+      const [value, documents] = next(state);
+      return [value, documents];
+    }));
+  }
 
   readonly openAttempt = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
@@ -82,9 +110,18 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       this.database.connectWorker(),
       (connection) => Effect.gen({ self: this }, function* () {
         const release = yield* retainDiagnosticContext(observeStage('comparison.release-worker', cleanupEffect(connection.close().pipe(
-          Effect.tap(() => Effect.sync(() => this.failedWorkers.delete(connection))),
+          Effect.tap(() => Effect.sync(() => this.update((state) => {
+            if (!state.failedWorkers.has(connection)) return state;
+            const failedWorkers = new Map(state.failedWorkers);
+            failedWorkers.delete(connection);
+            return { ...state, failedWorkers };
+          }))),
         ))));
-        this.failedWorkers.set(connection, release);
+        this.update((state) => {
+          const failedWorkers = new Map(state.failedWorkers);
+          failedWorkers.set(connection, release);
+          return { ...state, failedWorkers };
+        });
         yield* release;
       }),
     );
@@ -207,9 +244,14 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
       ]),
     ].join(', ');
 
-    this.snapshotReleases.set(request.artifactId, yield* retainDiagnosticContext(
+    const releaseSnapshot = yield* retainDiagnosticContext(
       observeStage('comparison.release-snapshot', this.retireSnapshot(request.artifactId)),
-    ));
+    );
+    this.update((state) => {
+      const snapshotReleases = new Map(state.snapshotReleases);
+      snapshotReleases.set(request.artifactId, releaseSnapshot);
+      return { ...state, snapshotReleases };
+    });
     this.artifactRegistry.register({
       tableName,
       owner: { kind: 'comparison', comparisonId: request.comparisonId, operationId: request.artifactId },
@@ -257,7 +299,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
   }, (effect) => Effect.scoped(effect));
 
   activateSnapshot(artifactId: ComparisonOperationId): void {
-    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
+    if (!this.hasSnapshot(artifactId) || this.documents.retirements.has(artifactId)) {
       throw new Error('Comparison staging snapshot is no longer available.');
     }
     this.artifactRegistry.transition(buildComparisonTableName(artifactId), 'active');
@@ -338,15 +380,24 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
     artifactId: ComparisonOperationId,
   ): Effect.fn.Return<void, DataEngineError> {
-    const existing = this.retirements.get(artifactId);
+    const existing = this.documents.retirements.get(artifactId);
     if (existing) return yield* existing;
     if (!this.hasSnapshot(artifactId)) return;
-    const release = this.snapshotReleases.get(artifactId);
+    const release = this.documents.snapshotReleases.get(artifactId);
     if (!release) return yield* Effect.die(new Error('Comparison snapshot release is missing.'));
     const retirement = yield* Effect.cached(release.pipe(
-      Effect.ensuring(Effect.sync(() => this.retirements.delete(artifactId))),
+      Effect.ensuring(Effect.sync(() => this.update((state) => {
+        if (!state.retirements.has(artifactId)) return state;
+        const retirements = new Map(state.retirements);
+        retirements.delete(artifactId);
+        return { ...state, retirements };
+      }))),
     ));
-    this.retirements.set(artifactId, retirement);
+    this.update((state) => {
+      const retirements = new Map(state.retirements);
+      retirements.set(artifactId, retirement);
+      return { ...state, retirements };
+    });
     yield* retirement;
   }, Effect.uninterruptible);
 
@@ -355,7 +406,7 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     this: DuckDbComparisonExecutor,
   ): Effect.fn.Return<void, DataEngineError> {
     const failures: Cause.Cause<DataEngineError>[] = [];
-    for (const release of [...this.failedWorkers.values()]) {
+    for (const release of [...this.documents.failedWorkers.values()]) {
       const result = yield* Effect.exit(release);
       if (Exit.isFailure(result)) failures.push(result.cause);
     }
@@ -375,29 +426,43 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     artifactId: ComparisonOperationId,
   ): Effect.fn.Return<void, WorkspaceRequestError> {
     const drained = yield* Deferred.make<void>();
-    if (!this.hasSnapshot(artifactId) || this.retirements.has(artifactId)) {
+    // The check and the increment are one synchronous update. A retirement that
+    // starts after this returns sees the lease and waits for it to drain.
+    const admitted = this.modify((state) => {
+      if (!this.hasSnapshot(artifactId) || state.retirements.has(artifactId)) return [false, state] as const;
+      const readers = new Map(state.readers);
+      const current = readers.get(artifactId);
+      if (current) readers.set(artifactId, { count: current.count + 1, drained: current.drained });
+      else readers.set(artifactId, { count: 1, drained });
+      return [true, { ...state, readers }] as const;
+    });
+    if (!admitted) {
       return yield* Effect.fail(new WorkspaceRequestError({ message: 'Comparison snapshot is no longer available.' }));
     }
-    const readers = this.readers.get(artifactId);
-    if (readers) readers.count += 1;
-    else this.readers.set(artifactId, { count: 1, drained });
   });
 
   private readonly releaseRead = Effect.fnUntraced(function* (
     this: DuckDbComparisonExecutor,
     artifactId: ComparisonOperationId,
   ): Effect.fn.Return<void> {
-    const readers = this.readers.get(artifactId);
-    if (!readers) return yield* Effect.die(new Error('Comparison reader lease is missing.'));
-    readers.count -= 1;
-    if (readers.count > 0) return;
-    this.readers.delete(artifactId);
-    yield* Deferred.succeed(readers.drained, undefined);
+    const drained = this.modify((state) => {
+      const current = state.readers.get(artifactId);
+      if (!current) return [undefined, state] as const;
+      const readers = new Map(state.readers);
+      if (current.count > 1) {
+        readers.set(artifactId, { count: current.count - 1, drained: current.drained });
+        return [null, { ...state, readers }] as const;
+      }
+      readers.delete(artifactId);
+      return [current.drained, { ...state, readers }] as const;
+    });
+    if (drained === undefined) return yield* Effect.die(new Error('Comparison reader lease is missing.'));
+    if (drained) yield* Deferred.succeed(drained, undefined);
   });
 
   private waitForReaders(artifactId: ComparisonOperationId): Effect.Effect<void> {
     return Effect.suspend(() => {
-      const readers = this.readers.get(artifactId);
+      const readers = this.documents.readers.get(artifactId);
       return readers ? Deferred.await(readers.drained) : Effect.void;
     });
   }
@@ -412,7 +477,12 @@ export class DuckDbComparisonExecutor implements ComparisonExecutor {
     const connection = yield* this.database.getOwnerConnection();
     yield* connection.run(buildDropTableSql(tableName));
     this.artifactRegistry.remove(tableName);
-    this.snapshotReleases.delete(artifactId);
+    this.update((state) => {
+      if (!state.snapshotReleases.has(artifactId)) return state;
+      const snapshotReleases = new Map(state.snapshotReleases);
+      snapshotReleases.delete(artifactId);
+      return { ...state, snapshotReleases };
+    });
   });
 
   private hasSnapshot(artifactId: ComparisonOperationId): boolean {
