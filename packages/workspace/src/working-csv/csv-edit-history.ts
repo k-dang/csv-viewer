@@ -32,18 +32,20 @@ export type CsvEditCommand = CsvEditDraft & {
  * Undo and redo stacks plus the revision identity that decides Unexported Changes. Unexported
  * Changes is `currentRevisionId !== lastExportedRevisionId`, so it follows the data rather than
  * stack depth: an edit that restores the exported stack depth with different content still counts.
+ * `journalId` is copied by `record`, `step`, and `markExported`. `create` starts a new journal.
  */
 export class CsvEditHistory {
-  private readonly undoStack: CsvEditCommand[] = [];
-  private readonly redoStack: CsvEditCommand[] = [];
-  private currentRevisionId: number;
-  private lastExportedRevisionId: number;
-  private nextRevisionId: number;
+  private constructor(
+    readonly undoStack: readonly CsvEditCommand[],
+    readonly redoStack: readonly CsvEditCommand[],
+    readonly currentRevisionId: number,
+    readonly lastExportedRevisionId: number,
+    readonly nextRevisionId: number,
+    readonly journalId: symbol,
+  ) {}
 
-  constructor(initialRevisionId = 0) {
-    this.currentRevisionId = initialRevisionId;
-    this.lastExportedRevisionId = initialRevisionId;
-    this.nextRevisionId = initialRevisionId + 1;
+  static create(initialRevisionId = 0): CsvEditHistory {
+    return new CsvEditHistory([], [], initialRevisionId, initialRevisionId, initialRevisionId + 1, Symbol());
   }
 
   get revisionSequence(): number {
@@ -71,43 +73,53 @@ export class CsvEditHistory {
    * keeps the answer right when the Working CSV moved on while the export was being delivered:
    * Unexported Changes stay set, and returning to the delivered revision clears them.
    */
-  markExported(revisionId: number): void {
-    this.lastExportedRevisionId = revisionId;
+  markExported(revisionId: number): CsvEditHistory {
+    if (revisionId === this.lastExportedRevisionId) return this;
+    return new CsvEditHistory(
+      this.undoStack,
+      this.redoStack,
+      this.currentRevisionId,
+      revisionId,
+      this.nextRevisionId,
+      this.journalId,
+    );
   }
 
-  record(draft: CsvEditDraft): void {
+  record(draft: CsvEditDraft): CsvEditHistory {
     const command: CsvEditCommand = {
       ...draft,
       previousRevisionId: this.currentRevisionId,
       revisionId: this.nextRevisionId,
     };
-    this.currentRevisionId = command.revisionId;
-    this.nextRevisionId += 1;
-    this.undoStack.push(command);
-    this.redoStack.length = 0;
+    return new CsvEditHistory(
+      [...this.undoStack, command],
+      [],
+      command.revisionId,
+      this.lastExportedRevisionId,
+      this.nextRevisionId + 1,
+      this.journalId,
+    );
   }
 
-  /** Commit the history step only after its command replays successfully. */
   step(direction: 'undo' | 'redo'): Result.Result<CsvEditStep, WorkspaceRequestError> {
-    const [from, to] = direction === 'undo' ? [this.undoStack, this.redoStack] : [this.redoStack, this.undoStack];
-    return Result.map(
-      Result.fromNullishOr(
-        from.at(-1),
-        () => new WorkspaceRequestError({ message: `No CSV edit is available to ${direction}.` }),
-      ),
-      (command) => ({
-        command,
-        commit: () => {
-          from.pop();
-          to.push(command);
-          this.currentRevisionId = direction === 'undo' ? command.previousRevisionId : command.revisionId;
-        },
-      }),
+    const from = direction === 'undo' ? this.undoStack : this.redoStack;
+    const command = from.at(-1);
+    if (command === undefined) {
+      return Result.fail(new WorkspaceRequestError({ message: `No CSV edit is available to ${direction}.` }));
+    }
+    const history = new CsvEditHistory(
+      direction === 'undo' ? this.undoStack.slice(0, -1) : [...this.undoStack, command],
+      direction === 'undo' ? [...this.redoStack, command] : this.redoStack.slice(0, -1),
+      direction === 'undo' ? command.previousRevisionId : command.revisionId,
+      this.lastExportedRevisionId,
+      this.nextRevisionId,
+      this.journalId,
     );
+    return Result.succeed({ command, history });
   }
 }
 
-export type CsvEditStep = { command: CsvEditCommand; commit: () => void };
+export type CsvEditStep = { command: CsvEditCommand; history: CsvEditHistory };
 
 export function rowCountDelta(command: CsvEditCommand, direction: 'undo' | 'redo'): number {
   const sign = direction === 'redo' ? 1 : -1;

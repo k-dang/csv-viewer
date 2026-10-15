@@ -1,5 +1,5 @@
 import { DataEngineError, WorkspaceDatabase, type WorkspaceDatabaseConnection } from '../database';
-import { Cause, Context, Deferred, Effect, Exit, Latch, Layer, Predicate, Result, Schema, Semaphore, type Scope, type Types } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, FiberMap, Latch, Layer, MutableHashMap, Predicate, RcMap, Result, Schema, Scope, Semaphore, SynchronizedRef, type Types } from 'effect';
 import { observeCleanup, observeStage, recordOutcome, reportFailure, markCleanupFailed } from '../workspace-diagnostics';
 import { CsvOpenError, WorkspaceRequestError } from '../errors';
 import { csvInternalRowIdField, supportedCsvFileExtensions } from '../csv-viewer';
@@ -101,14 +101,33 @@ type ReplaceWorkingCsvOutcome =
 const workingCsvTablePrefix = 'csv_working_';
 
 type WorkingCsvState = {
-  metadata: Omit<WorkingCsvView, 'editState'>;
-  tableName: string;
-  sourceId: CsvSourceId;
-  defaultDelimiter: string;
-  history: CsvEditHistory;
+  readonly metadata: Omit<WorkingCsvView, 'editState'>;
+  readonly tableName: string;
+  readonly sourceId: CsvSourceId;
+  readonly defaultDelimiter: string;
+  readonly history: CsvEditHistory;
 };
 
-type TableLease = { count: number; released: Deferred.Deferred<void> };
+type StoreDocuments = {
+  readonly lifecycle: 'active' | 'disposing' | 'disposed';
+  readonly csvs: ReadonlyMap<string, WorkingCsvState>;
+  readonly listeners: ReadonlySet<(workingCsvId: WorkingCsvId) => void>;
+  readonly closing: ReadonlySet<string>;
+  readonly pendingCloses: ReadonlyMap<WorkingCsvId, Effect.Effect<void, DataEngineError>>;
+  readonly unreleasedExportWorkers: ReadonlySet<WorkspaceDatabaseConnection>;
+  readonly busyExports: ReadonlySet<WorkingCsvId>;
+  readonly admittedWork: number;
+  /** Tables whose last lease has dropped the RcMap entry and whose release effect is still running. */
+  readonly drainingTables: ReadonlySet<string>;
+  readonly leasesChanged: Deferred.Deferred<void>;
+};
+
+type ViewExportPrepared = {
+  readonly sourceId: CsvSourceId;
+  readonly suggestedName: string;
+  readonly rowCount: number;
+  readonly contents: string;
+};
 
 /**
  * The workspace's Working CSVs: their lifecycle, reads, edits, history, and export. Leases,
@@ -153,7 +172,38 @@ export const WorkingCsvs = Context.Service<WorkingCsvs>('csv-viewer/WorkingCsvs'
 
 /** Builds the Working CSV store on the host and database. */
 export const workingCsvsLayer = Layer.effect(WorkingCsvs, Effect.gen(function* () {
-  return new WorkingCsvStore(yield* CsvWorkspaceHost, yield* WorkspaceDatabase);
+  const host = yield* CsvWorkspaceHost;
+  const database = yield* WorkspaceDatabase;
+  const scope = yield* Scope.make('sequential');
+  const leasesChanged = yield* Deferred.make<void>();
+  const documents = yield* SynchronizedRef.make<StoreDocuments>({
+    lifecycle: 'active',
+    csvs: new Map(),
+    listeners: new Set(),
+    closing: new Set(),
+    pendingCloses: new Map(),
+    unreleasedExportWorkers: new Set(),
+    busyExports: new Set(),
+    admittedWork: 0,
+    drainingTables: new Set(),
+    leasesChanged,
+  });
+  const workSettled = yield* Latch.make(true);
+  return yield* Effect.gen(function* () {
+    let store!: WorkingCsvStore;
+    const tableLeases = yield* RcMap.make({
+      lookup: (tableName: string) => Effect.acquireRelease(
+        Effect.void,
+        () => store.releaseTableLease(tableName),
+      ),
+    });
+    const mutationLocks = yield* RcMap.make({
+      lookup: (_workingCsvId: WorkingCsvId) => Effect.acquireRelease(Semaphore.make(1), () => Effect.void),
+    });
+    const viewExports = yield* FiberMap.make<WorkingCsvId, ViewExportPrepared, WorkingCsvOperationError | CsvSourceUnavailableError>();
+    store = new WorkingCsvStore(host, database, { documents, tableLeases, mutationLocks, viewExports, workSettled, scope });
+    return store;
+  }).pipe(Effect.provideService(Scope.Scope, scope));
 }));
 
 /** The DuckDB Comparison executor, sharing the store's table leases, admission, and artifact registry. */
@@ -161,33 +211,99 @@ export const duckDbComparisonExecutorLayer = Layer.effect(ComparisonExecutor, Wo
 
 class WorkingCsvStore implements WorkingCsvs {
   private readonly artifactRegistry = new WorkspaceArtifactRegistry();
-  private workingCsvs = new Map<string, WorkingCsvState>();
-  private dataChangeListeners = new Set<(workingCsvId: WorkingCsvId) => void>();
-  private closingWorkingCsvs = new Set<string>();
-  /** Leases per physical table. `released` completes when the last lease is returned. */
-  private tableLeases = new Map<string, TableLease>();
-  /** One permit per Working CSV; users include the holder and queued callers. */
-  private readonly mutationLocks = new Map<WorkingCsvId, { semaphore: Semaphore.Semaphore; users: number }>();
-  /** The table release in flight for each closing Working CSV. */
-  private readonly pendingCloses = new Map<WorkingCsvId, Effect.Effect<void, DataEngineError>>();
-  /** Export workers whose close failed. Disposal retries them before the database is released. */
-  private readonly unreleasedExportWorkers = new Set<WorkspaceDatabaseConnection>();
-  private readonly busyExports = new Set<WorkingCsvId>();
-  /** View exports still preparing. Close, reopen, and disposal cancel them. */
-  private readonly viewExports = new Map<WorkingCsvId, { cancel: Deferred.Deferred<void>; preparing: boolean }>();
-  private admittedWork = 0;
-  /** Open while no admitted open, reopen, or worker connection setup is running. */
-  private readonly workSettled = Latch.makeUnsafe(true);
-  private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
   constructor(
     private readonly host: CsvWorkspaceHost,
     private readonly database: WorkspaceDatabase,
+    private readonly resources: {
+      readonly documents: SynchronizedRef.SynchronizedRef<StoreDocuments>;
+      readonly tableLeases: RcMap.RcMap<string, void>;
+      readonly mutationLocks: RcMap.RcMap<WorkingCsvId, Semaphore.Semaphore>;
+      readonly viewExports: FiberMap.FiberMap<WorkingCsvId, ViewExportPrepared, WorkingCsvOperationError | CsvSourceUnavailableError>;
+      readonly workSettled: Latch.Latch;
+      readonly scope: Scope.Closeable;
+    },
   ) {}
 
+  private get documents(): StoreDocuments {
+    return SynchronizedRef.getUnsafe(this.resources.documents);
+  }
+
+  private get workingCsvs(): ReadonlyMap<string, WorkingCsvState> {
+    return this.documents.csvs;
+  }
+
+  private get dataChangeListeners(): ReadonlySet<(workingCsvId: WorkingCsvId) => void> {
+    return this.documents.listeners;
+  }
+
+  private get closingWorkingCsvs(): ReadonlySet<string> {
+    return this.documents.closing;
+  }
+
+  private get pendingCloses(): ReadonlyMap<WorkingCsvId, Effect.Effect<void, DataEngineError>> {
+    return this.documents.pendingCloses;
+  }
+
+  private get unreleasedExportWorkers(): ReadonlySet<WorkspaceDatabaseConnection> {
+    return this.documents.unreleasedExportWorkers;
+  }
+
+  private get lifecycle(): StoreDocuments['lifecycle'] {
+    return this.documents.lifecycle;
+  }
+
+  private writeDocuments(update: (documents: StoreDocuments) => StoreDocuments): void {
+    Effect.runSync(SynchronizedRef.update(this.resources.documents, update));
+  }
+
+  private modifyDocuments<A>(update: (documents: StoreDocuments) => readonly [A, StoreDocuments]): A {
+    return Effect.runSync(SynchronizedRef.modify(this.resources.documents, (documents) => {
+      const [value, next] = update(documents);
+      return [value, next];
+    }));
+  }
+
+  private putCsv(state: WorkingCsvState): void {
+    this.writeDocuments((documents) => {
+      const csvs = new Map(documents.csvs);
+      csvs.set(state.metadata.workingCsvId, state);
+      return { ...documents, csvs };
+    });
+  }
+
+  private readonly commitCsv = (workingCsvId: WorkingCsvId, update: (state: WorkingCsvState) => WorkingCsvState) =>
+    SynchronizedRef.modify(this.resources.documents, (documents) => {
+      const current = documents.csvs.get(workingCsvId);
+      if (!current) return [undefined, documents] as const;
+      const next = update(current);
+      const csvs = new Map(documents.csvs);
+      csvs.set(workingCsvId, next);
+      return [next, { ...documents, csvs }] as const;
+    });
+
+  private readonly storeEdit = (workingCsvId: WorkingCsvId, update: (state: WorkingCsvState) => WorkingCsvState) =>
+    Effect.gen({ self: this }, function* () {
+      const next = yield* this.commitCsv(workingCsvId, update);
+      if (!next) return yield* Effect.die(new Error('Working CSV is no longer active.'));
+      return next;
+    });
+
   beginDisposal(): void {
-    if (this.lifecycle === 'active') this.lifecycle = 'disposing';
-    for (const workingCsvId of this.viewExports.keys()) this.cancelPreparation(workingCsvId);
+    this.writeDocuments((documents) => documents.lifecycle === 'active' ? { ...documents, lifecycle: 'disposing' } : documents);
+    this.cancelViewExports();
+  }
+
+  private cancelViewExports(): void {
+    if (this.resources.viewExports.state._tag !== 'Open') return;
+    for (const [, fiber] of [...this.resources.viewExports]) fiber.interruptUnsafe(fiber.id);
+  }
+
+  private cancelPreparation(workingCsvId: WorkingCsvId): void {
+    if (this.resources.viewExports.state._tag !== 'Open') return;
+    for (const [key, fiber] of this.resources.viewExports) {
+      if (key === workingCsvId) fiber.interruptUnsafe(fiber.id);
+    }
   }
 
   /**
@@ -197,15 +313,20 @@ class WorkingCsvStore implements WorkingCsvs {
   admit(): Effect.Effect<boolean, never, Scope.Scope> {
     return Effect.acquireRelease(
       Effect.sync(() => {
-        if (this.lifecycle !== 'active') return false;
-        this.admittedWork += 1;
-        this.workSettled.closeUnsafe();
-        return true;
+        const admitted = this.modifyDocuments((documents) => {
+          if (documents.lifecycle !== 'active') return [false, documents] as const;
+          return [true, { ...documents, admittedWork: documents.admittedWork + 1 }] as const;
+        });
+        if (admitted) Latch.closeUnsafe(this.resources.workSettled);
+        return admitted;
       }),
       (admitted) => Effect.sync(() => {
         if (!admitted) return;
-        this.admittedWork -= 1;
-        if (this.admittedWork === 0) this.workSettled.openUnsafe();
+        const remaining = this.modifyDocuments((documents) => {
+          const admittedWork = documents.admittedWork - 1;
+          return [admittedWork, { ...documents, admittedWork }] as const;
+        });
+        if (remaining === 0) Latch.openUnsafe(this.resources.workSettled);
       }),
     );
   }
@@ -230,7 +351,7 @@ class WorkingCsvStore implements WorkingCsvs {
         if (alreadyOpen) return { status: 'existing', workingCsv: alreadyOpen };
         const view = buildWorkingCsvView(state);
         this.artifactRegistry.transition(state.tableName, 'current');
-        this.workingCsvs.set(state.metadata.workingCsvId, state);
+        this.putCsv(state);
         return { status: 'opened', workingCsv: view };
       }),
       Effect.scoped,
@@ -265,8 +386,18 @@ class WorkingCsvStore implements WorkingCsvs {
   }
 
   subscribeToDataChanges(listener: (workingCsvId: WorkingCsvId) => void): () => void {
-    this.dataChangeListeners.add(listener);
-    return () => this.dataChangeListeners.delete(listener);
+    this.writeDocuments((documents) => {
+      const listeners = new Set(documents.listeners);
+      listeners.add(listener);
+      return { ...documents, listeners };
+    });
+    return () => {
+      this.writeDocuments((documents) => {
+        const listeners = new Set(documents.listeners);
+        listeners.delete(listener);
+        return { ...documents, listeners };
+      });
+    };
   }
 
   isClosing(workingCsvId: WorkingCsvId): boolean {
@@ -274,14 +405,23 @@ class WorkingCsvStore implements WorkingCsvs {
   }
 
   beginClose(workingCsvId: WorkingCsvId): boolean {
-    if (!this.workingCsvs.has(workingCsvId) || this.closingWorkingCsvs.has(workingCsvId)) return false;
-    this.closingWorkingCsvs.add(workingCsvId);
-    this.cancelPreparation(workingCsvId);
-    return true;
+    const started = this.modifyDocuments((documents) => {
+      if (!documents.csvs.has(workingCsvId) || documents.closing.has(workingCsvId)) return [false, documents] as const;
+      const closing = new Set(documents.closing);
+      closing.add(workingCsvId);
+      return [true, { ...documents, closing }] as const;
+    });
+    if (started) this.cancelPreparation(workingCsvId);
+    return started;
   }
 
   endClose(workingCsvId: WorkingCsvId): void {
-    this.closingWorkingCsvs.delete(workingCsvId);
+    this.writeDocuments((documents) => {
+      if (!documents.closing.has(workingCsvId)) return documents;
+      const closing = new Set(documents.closing);
+      closing.delete(workingCsvId);
+      return { ...documents, closing };
+    });
   }
 
   /** Waits for admitted reads and queued mutations, so close impact reflects their results. */
@@ -346,9 +486,9 @@ class WorkingCsvStore implements WorkingCsvs {
     try {
       this.artifactRegistry.transition(existing.tableName, 'retired');
       this.artifactRegistry.transition(replacement.tableName, 'current');
-      this.workingCsvs.set(existing.metadata.workingCsvId, replacement);
+      this.putCsv(replacement);
     } catch (error) {
-      this.workingCsvs.set(existing.metadata.workingCsvId, existing);
+      this.putCsv(existing);
       if (this.artifactRegistry.get(replacement.tableName)?.role === 'current') {
         this.artifactRegistry.transition(replacement.tableName, 'staging');
       }
@@ -369,9 +509,20 @@ class WorkingCsvStore implements WorkingCsvs {
       const pending = this.pendingCloses.get(workingCsvId);
       if (pending) return pending;
       return Effect.cached(this.releaseWorkingCsv(workingCsvId).pipe(
-        Effect.ensuring(Effect.sync(() => this.pendingCloses.delete(workingCsvId))),
+        Effect.ensuring(Effect.sync(() => {
+          this.writeDocuments((documents) => {
+            if (!documents.pendingCloses.has(workingCsvId)) return documents;
+            const pendingCloses = new Map(documents.pendingCloses);
+            pendingCloses.delete(workingCsvId);
+            return { ...documents, pendingCloses };
+          });
+        })),
       )).pipe(Effect.flatMap((close) => {
-        this.pendingCloses.set(workingCsvId, close);
+        this.writeDocuments((documents) => {
+          const pendingCloses = new Map(documents.pendingCloses);
+          pendingCloses.set(workingCsvId, close);
+          return { ...documents, pendingCloses };
+        });
         return close;
       }));
     });
@@ -392,8 +543,13 @@ class WorkingCsvStore implements WorkingCsvs {
         Effect.onError(() => Effect.sync(() => this.rollbackSourceRetirement(state.tableName))),
       );
       if (this.workingCsvs.get(workingCsvId)?.tableName !== state.tableName) continue;
-      this.workingCsvs.delete(workingCsvId);
-      this.closingWorkingCsvs.delete(workingCsvId);
+      this.writeDocuments((documents) => {
+        const csvs = new Map(documents.csvs);
+        csvs.delete(workingCsvId);
+        const closing = new Set(documents.closing);
+        closing.delete(workingCsvId);
+        return { ...documents, csvs, closing };
+      });
       this.host.releaseSource(state.sourceId);
       return;
     }
@@ -411,24 +567,26 @@ class WorkingCsvStore implements WorkingCsvs {
     const tableRelease = yield* Effect.exit(this.releaseAllTables());
     const workerReleases = yield* Effect.forEach([...this.unreleasedExportWorkers], (worker) => Effect.exit(this.releaseExportWorker(worker)));
     yield* Exit.asVoidAll([tableRelease, ...workerReleases]);
-  }, Effect.ensuring(Effect.sync(() => { this.lifecycle = 'disposed'; })), Effect.uninterruptible);
+  }, Effect.ensuring(Effect.gen({ self: this }, function* () {
+    this.writeDocuments((documents) => documents.lifecycle === 'disposed' ? documents : { ...documents, lifecycle: 'disposed' });
+    yield* Scope.close(this.resources.scope, Exit.void);
+  })), Effect.uninterruptible);
 
   /** For a stopped engine, forget browser-held sources without issuing table queries. */
   releaseSourcesAfterEngineStop(): void {
     for (const state of this.workingCsvs.values()) this.host.releaseSource(state.sourceId);
-    this.workingCsvs.clear();
-    this.lifecycle = 'disposed';
+    this.writeDocuments((documents) => ({ ...documents, csvs: new Map(), lifecycle: 'disposed' }));
   }
 
   private readonly releaseAllTables = Effect.fnUntraced(function* (
     this: WorkingCsvStore,
   ): Effect.fn.Return<void, DataEngineError> {
-    yield* observeStage('workspace.await-work', this.workSettled.await);
+    yield* observeStage('workspace.await-work', Latch.await(this.resources.workSettled));
     for (const workingCsvId of this.workingCsvs.keys()) this.beginClose(workingCsvId);
     // Every close waits for its Working CSV's leases, so attempt each one even after a failure.
     const closes = yield* Effect.forEach([...this.workingCsvs.keys()], (workingCsvId) => Effect.exit(this.closeWorkingCsv(workingCsvId)));
     yield* Exit.asVoidAll(closes);
-    if (this.tableLeases.size > 0) {
+    if (this.leasedTableCount() > 0 || this.documents.drainingTables.size > 0) {
       return yield* Effect.die(new Error('Working CSV source lease invariant violated during disposal.'));
     }
     for (const { tableName } of this.retiredSourceTables()) {
@@ -556,19 +714,18 @@ class WorkingCsvStore implements WorkingCsvs {
       const table = this.tableFor(state);
       const oldValue = yield* readCellValue(table, request.rowId, request.column);
       yield* applyCellValue(table, request.rowId, request.column, request.value);
-      state.history.record({
+      const committed = yield* this.storeEdit(request.workingCsvId, (live) => withCommittedEdit(live, live.history.record({
         type: 'cell-edit',
         rowId: request.rowId,
         column: request.column,
         oldValue,
         newValue: request.value,
-      });
-      commitDataChange(state);
+      })));
 
       return {
         rowId: request.rowId,
         column: request.column,
-        ...buildEditState(state),
+        ...buildEditState(committed),
       };
     }));
   }
@@ -584,10 +741,13 @@ class WorkingCsvStore implements WorkingCsvs {
       const table = this.tableFor(state);
       yield* assertRowsExist(table, rowIds);
       yield* applyRowDeletion(table, rowIds, true);
-      state.history.record({ type: 'delete-rows', rowIds });
-      commitDataChange(state, -rowIds.length);
+      const committed = yield* this.storeEdit(request.workingCsvId, (live) => withCommittedEdit(
+        live,
+        live.history.record({ type: 'delete-rows', rowIds }),
+        -rowIds.length,
+      ));
 
-      return buildEditState(state);
+      return buildEditState(committed);
     }));
   }
 
@@ -612,10 +772,13 @@ class WorkingCsvStore implements WorkingCsvs {
         request.placement,
         rowIds[0],
       );
-      state.history.record({ type: 'insert-row', rowId: insertedRowId });
-      commitDataChange(state, 1);
+      const committed = yield* this.storeEdit(request.workingCsvId, (live) => withCommittedEdit(
+        live,
+        live.history.record({ type: 'insert-row', rowId: insertedRowId }),
+        1,
+      ));
 
-      return buildEditState(state);
+      return buildEditState(committed);
     }));
   }
 
@@ -696,21 +859,27 @@ class WorkingCsvStore implements WorkingCsvs {
   ): Effect.fn.Return<CsvSchemaEditState, WorkingCsvOperationError> {
     const next = yield* Effect.fromResult(columnsAfter(state.metadata.columns, draft, 'redo'));
     yield* runEditCommand(this.tableFor(state), draft, 'redo');
-    state.history.record(draft);
-    state.metadata.columns = next;
-    commitDataChange(state, 0);
-    return buildSchemaEditState(state);
+    const committed = yield* this.storeEdit(state.metadata.workingCsvId, (live) => withCommittedEdit(
+      live,
+      live.history.record(draft),
+      0,
+      next,
+    ));
+    return buildSchemaEditState(committed);
   });
 
   private stepHistory(workingCsvId: WorkingCsvId, direction: 'undo' | 'redo'): Effect.Effect<CsvSchemaEditState, WorkingCsvOperationError> {
     return this.mutate(workingCsvId, (state) => Effect.gen({ self: this }, function* () {
-      const { command, commit } = yield* Effect.fromResult(state.history.step(direction));
+      const { command, history } = yield* Effect.fromResult(state.history.step(direction));
       const next = yield* Effect.fromResult(columnsAfter(state.metadata.columns, command, direction));
       yield* runEditCommand(this.tableFor(state), command, direction);
-      state.metadata.columns = next;
-      commit();
-      commitDataChange(state, rowCountDelta(command, direction));
-      return buildSchemaEditState(state);
+      const committed = yield* this.storeEdit(workingCsvId, (live) => withCommittedEdit(
+        live,
+        history.markExported(live.history.lastExportedRevisionId),
+        rowCountDelta(command, direction),
+        next,
+      ));
+      return buildSchemaEditState(committed);
     }));
   }
 
@@ -719,9 +888,11 @@ class WorkingCsvStore implements WorkingCsvs {
    * revision as exported. Delivery can involve the user, so it runs outside the Working CSV lease -
    * holding one across a prompt would block closing the Working CSV and disposing the workspace.
    * The Working CSV can therefore be closed or replaced while the prompt is open, and a delivered
-   * export never fails afterwards: the exported revision is only recorded against the history it
-   * was serialized from. A failed worker release rejects the export before delivery, and the store
-   * keeps that worker for disposal to retry.
+   * export never fails afterwards. The delivered revision is marked on the open journal when it is
+   * still the journal that was serialized. Edits during delivery keep Unexported Changes set, and
+   * returning to the delivered revision clears them. A replacement journal is left unchanged. A
+   * failed worker release rejects the export before delivery, and the store keeps that worker for
+   * disposal to retry.
    */
   readonly exportCsv = Effect.fnUntraced(function* (
     this: WorkingCsvStore,
@@ -755,9 +926,14 @@ class WorkingCsvStore implements WorkingCsvs {
     }));
     if (delivery.status === 'cancelled') return { status: 'cancelled' } satisfies CsvExportOutcome;
 
-    const state = this.workingCsvs.get(workingCsvId) ?? prepared.state;
-    if (state.history === prepared.state.history) state.history.markExported(prepared.revisionId);
-    return { status: 'exported', editState: buildEditState(state) } satisfies CsvExportOutcome;
+    const live = this.workingCsvs.get(workingCsvId);
+    const open = live ?? prepared.state;
+    if (open.history.journalId !== prepared.state.history.journalId) {
+      return { status: 'exported', editState: buildEditState(open) } satisfies CsvExportOutcome;
+    }
+    const marked = { ...open, history: open.history.markExported(prepared.revisionId) };
+    if (live) this.putCsv(marked);
+    return { status: 'exported', editState: buildEditState(marked) } satisfies CsvExportOutcome;
   }, (effect, workingCsvId) => this.withExportSlot(workingCsvId, effect));
 
   /** Captures a queued read, then prepares cancellable bytes independently of subsequent edits. */
@@ -765,8 +941,6 @@ class WorkingCsvStore implements WorkingCsvs {
     this: WorkingCsvStore,
     request: CsvViewExportRequest,
   ): Effect.fn.Return<CsvViewExportOutcome, WorkingCsvOperationError | CsvSourceUnavailableError> {
-    const operation = { cancel: Deferred.makeUnsafe<void>(), preparing: true };
-    this.viewExports.set(request.workingCsvId, operation);
     let releaseFailure: DataEngineError | undefined;
     const preparation = Effect.gen({ self: this }, function* () {
       const snapshot = yield* this.inTurn(request.workingCsvId, (state) => Effect.gen({ self: this }, function* () {
@@ -789,8 +963,15 @@ class WorkingCsvStore implements WorkingCsvs {
       const contents = yield* serializeCsvViewExport(snapshot);
       return { sourceId: snapshot.sourceId, suggestedName: snapshot.suggestedName, rowCount: snapshot.rows.length, contents };
     });
-    const result = yield* Effect.exit(Effect.raceFirst(preparation,
-      Deferred.await(operation.cancel).pipe(Effect.andThen(Effect.interrupt)),
+    // Register the fiber before it runs, so close can cancel preparation and cannot cancel delivery.
+    // The fiber is a daemon: interrupting this join does not interrupt it, so cancel the join by
+    // interrupting the fiber. Delivery stays after the join, outside that interrupt.
+    const fiber = yield* FiberMap.run(this.resources.viewExports, request.workingCsvId, preparation, {
+      startImmediately: false,
+      propagateInterruption: true,
+    });
+    const result = yield* Effect.exit(Fiber.join(fiber).pipe(
+      Effect.onInterrupt(() => Fiber.interrupt(fiber)),
     ));
     if (releaseFailure) {
       const cleanup = Cause.fail(releaseFailure);
@@ -801,32 +982,36 @@ class WorkingCsvStore implements WorkingCsvs {
       if (Cause.hasInterruptsOnly(result.cause)) return { status: 'cancelled' } satisfies CsvViewExportOutcome;
       return yield* Effect.failCause(result.cause);
     }
-    if (Deferred.isDoneUnsafe(operation.cancel)) return { status: 'cancelled' } satisfies CsvViewExportOutcome;
     const prepared = result.value;
     if (prepared.rowCount === 0) return { status: 'empty' } satisfies CsvViewExportOutcome;
-    operation.preparing = false;
     const delivery = yield* observeStage('csv.deliver-view-export', this.host.deliverExport({ ...prepared, kind: 'view' }));
     return delivery.status === 'cancelled'
       ? { status: 'cancelled' } satisfies CsvViewExportOutcome
       : { status: 'exported', rowCount: prepared.rowCount } satisfies CsvViewExportOutcome;
-  }, (effect, request) => this.withExportSlot(request.workingCsvId, effect.pipe(
-    Effect.ensuring(Effect.sync(() => { this.viewExports.delete(request.workingCsvId); })),
-  )));
-
-  private cancelPreparation(workingCsvId: WorkingCsvId): void {
-    const operation = this.viewExports.get(workingCsvId);
-    if (operation?.preparing) Deferred.doneUnsafe(operation.cancel, Effect.void);
-  }
+  }, (effect, request) => this.withExportSlot(request.workingCsvId, effect));
 
   private withExportSlot<A, E>(workingCsvId: WorkingCsvId, operation: Effect.Effect<A, E>): Effect.Effect<A, E | WorkspaceRequestError> {
     return Effect.acquireUseRelease(
       Effect.suspend(() => {
-        if (this.busyExports.has(workingCsvId)) return Effect.fail(new WorkspaceRequestError({ message: 'An export is already in progress for this CSV.' }));
-        this.busyExports.add(workingCsvId);
-        return Effect.void;
+        const accepted = this.modifyDocuments((documents) => {
+          if (documents.busyExports.has(workingCsvId)) return [false, documents] as const;
+          const busyExports = new Set(documents.busyExports);
+          busyExports.add(workingCsvId);
+          return [true, { ...documents, busyExports }] as const;
+        });
+        return accepted
+          ? Effect.void
+          : Effect.fail(new WorkspaceRequestError({ message: 'An export is already in progress for this CSV.' }));
       }),
       () => operation,
-      () => Effect.sync(() => { this.busyExports.delete(workingCsvId); }),
+      () => Effect.sync(() => {
+        this.writeDocuments((documents) => {
+          if (!documents.busyExports.has(workingCsvId)) return documents;
+          const busyExports = new Set(documents.busyExports);
+          busyExports.delete(workingCsvId);
+          return { ...documents, busyExports };
+        });
+      }),
     );
   }
 
@@ -834,8 +1019,12 @@ class WorkingCsvStore implements WorkingCsvs {
   private releaseExportWorker(worker: WorkspaceDatabaseConnection): Effect.Effect<void, DataEngineError> {
     return worker.close().pipe(
       Effect.onExit((exit) => Effect.sync(() => {
-        if (Exit.isSuccess(exit)) this.unreleasedExportWorkers.delete(worker);
-        else this.unreleasedExportWorkers.add(worker);
+        this.writeDocuments((documents) => {
+          const unreleasedExportWorkers = new Set(documents.unreleasedExportWorkers);
+          if (Exit.isSuccess(exit)) unreleasedExportWorkers.delete(worker);
+          else unreleasedExportWorkers.add(worker);
+          return { ...documents, unreleasedExportWorkers };
+        });
       })),
       Effect.tapError(() => markCleanupFailed),
     );
@@ -879,7 +1068,7 @@ class WorkingCsvStore implements WorkingCsvs {
         columns, rowCount, dialect,
       },
       tableName, sourceId, defaultDelimiter: description.defaultDelimiter,
-      history: new CsvEditHistory(initialRevisionId),
+      history: CsvEditHistory.create(initialRevisionId),
     } satisfies WorkingCsvState;
   });
 
@@ -945,21 +1134,10 @@ class WorkingCsvStore implements WorkingCsvs {
     this: WorkingCsvStore,
     workingCsvId: WorkingCsvId,
   ): Effect.fn.Return<void, never, Scope.Scope> {
-    const lock = yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const lock = this.mutationLocks.get(workingCsvId) ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 };
-        this.mutationLocks.set(workingCsvId, lock);
-        lock.users += 1;
-        return lock;
-      }),
-      (lock) => Effect.sync(() => {
-        lock.users -= 1;
-        if (lock.users === 0) this.mutationLocks.delete(workingCsvId);
-      }),
-    );
+    const semaphore = yield* RcMap.get(this.resources.mutationLocks, workingCsvId);
     yield* observeStage('csv.queue-wait', Effect.acquireRelease(
-      lock.semaphore.take(1),
-      () => lock.semaphore.release(1),
+      semaphore.take(1),
+      () => semaphore.release(1),
       { interruptible: true },
     ));
   });
@@ -979,29 +1157,49 @@ class WorkingCsvStore implements WorkingCsvs {
   });
 
   private leaseTable(state: WorkingCsvState): Effect.Effect<WorkingCsvState, never, Scope.Scope> {
-    return Effect.acquireRelease(
-      Effect.sync(() => {
-        const lease = this.tableLeases.get(state.tableName) ?? { count: 0, released: Deferred.makeUnsafe<void>() };
-        lease.count += 1;
-        this.tableLeases.set(state.tableName, lease);
-        return state;
-      }),
-      () => this.releaseTable(state.tableName),
-    );
+    return RcMap.get(this.resources.tableLeases, state.tableName).pipe(Effect.as(state));
   }
 
-  /** The last release of a retired table drops it. */
-  private releaseTable(tableName: string): Effect.Effect<void> {
-    return observeStage('csv.release-lease', Effect.suspend(() => {
-      const lease = this.tableLeases.get(tableName);
-      if (!lease) return Effect.die(new Error('Working CSV source lease invariant violated.'));
-      lease.count -= 1;
-      if (lease.count > 0) return Effect.void;
-      this.tableLeases.delete(tableName);
+  /**
+   * The last release of a retired table drops it. RcMap removes its entry before this effect is
+   * scheduled, so the drain flag is written before the effect can yield. Close waits on that flag
+   * and therefore still waits for the drop.
+   */
+  releaseTableLease(tableName: string): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.writeDocumentsNow((documents) => {
+        const drainingTables = new Set(documents.drainingTables);
+        drainingTables.add(tableName);
+        return { ...documents, drainingTables };
+      });
       const drop = this.artifactRegistry.get(tableName)?.role === 'retired' ? this.dropRetiredLeaseTable(tableName) : Effect.void;
-      return drop.pipe(Effect.ensuring(Deferred.succeed(lease.released, undefined)));
-    }));
+      return observeStage('csv.release-lease', drop.pipe(Effect.ensuring(this.finishTableDrain(tableName))));
+    });
   }
+
+  private leasedTableCount(): number {
+    const state = this.resources.tableLeases.state;
+    return state._tag === 'Open' ? MutableHashMap.size(state.map) : 0;
+  }
+
+  private tableLeaseHeld(tableName: string): boolean {
+    const state = this.resources.tableLeases.state;
+    return state._tag === 'Open' && MutableHashMap.has(state.map, tableName);
+  }
+
+  private writeDocumentsNow(update: (documents: StoreDocuments) => StoreDocuments): void {
+    this.resources.documents.backing.ref.current = update(this.documents);
+  }
+
+  private readonly finishTableDrain = (tableName: string) => Effect.gen({ self: this }, function* () {
+    const nextChanged = yield* Deferred.make<void>();
+    const previous = yield* SynchronizedRef.modify(this.resources.documents, (documents) => {
+      const drainingTables = new Set(documents.drainingTables);
+      drainingTables.delete(tableName);
+      return [documents.leasesChanged, { ...documents, drainingTables, leasesChanged: nextChanged }] as const;
+    });
+    yield* Deferred.succeed(previous, undefined);
+  });
 
   /** A failed drop keeps the table registered, so close or disposal can retry it. */
   private dropRetiredLeaseTable(tableName: string): Effect.Effect<void> {
@@ -1017,11 +1215,13 @@ class WorkingCsvStore implements WorkingCsvs {
     workingCsvId: WorkingCsvId,
   ): Effect.fn.Return<void> {
     while (true) {
-      const current = this.workingCsvs.get(workingCsvId)?.tableName;
+      const documents = this.documents;
+      const current = documents.csvs.get(workingCsvId)?.tableName;
       const owned = this.retiredSourceTables().filter((retired) => retired.workingCsvId === workingCsvId).map((retired) => retired.tableName);
-      const lease = [current, ...owned].flatMap((tableName) => tableName ? this.tableLeases.get(tableName) ?? [] : [])[0];
-      if (!lease) return;
-      yield* Deferred.await(lease.released);
+      const busy = [current, ...owned].some((tableName) =>
+        tableName !== undefined && (this.tableLeaseHeld(tableName) || documents.drainingTables.has(tableName)));
+      if (!busy) return;
+      yield* Deferred.await(documents.leasesChanged);
     }
   });
 
@@ -1030,7 +1230,9 @@ class WorkingCsvStore implements WorkingCsvs {
     tableName: string,
   ): Effect.fn.Return<void, DataEngineError> {
     this.artifactRegistry.transition(tableName, 'retired');
-    if (!this.tableLeases.has(tableName)) yield* this.dropRetiredSourceTable(tableName);
+    if (!this.tableLeaseHeld(tableName) && !this.documents.drainingTables.has(tableName)) {
+      yield* this.dropRetiredSourceTable(tableName);
+    }
   });
 
   private rollbackSourceRetirement(tableName: string): void {
@@ -1085,11 +1287,21 @@ class WorkingCsvStore implements WorkingCsvs {
   }
 }
 
-function commitDataChange(state: WorkingCsvState, rowCountDelta = 0): void {
-  state.metadata = {
-    ...state.metadata,
-    dataRevision: state.metadata.dataRevision + 1,
-    rowCount: state.metadata.rowCount + rowCountDelta,
+function withCommittedEdit(
+  state: WorkingCsvState,
+  history: CsvEditHistory,
+  rowCountDelta = 0,
+  columns: WorkingCsvState['metadata']['columns'] = state.metadata.columns,
+): WorkingCsvState {
+  return {
+    ...state,
+    history,
+    metadata: {
+      ...state.metadata,
+      columns,
+      dataRevision: state.metadata.dataRevision + 1,
+      rowCount: state.metadata.rowCount + rowCountDelta,
+    },
   };
 }
 

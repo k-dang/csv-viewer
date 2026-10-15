@@ -1,4 +1,5 @@
-import { Cause, Effect, Exit, Layer, Logger } from 'effect';
+import { readFile } from 'node:fs/promises';
+import { Cause, Effect, Exit, Fiber, Layer, Logger } from 'effect';
 import { afterEach, beforeEach, describe, expect, it } from '@effect/vitest';
 import { CsvWorkspaceFixture } from './fixtures/desktop-workspace';
 import { DataEngineError, WorkspaceDatabase } from '../../../packages/workspace/src/database';
@@ -151,6 +152,73 @@ describe('Working CSV store invariants', () => {
       canRedo: true,
       columns: [{ name: 'name' }],
     });
+    await Effect.runPromise(store.disposeStore());
+  });
+
+  it('marks the delivered revision when an undo commits during delivery', async () => {
+    const workingCsv = await openWorkingCsv('export-undo-during-delivery.csv', 'name\nAda\n');
+    const { workingCsvId } = workingCsv;
+    await Effect.runPromise(store.editCell({ workingCsvId, rowId: '1', column: 'name', value: 'Grace' }));
+
+    const releasePrompt = Promise.withResolvers<void>();
+    const promptHeld = Promise.withResolvers<void>();
+    fixture.prompts.holdExportPrompt = () => {
+      promptHeld.resolve();
+      return releasePrompt.promise;
+    };
+    const destination = fixture.file('delivered.csv');
+    fixture.prompts.exportChoices.push(destination);
+
+    const exported = Effect.runPromise(store.exportCsv(workingCsvId));
+    try {
+      await promptHeld.promise;
+      await Effect.runPromise(store.undo(workingCsvId));
+    } finally {
+      releasePrompt.resolve();
+    }
+
+    await expect(exported).resolves.toMatchObject({
+      status: 'exported',
+      editState: { hasUnexportedChanges: true, canUndo: false, canRedo: true },
+    });
+    expect(store.hasUnexportedChanges(workingCsvId)).toBe(true);
+    await expect(readFile(destination, 'utf8')).resolves.toBe('name\nGrace\n');
+    const rows = await Effect.runPromise(store.getRows({ workingCsvId, offset: 0, limit: 1 }));
+    expect(rows.rows[0]?.name).toBe('Ada');
+
+    await expect(Effect.runPromise(store.redo(workingCsvId))).resolves.toMatchObject({
+      hasUnexportedChanges: false,
+      canUndo: true,
+      canRedo: false,
+    });
+    await Effect.runPromise(store.disposeStore());
+  });
+
+  it('stops view-export preparation when its parent is interrupted without blocking the next edit', async () => {
+    const { workingCsvId } = await openWorkingCsv('view-export-interrupt.csv', 'name\nAda\n');
+    const entered = Promise.withResolvers<void>();
+    const connect = database.connectWorker.bind(database);
+    database.connectWorker = () => {
+      database.connectWorker = connect;
+      return connect().pipe(Effect.map((connection) => {
+        connection.readObjectsCancellable = () => Effect.gen(function* () {
+          entered.resolve();
+          return yield* Effect.never;
+        });
+        return connection;
+      }));
+    };
+
+    const fiber = Effect.runFork(store.exportView({ workingCsvId }));
+    try {
+      await entered.promise;
+      await Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.timeout('2 seconds')));
+      await expect(Effect.runPromise(
+        store.editCell({ workingCsvId, rowId: '1', column: 'name', value: 'Grace' }).pipe(Effect.timeout('2 seconds')),
+      )).resolves.toMatchObject({ hasUnexportedChanges: true, canUndo: true });
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.ignore));
+    }
     await Effect.runPromise(store.disposeStore());
   });
 
