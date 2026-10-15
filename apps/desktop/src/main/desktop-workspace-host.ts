@@ -66,7 +66,7 @@ export function openDesktopWorkspace(
 
   const registerSource = (filePath: string) => filesystemEffect(() => captureFileIdentity(filePath)).pipe(
     Effect.mapError(toSourceUnavailableError),
-    Effect.map((identity) => sources.reserve({ filePath, identity }, sameRegisteredFile)),
+    Effect.map((identity) => sources.reserve({ filePath, identity }, sameRegisteredFile, mergeRegisteredFile)),
   );
 
   const requireSource = (sourceId: CsvSourceId) => sources.require(sourceId, unavailable());
@@ -262,10 +262,22 @@ function warnRecentSourceFailure(action: 'read' | 'write', category: 'invalid-fo
   console.warn(`Unable to ${action} Recent CSV Sources (${category}).`);
 }
 
-function sameRegisteredFile(existing: RegisteredFile, incoming: RegisteredFile): boolean {
+/** Inode equality outranks a path so a null path row cannot hide a hard link of the same file. */
+function sameRegisteredFile(existing: RegisteredFile, incoming: RegisteredFile): number {
+  const sameInode = existing.identity !== null
+    && incoming.identity !== null
+    && sameFileIdentity(existing.identity, incoming.identity);
+  if (sameInode) return 2;
   const samePath = normalizeCanonicalPath(path.resolve(existing.filePath)) === normalizeCanonicalPath(path.resolve(incoming.filePath));
-  if (samePath) return true;
-  return existing.identity !== null && incoming.identity !== null && sameFileIdentity(existing.identity, incoming.identity);
+  return samePath ? 1 : 0;
+}
+
+/** A missed capture is null and must not erase an inode already stored for this file. */
+function mergeRegisteredFile(existing: RegisteredFile, incoming: RegisteredFile): RegisteredFile {
+  return {
+    filePath: incoming.filePath,
+    identity: incoming.identity ?? existing.identity,
+  };
 }
 
 function buildDefaultExportName(sourceName: string): string {
