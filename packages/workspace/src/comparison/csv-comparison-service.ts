@@ -1,5 +1,5 @@
 import { OperationCleanup, diagnosticCause, markCleanupFailed, observeStage, recordOutcome } from '../workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Result, type Array as Arr, type Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, FiberMap, Layer, MutableHashMap, Option, PubSub, Result, Stream, type Array as Arr, type Scope } from 'effect';
 import type { DataEngineError } from '../database';
 import type { WorkspaceRequestError } from '../errors';
 import type {
@@ -75,9 +75,10 @@ type ComparisonActivity =
   | {
       kind: 'running';
       operation: Operation;
-      fiber: Fiber.Fiber<AttemptResult, DataEngineError | WorkspaceRequestError>;
       completion: Effect.Effect<ComparisonAttemptOutcome>;
     };
+
+type AttemptFiber = Fiber.Fiber<AttemptResult, DataEngineError | WorkspaceRequestError>;
 
 export type ComparisonAttemptOutcome =
   | { status: 'applied'; comparison: ComparisonView }
@@ -132,7 +133,7 @@ export interface Comparisons {
   close(comparisonId: ComparisonId): Effect.Effect<CloseComparisonResult>;
   dependentComparisonIds(workingCsvId: WorkingCsvId): ComparisonId[];
   closeDependents(workingCsvId: WorkingCsvId): Effect.Effect<void, DataEngineError>;
-  subscribe(listener: (event: ComparisonEvent) => void): () => void;
+  readonly events: Stream.Stream<ComparisonEvent>;
   dispose(): Effect.Effect<void, DataEngineError>;
   /** Settles admitted work and forgets state after engine death, without initiating database cleanup. */
   stopAfterEngineStop(): Effect.Effect<void, DataEngineError>;
@@ -142,7 +143,9 @@ export const Comparisons = Context.Service<Comparisons>('csv-viewer/Comparisons'
 
 /** Builds Comparisons over these Working CSVs. Attempts belong to the calling scope. */
 export const makeComparisons = Effect.fnUntraced(function* (csvs: ComparisonCsvStore) {
-  const service = new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope);
+  const attempts = yield* FiberMap.make<ComparisonId, AttemptResult, DataEngineError | WorkspaceRequestError>();
+  const events = yield* PubSub.unbounded<ComparisonEvent>();
+  const service = new CsvComparisonService(csvs, yield* ComparisonExecutor, yield* Effect.scope, attempts, events);
   yield* Effect.addFinalizer(() => Effect.sync(service.unsubscribeFromDataChanges));
   return service;
 });
@@ -153,9 +156,9 @@ class CsvComparisonService implements Comparisons {
   private readonly entities = new Map<ComparisonId, ComparisonRecord>();
   private readonly pairIndex = new Map<string, ComparisonId>();
   private readonly dependencyIndex = new Map<WorkingCsvId, Set<ComparisonId>>();
-  private readonly listeners = new Set<(event: ComparisonEvent) => void>();
   private readonly closing = new Map<ComparisonId, Effect.Effect<ClosedComparison, DataEngineError>>();
   private readonly pendingRetirements = new Set<string>();
+  readonly events: Stream.Stream<ComparisonEvent>;
   readonly unsubscribeFromDataChanges: () => void;
   private lifecycle: 'active' | 'disposing' | 'disposed' = 'active';
 
@@ -163,7 +166,12 @@ class CsvComparisonService implements Comparisons {
     private readonly csvs: ComparisonCsvStore,
     private readonly executor: ComparisonExecutor,
     private readonly workspaceScope: Scope.Scope,
+    private readonly attempts: FiberMap.FiberMap<ComparisonId, AttemptResult, DataEngineError | WorkspaceRequestError>,
+    private readonly eventHub: PubSub.PubSub<ComparisonEvent>,
   ) {
+    this.events = Stream.unwrap(Effect.sync(() =>
+      this.lifecycle === 'active' ? Stream.fromPubSub(eventHub) : Stream.empty,
+    ));
     this.unsubscribeFromDataChanges = csvs.subscribeToDataChanges((workingCsvId) => {
       this.markSourceChanged(workingCsvId);
     });
@@ -276,7 +284,11 @@ class CsvComparisonService implements Comparisons {
     const ready = yield* Deferred.make<void>();
     const completed = yield* Deferred.make<ComparisonAttemptOutcome>();
     const cleanup = { failed: false };
-    const fiber = yield* Effect.forkIn(
+    // FiberMap.run interrupts whatever attempt is still registered for this comparison.
+    // Busy admission returns before that run.
+    yield* FiberMap.run(
+      this.attempts,
+      entity.comparisonId,
       Effect.scoped(Deferred.await(ready).pipe(
         // Return from admission before starting database work.
         Effect.andThen(Effect.yieldNow),
@@ -292,12 +304,11 @@ class CsvComparisonService implements Comparisons {
         Effect.provideService(OperationCleanup, cleanup),
         Effect.annotateSpans({ comparisonId: entity.comparisonId, operationId: operation.operationId, baselineId: entity.baselineId, candidateId: entity.candidateId }),
       ),
-      this.workspaceScope,
       // Install settlement before a running-state subscriber can request cancellation.
       { startImmediately: true },
     );
     const completion = Deferred.await(completed);
-    entity.activity = { kind: 'running', operation, fiber, completion };
+    entity.activity = { kind: 'running', operation, completion };
     this.publishChange(entity);
     yield* Deferred.succeed(ready, undefined);
     return { status: 'accepted', operationId: operation.operationId, completion };
@@ -314,7 +325,8 @@ class CsvComparisonService implements Comparisons {
     if (operation.operationId !== request.operationId) return { status: 'operation-mismatch' };
     if (operation.cancelRequested) return { status: 'already-requested' };
     operation.cancelRequested = true;
-    yield* Effect.forkIn(Fiber.interrupt(entity.activity.fiber), this.workspaceScope);
+    const fiber = this.attemptFiber(entity.comparisonId);
+    if (fiber) yield* Effect.forkIn(Fiber.interrupt(fiber), this.workspaceScope);
     return { status: 'requested' };
   });
 
@@ -437,9 +449,10 @@ class CsvComparisonService implements Comparisons {
   ): Effect.fn.Return<ClosedComparison, DataEngineError> {
     const { comparisonId } = entity;
     if (entity.activity.kind === 'running') {
-      const { operation, fiber, completion } = entity.activity;
+      const { operation, completion } = entity.activity;
       operation.cancelRequested = true;
-      yield* Fiber.interrupt(fiber);
+      const fiber = this.attemptFiber(entity.comparisonId);
+      if (fiber) yield* Fiber.interrupt(fiber);
       yield* completion;
     }
     if (entity.snapshot) {
@@ -466,12 +479,6 @@ class CsvComparisonService implements Comparisons {
     }
   });
 
-  subscribe(listener: (event: ComparisonEvent) => void): () => void {
-    if (this.lifecycle !== 'active') return () => undefined;
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
   // Finish every admitted close and cleanup attempt before disposal can settle.
   readonly dispose = Effect.fnUntraced(function* (
     this: CsvComparisonService,
@@ -485,7 +492,7 @@ class CsvComparisonService implements Comparisons {
     }
     const disposed = yield* Effect.exit(this.executor.dispose());
     if (Exit.isFailure(disposed)) failures.push(disposed.cause);
-    this.listeners.clear();
+    this.endEvents();
     if (failures.length > 0) return yield* Effect.failCause(failures.reduce((combined, cause) => Cause.combine(combined, cause), Cause.empty));
     this.lifecycle = 'disposed';
   }, Effect.uninterruptible);
@@ -499,9 +506,10 @@ class CsvComparisonService implements Comparisons {
     const settled: Exit.Exit<unknown, DataEngineError>[] = [];
     for (const entity of this.entities.values()) {
       if (entity.activity.kind !== 'running') continue;
-      const { operation, fiber, completion } = entity.activity;
+      const { operation, completion } = entity.activity;
       operation.cancelRequested = true;
-      yield* Fiber.interrupt(fiber);
+      const fiber = this.attemptFiber(entity.comparisonId);
+      if (fiber) yield* Fiber.interrupt(fiber);
       settled.push(yield* Effect.exit(completion));
     }
     for (const close of [...this.closing.values()]) settled.push(yield* Effect.exit(close));
@@ -509,7 +517,7 @@ class CsvComparisonService implements Comparisons {
     this.pairIndex.clear();
     this.dependencyIndex.clear();
     this.pendingRetirements.clear();
-    this.listeners.clear();
+    this.endEvents();
     this.lifecycle = 'disposed';
     yield* Exit.asVoidAll(settled);
   }, Effect.uninterruptible);
@@ -520,6 +528,9 @@ class CsvComparisonService implements Comparisons {
     operation: Operation,
     result: Exit.Exit<AttemptResult, DataEngineError | WorkspaceRequestError>,
   ): ComparisonAttemptOutcome {
+    // Settlement publishes before this fiber exits. Drop the map entry first so a
+    // subscriber can start the next attempt without FiberMap.run interrupting this one.
+    this.detachAttempt(entity.comparisonId);
     // Cancellation or cleanup failure after publication must preserve the committed result.
     if (entity.snapshot?.artifactId === operation.operationId) {
       return this.settle(entity, operation, { attemptId: operation.operationId, status: 'applied' });
@@ -703,7 +714,7 @@ class CsvComparisonService implements Comparisons {
         if (!operation.changedSides.includes(side)) operation.changedSides.push(side);
         // Data changes arrive through a synchronous callback. Request interruption only;
         // the workspace-owned fiber still runs its finalizers and terminal projection.
-        entity.activity.fiber.interruptUnsafe();
+        this.attemptFiber(entity.comparisonId)?.interruptUnsafe();
       }
       if (!entity.snapshot) continue;
       const changedSides = entity.snapshot.freshness.kind === 'outdated' ? entity.snapshot.freshness.changedSides : [];
@@ -798,6 +809,10 @@ class CsvComparisonService implements Comparisons {
         return { status: 'cancelled', comparison };
       case 'sources-changed':
         return { status: 'sources-changed', changedSides: lastAttempt.changedSides, comparison };
+      default: {
+        const unexpected: never = lastAttempt;
+        return unexpected;
+      }
     }
   }
 
@@ -810,13 +825,21 @@ class CsvComparisonService implements Comparisons {
   }
 
   private emit(event: ComparisonEvent): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(event);
-      } catch {
-        // A subscriber cannot prevent other subscribers or resource cleanup.
-      }
-    }
+    Effect.runSync(PubSub.publish(this.eventHub, event));
+  }
+
+  private endEvents(): void {
+    Effect.runSync(PubSub.shutdown(this.eventHub));
+  }
+
+  private attemptFiber(comparisonId: ComparisonId): AttemptFiber | undefined {
+    const fiber = FiberMap.getUnsafe(this.attempts, comparisonId);
+    return Option.isSome(fiber) ? fiber.value : undefined;
+  }
+
+  private detachAttempt(comparisonId: ComparisonId): void {
+    if (this.attempts.state._tag !== 'Open') return;
+    MutableHashMap.remove(this.attempts.state.backing, comparisonId);
   }
 }
 

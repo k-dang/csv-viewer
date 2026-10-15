@@ -1,9 +1,10 @@
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Effect, Fiber, Layer, ManagedRuntime, Stream } from 'effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanupEffect } from './comparison-effects';
 import { DataEngineError } from '../database';
 import type {
   CloseComparisonResult,
+  ComparisonEvent,
   ComparisonOperationId,
   ComparisonSummary,
   WorkingCsvView,
@@ -194,7 +195,16 @@ function createService(store: FakeCsvStore, executor: ComparisonExecutor) {
     open: service.open.bind(service),
     getState: service.getState.bind(service),
     swap: service.swap.bind(service),
-    subscribe: service.subscribe.bind(service),
+    subscribe: (listener: (event: ComparisonEvent) => void) => {
+      const fiber = runtime.runFork(Stream.runForEach(service.events, (event) => Effect.sync(() => listener(event))));
+      return () => {
+        fiber.interruptUnsafe();
+      };
+    },
+    watch: (listener: (event: ComparisonEvent) => void) => {
+      const fiber = runtime.runFork(Stream.runForEach(service.events, (event) => Effect.sync(() => listener(event))));
+      return runtime.runPromise(Fiber.join(fiber));
+    },
     dependentComparisonIds: service.dependentComparisonIds.bind(service),
     begin: (request: Parameters<Comparisons['begin']>[0]) => {
       const result = runtime.runSync(service.begin(request));
@@ -737,9 +747,10 @@ describe('Comparisons interaction contract', () => {
     const opened = service.open({ baselineId: 'a', candidateId: 'b' });
     if (opened.status === 'rejected') throw new Error('open rejected');
     const seen: string[] = [];
-    service.subscribe(() => {
+    const failed = service.watch(() => {
       throw new Error('subscriber failed');
     });
+    const reported = expect(failed).rejects.toThrow('subscriber failed');
     service.subscribe((event) => {
       seen.push(event.kind);
     });
@@ -752,6 +763,7 @@ describe('Comparisons interaction contract', () => {
     if (begun.status !== 'accepted') throw new Error('begin rejected');
     await expect(begun.completion).resolves.toMatchObject({ status: 'applied' });
     expect(seen).toContain('changed');
+    await reported;
     await service.dispose();
   });
 });

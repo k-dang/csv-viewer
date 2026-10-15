@@ -1,5 +1,5 @@
 import { OperationCleanup, markCleanupFailed, observeCleanup, observeStage, recordOutcome, reportFailure } from './workspace-diagnostics';
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Stream } from 'effect';
 import type { Rpc, RpcGroup } from 'effect/rpc';
 import { rejected } from './comparison/comparison-key-rules';
 import { makeWorkspaceLayer } from './workspace-runtime';
@@ -287,11 +287,13 @@ export class CsvWorkspaceImplementation implements CsvWorkspaceServer {
       return () => undefined;
     }
     this.listeners.add(listener);
-    const stopComparisons = this.comparisons.subscribe((event) => {
+    // Not a child of the workspace scope: that scope closes by disposing comparisons, and this
+    // fiber has to observe the events disposal publishes before the hub shuts down.
+    const stopComparisons = Effect.runFork(Stream.runForEach(this.comparisons.events, (event) => Effect.sync(() => {
       if (!this.engineStopped) listener({ type: 'comparison', event });
-    });
+    })));
     return () => {
-      stopComparisons();
+      stopComparisons.interruptUnsafe();
       this.listeners.delete(listener);
     };
   }
