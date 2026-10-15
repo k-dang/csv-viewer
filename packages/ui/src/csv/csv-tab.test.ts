@@ -149,6 +149,27 @@ describe('CsvTab', () => {
     expect(tab.snapshot()).toBe(state);
   });
 
+  it('keeps the new Live Stats when a superseded request resolves after it', async () => {
+    const superseded = deferred<CsvColumnValueCounts>();
+    const current = deferred<CsvColumnValueCounts>();
+    const getCounts = vi.fn()
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(current.promise);
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-value-counts': getCounts } }), workingCsv);
+
+    tab.toggleStats();
+    tab.setStatsColumn('age');
+    current.resolve(counts(1));
+    await vi.waitFor(() => expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(1) }));
+    const state = tab.snapshot();
+
+    superseded.resolve(counts(250));
+    await superseded.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tab.snapshot()).toBe(state);
+    expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(1) });
+  });
+
   it('keeps the latest Live Stats when superseded requests finish or reject', async () => {
     const first = deferred<CsvColumnValueCounts>();
     const second = deferred<CsvColumnValueCounts>();

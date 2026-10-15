@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type {
   CloseImpact,
   ComparisonCandidate,
@@ -14,7 +15,7 @@ import type {
   WorkingCsvView,
 } from '@csv-viewer/workspace/csv-viewer';
 import { buildDialectOptions, isDialectError, type CsvHeaderMode } from '../csv/csv-dialect';
-import { CsvTab } from '../csv/csv-tab';
+import { CsvTab, ViewRuntime } from '../csv/csv-tab';
 import { ComparisonTab } from '../comparison/comparison-tab';
 
 export type RendererTab =
@@ -49,7 +50,7 @@ type CsvOpenOperation = { name: string | null; open: (options: CsvDialectOptions
  * Create at application startup and dispose when the session ends to invalidate outstanding work.
  */
 export class RendererWorkspace {
-  private state: RendererWorkspaceState = {
+  private readonly runtime = ViewRuntime.open<RendererWorkspaceState>({
     delimiter: '',
     headerMode: 'auto',
     dialectError: null,
@@ -59,10 +60,8 @@ export class RendererWorkspace {
     isOpening: false,
     error: null,
     fatalError: null,
-  };
-  private readonly listeners = new Set<() => void>();
+  });
   private stopped = false;
-  private recentSourcesRequest = 0;
   private stopEvents: () => void = () => {};
   /** Closed IDs matter only to the single Open/Reopen response currently in flight. */
   private openingClosedCsvs: Set<string> | null = null;
@@ -77,12 +76,13 @@ export class RendererWorkspace {
     void this.refreshRecentSources();
   }
 
-  readonly snapshot = (): RendererWorkspaceState => this.state;
+  private get state(): RendererWorkspaceState {
+    return this.runtime.snapshot();
+  }
 
-  readonly subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
-  };
+  readonly snapshot = (): RendererWorkspaceState => this.runtime.snapshot();
+
+  readonly subscribe = (listener: () => void): (() => void) => this.runtime.subscribe(listener);
 
   updateDialect(delimiter: string, headerMode: CsvHeaderMode): void {
     if (!this.stopped) this.set({ delimiter, headerMode });
@@ -226,7 +226,7 @@ export class RendererWorkspace {
   /** Retires renderer objects only. The application runtime owns disposal of the data workspace. */
   dispose(): void {
     this.stop();
-    this.listeners.clear();
+    this.runtime.dispose();
   }
 
   private runOpen(
@@ -252,7 +252,7 @@ export class RendererWorkspace {
     this.set({ dialectError: null });
     const closedCsvs = new Set<string>();
     this.openingClosedCsvs = closedCsvs;
-    this.recentSourcesRequest += 1;
+    this.runtime.interrupt('recentSources');
     this.set({ isOpening: true });
     try {
       for (const operation of operations) {
@@ -352,16 +352,20 @@ export class RendererWorkspace {
   }
 
   /** Refresh history when the empty workspace appears or an open attempt finishes there. */
-  private async refreshRecentSources(): Promise<void> {
-    if (this.stopped || !this.viewer.capabilities.recentCsvSources || this.state.isOpening || this.state.tabs.length > 0) return;
-    const request = ++this.recentSourcesRequest;
-    let recentSources: RecentCsvSource[];
-    try {
-      recentSources = await this.viewer.call({ operation: 'csv.get-recent-sources' });
-    } catch {
-      recentSources = [];
+  private refreshRecentSources(): Promise<void> {
+    if (this.stopped || !this.viewer.capabilities.recentCsvSources || this.state.isOpening || this.state.tabs.length > 0) {
+      return Promise.resolve();
     }
-    if (!this.stopped && request === this.recentSourcesRequest) this.set({ recentSources });
+    const effect = Effect.tryPromise({
+      try: () => this.viewer.call({ operation: 'csv.get-recent-sources' }),
+      catch: () => 'unavailable' as const,
+    }).pipe(
+      Effect.orElseSucceed((): RecentCsvSource[] => []),
+      Effect.tap((recentSources) => Effect.sync(() => {
+        if (!this.stopped) this.set({ recentSources });
+      })),
+    );
+    return this.runtime.join(this.runtime.fork('recentSources', effect)).then(() => undefined);
   }
 
   private stop(): void {
@@ -369,10 +373,11 @@ export class RendererWorkspace {
     this.stopped = true;
     this.stopEvents();
     for (const tab of this.state.tabs) tab.tab.dispose();
+    this.runtime.interrupt('recentSources');
   }
+
   private set(patch: Partial<RendererWorkspaceState>): void {
-    this.state = { ...this.state, ...patch };
-    for (const listener of this.listeners) listener();
+    this.runtime.update({ ...this.state, ...patch });
   }
 }
 

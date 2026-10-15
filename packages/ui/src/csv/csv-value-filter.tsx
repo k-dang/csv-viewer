@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { topCountedValuesLimit, type CsvRow } from '@csv-viewer/workspace/csv-viewer';
-import type { CsvTab, CsvTabQuery, CsvTabStatsResult } from './csv-tab';
+import { openQueryDebounce, type CsvTab, type CsvTabQuery, type CsvTabStatsResult } from './csv-tab';
 import { formatCellValue, formatNumber } from './csv-format';
 import {
   isValuePicked,
@@ -17,9 +17,6 @@ import {
   type ValueFilterModel,
   type ValuePick,
 } from './value-filter-model';
-
-/** Typing settles this long before the search term filters rows and narrows the value list. */
-const searchDebounceMs = 300;
 
 export type CsvValueFilterParams = { tab: CsvTab };
 
@@ -52,26 +49,30 @@ export function CsvValueFilter({
   latestModel.current = model;
   const pick = model?.pick;
   const [search, setSearch] = useState(model?.contains ?? '');
-  const pendingSearch = useRef<number | null>(null);
   // The last model this popup committed. Any other model was set elsewhere (Clear query, Reopen
   // CSV, the cell menu): it replaces the term and drops a draft still waiting on its debounce.
   const ownModel = useRef(JSON.stringify(model ?? null));
+  const searchCommit = useRef<(value: string) => void>(() => undefined);
+  const [debouncedSearch] = useState(() => openQueryDebounce(
+    model?.contains ?? '',
+    (value) => searchCommit.current(value),
+  ));
+  useEffect(() => () => debouncedSearch.dispose(), [debouncedSearch]);
+  searchCommit.current = (value) => {
+    const next = valueFilter(value, latestModel.current?.pick);
+    ownModel.current = JSON.stringify(next);
+    onModelChange(next);
+  };
   useEffect(() => {
     const incoming = JSON.stringify(model ?? null);
     if (incoming === ownModel.current) return;
     ownModel.current = incoming;
-    cancelPendingSearch();
+    debouncedSearch.reset(model?.contains ?? '');
     setSearch(model?.contains ?? '');
-  }, [model]);
-  useEffect(() => () => cancelPendingSearch(), []);
-
-  function cancelPendingSearch() {
-    if (pendingSearch.current !== null) window.clearTimeout(pendingSearch.current);
-    pendingSearch.current = null;
-  }
+  }, [debouncedSearch, model]);
 
   function commit(contains: string, nextPick: ValuePick | undefined) {
-    cancelPendingSearch();
+    debouncedSearch.reset(contains);
     const next = valueFilter(contains, nextPick);
     ownModel.current = JSON.stringify(next);
     onModelChange(next);
@@ -79,8 +80,7 @@ export function CsvValueFilter({
 
   function onSearchChange(value: string) {
     setSearch(value);
-    cancelPendingSearch();
-    pendingSearch.current = window.setTimeout(() => commit(value, latestModel.current?.pick), searchDebounceMs);
+    debouncedSearch.push(value);
   }
 
   const result = useFilterValueCounts(tab, columnName, open);
@@ -177,21 +177,7 @@ function useFilterValueCounts(tab: CsvTab, column: string, open: boolean): Count
 
   useEffect(() => {
     if (!open) return;
-    let current = true;
-    void (async () => {
-      try {
-        const counts = await tab.valueCounts(column, scope);
-        if (current) setResult({ status: 'ready', counts });
-      } catch (error) {
-        if (current) setResult({
-          status: 'failed',
-          message: error instanceof Error ? error.message : 'Unable to load column values.',
-        });
-      }
-    })();
-    return () => {
-      current = false;
-    };
+    return tab.watchValueCounts(column, scope, setResult);
   }, [tab, column, open, scopeKey]);
 
   return result;
