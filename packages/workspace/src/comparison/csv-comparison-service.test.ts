@@ -728,4 +728,30 @@ describe('Comparisons interaction contract', () => {
     expect(service.getState(request.comparisonId)).toBeNull();
     await service.dispose();
   });
+
+  it('keeps delivering comparison events when one subscriber throws', async () => {
+    const store = new FakeCsvStore();
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
+    const service = createService(store, new ScriptedComparisonExecutor());
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+    const seen: string[] = [];
+    service.subscribe(() => {
+      throw new Error('subscriber failed');
+    });
+    service.subscribe((event) => {
+      seen.push(event.kind);
+    });
+
+    const begun = service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    });
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    await expect(begun.completion).resolves.toMatchObject({ status: 'applied' });
+    expect(seen).toContain('changed');
+    await service.dispose();
+  });
 });
