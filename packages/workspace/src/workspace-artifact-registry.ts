@@ -1,3 +1,4 @@
+import { Effect, SynchronizedRef } from 'effect';
 import type {
   ComparisonId,
   ComparisonOperationId,
@@ -16,33 +17,60 @@ export type WorkspaceArtifact = {
   role: WorkspaceArtifactRole;
 };
 
+type ArtifactDocuments = ReadonlyMap<string, WorkspaceArtifact>;
+
 export class WorkspaceArtifactRegistry {
-  private readonly artifacts = new Map<string, WorkspaceArtifact>();
+  private readonly artifacts: SynchronizedRef.SynchronizedRef<ArtifactDocuments>;
+
+  constructor() {
+    this.artifacts = Effect.runSync(SynchronizedRef.make<ArtifactDocuments>(new Map()));
+  }
+
+  private get documents(): ArtifactDocuments {
+    return SynchronizedRef.getUnsafe(this.artifacts);
+  }
+
+  private modify<A>(next: (artifacts: ArtifactDocuments) => readonly [A, ArtifactDocuments]): A {
+    return Effect.runSync(SynchronizedRef.modify(this.artifacts, (artifacts) => {
+      const [value, documents] = next(artifacts);
+      return [value, documents];
+    }));
+  }
 
   register(artifact: WorkspaceArtifact): void {
-    if (this.artifacts.has(artifact.tableName)) {
-      throw new Error(`Workspace artifact ${artifact.tableName} is already registered.`);
-    }
-    this.artifacts.set(artifact.tableName, cloneArtifact(artifact));
+    const stored = cloneArtifact(artifact);
+    const duplicate = this.modify((artifacts) => {
+      if (artifacts.has(stored.tableName)) return [true, artifacts] as const;
+      const next = new Map(artifacts);
+      next.set(stored.tableName, stored);
+      return [false, next] as const;
+    });
+    if (duplicate) throw new Error(`Workspace artifact ${stored.tableName} is already registered.`);
   }
 
   transition(tableName: string, role: WorkspaceArtifactRole): void {
-    const artifact = this.require(tableName);
-    this.artifacts.set(tableName, { ...artifact, role });
+    this.replace(tableName, (artifact, artifacts) => {
+      const next = new Map(artifacts);
+      next.set(tableName, { ...artifact, role });
+      return next;
+    });
   }
 
   remove(tableName: string): void {
-    this.require(tableName);
-    this.artifacts.delete(tableName);
+    this.replace(tableName, (_artifact, artifacts) => {
+      const next = new Map(artifacts);
+      next.delete(tableName);
+      return next;
+    });
   }
 
   get(tableName: string): WorkspaceArtifact | null {
-    const artifact = this.artifacts.get(tableName);
+    const artifact = this.documents.get(tableName);
     return artifact ? cloneArtifact(artifact) : null;
   }
 
   list(): WorkspaceArtifact[] {
-    return [...this.artifacts.values()].map(cloneArtifact);
+    return [...this.documents.values()].map(cloneArtifact);
   }
 
   assertNoArtifactsOwnedBy(kind: WorkspaceArtifactOwner['kind']): void {
@@ -52,15 +80,21 @@ export class WorkspaceArtifactRegistry {
   }
 
   assertEmpty(): void {
-    if (this.artifacts.size > 0) {
+    if (this.documents.size > 0) {
       throw new Error('Workspace artifact invariant violated: registered artifacts remain.');
     }
   }
 
-  private require(tableName: string): WorkspaceArtifact {
-    const artifact = this.artifacts.get(tableName);
-    if (!artifact) throw new Error(`Workspace artifact ${tableName} is not registered.`);
-    return artifact;
+  private replace(
+    tableName: string,
+    change: (artifact: WorkspaceArtifact, artifacts: ArtifactDocuments) => ArtifactDocuments,
+  ): void {
+    const missing = this.modify((artifacts) => {
+      const artifact = artifacts.get(tableName);
+      if (!artifact) return [true, artifacts] as const;
+      return [false, change(artifact, artifacts)] as const;
+    });
+    if (missing) throw new Error(`Workspace artifact ${tableName} is not registered.`);
   }
 }
 
