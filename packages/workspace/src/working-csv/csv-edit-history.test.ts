@@ -28,4 +28,17 @@ describe('CsvEditHistory', () => {
     const redone = Result.getOrThrow(undone.step('redo')).history;
     expect([redone.canUndo, redone.canRedo, redone.currentRevision]).toEqual([true, false, 4]);
   });
+
+  it('keeps one journal id across edits, steps, and export marks', () => {
+    const history = CsvEditHistory.create();
+    const edited = history.record({ type: 'insert-row', rowId: '9' });
+    const undone = Result.getOrThrow(edited.step('undo')).history;
+    const marked = undone.markExported(edited.currentRevision);
+    const replacement = CsvEditHistory.create(history.revisionSequence);
+
+    expect(edited.journalId).toBe(history.journalId);
+    expect(undone.journalId).toBe(history.journalId);
+    expect(marked.journalId).toBe(history.journalId);
+    expect(replacement.journalId).not.toBe(history.journalId);
+  });
 });

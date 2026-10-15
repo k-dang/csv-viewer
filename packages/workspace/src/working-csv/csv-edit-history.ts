@@ -32,6 +32,7 @@ export type CsvEditCommand = CsvEditDraft & {
  * Undo and redo stacks plus the revision identity that decides Unexported Changes. Unexported
  * Changes is `currentRevisionId !== lastExportedRevisionId`, so it follows the data rather than
  * stack depth: an edit that restores the exported stack depth with different content still counts.
+ * `journalId` is copied by `record`, `step`, and `markExported`. `create` starts a new journal.
  */
 export class CsvEditHistory {
   private constructor(
@@ -40,10 +41,11 @@ export class CsvEditHistory {
     readonly currentRevisionId: number,
     readonly lastExportedRevisionId: number,
     readonly nextRevisionId: number,
+    readonly journalId: symbol,
   ) {}
 
   static create(initialRevisionId = 0): CsvEditHistory {
-    return new CsvEditHistory([], [], initialRevisionId, initialRevisionId, initialRevisionId + 1);
+    return new CsvEditHistory([], [], initialRevisionId, initialRevisionId, initialRevisionId + 1, Symbol());
   }
 
   get revisionSequence(): number {
@@ -79,6 +81,7 @@ export class CsvEditHistory {
       this.currentRevisionId,
       revisionId,
       this.nextRevisionId,
+      this.journalId,
     );
   }
 
@@ -94,6 +97,7 @@ export class CsvEditHistory {
       command.revisionId,
       this.lastExportedRevisionId,
       this.nextRevisionId + 1,
+      this.journalId,
     );
   }
 
@@ -109,6 +113,7 @@ export class CsvEditHistory {
       direction === 'undo' ? command.previousRevisionId : command.revisionId,
       this.lastExportedRevisionId,
       this.nextRevisionId,
+      this.journalId,
     );
     return Result.succeed({ command, history });
   }

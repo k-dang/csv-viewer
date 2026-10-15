@@ -888,9 +888,11 @@ class WorkingCsvStore implements WorkingCsvs {
    * revision as exported. Delivery can involve the user, so it runs outside the Working CSV lease -
    * holding one across a prompt would block closing the Working CSV and disposing the workspace.
    * The Working CSV can therefore be closed or replaced while the prompt is open, and a delivered
-   * export never fails afterwards: the exported revision is only recorded against the history it
-   * was serialized from. A failed worker release rejects the export before delivery, and the store
-   * keeps that worker for disposal to retry.
+   * export never fails afterwards. The delivered revision is marked on the open journal when it is
+   * still the journal that was serialized. Edits during delivery keep Unexported Changes set, and
+   * returning to the delivered revision clears them. A replacement journal is left unchanged. A
+   * failed worker release rejects the export before delivery, and the store keeps that worker for
+   * disposal to retry.
    */
   readonly exportCsv = Effect.fnUntraced(function* (
     this: WorkingCsvStore,
@@ -925,11 +927,11 @@ class WorkingCsvStore implements WorkingCsvs {
     if (delivery.status === 'cancelled') return { status: 'cancelled' } satisfies CsvExportOutcome;
 
     const live = this.workingCsvs.get(workingCsvId);
-    const state = live ?? prepared.state;
-    if (state.history !== prepared.state.history) {
-      return { status: 'exported', editState: buildEditState(state) } satisfies CsvExportOutcome;
+    const open = live ?? prepared.state;
+    if (open.history.journalId !== prepared.state.history.journalId) {
+      return { status: 'exported', editState: buildEditState(open) } satisfies CsvExportOutcome;
     }
-    const marked = { ...state, history: state.history.markExported(prepared.revisionId) };
+    const marked = { ...open, history: open.history.markExported(prepared.revisionId) };
     if (live) this.putCsv(marked);
     return { status: 'exported', editState: buildEditState(marked) } satisfies CsvExportOutcome;
   }, (effect, workingCsvId) => this.withExportSlot(workingCsvId, effect));
@@ -962,11 +964,15 @@ class WorkingCsvStore implements WorkingCsvs {
       return { sourceId: snapshot.sourceId, suggestedName: snapshot.suggestedName, rowCount: snapshot.rows.length, contents };
     });
     // Register the fiber before it runs, so close can cancel preparation and cannot cancel delivery.
+    // The fiber is a daemon: interrupting this join does not interrupt it, so cancel the join by
+    // interrupting the fiber. Delivery stays after the join, outside that interrupt.
     const fiber = yield* FiberMap.run(this.resources.viewExports, request.workingCsvId, preparation, {
       startImmediately: false,
       propagateInterruption: true,
     });
-    const result = yield* Effect.exit(Fiber.join(fiber));
+    const result = yield* Effect.exit(Fiber.join(fiber).pipe(
+      Effect.onInterrupt(() => Fiber.interrupt(fiber)),
+    ));
     if (releaseFailure) {
       const cleanup = Cause.fail(releaseFailure);
       return yield* Effect.failCause(Exit.isFailure(result) && !Cause.hasInterruptsOnly(result.cause)
