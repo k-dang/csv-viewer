@@ -5,9 +5,10 @@ import type {
   CsvSourceId,
 } from '@csv-viewer/workspace/csv-viewer';
 import type { WorkspaceDiagnostics } from '@csv-viewer/workspace/workspace-diagnostics';
+import { buildWorkspaceHost } from '@csv-viewer/workspace/workspace-host';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { WebCsvCapacityLimits, WebCsvFilePicker } from './web-workspace-host';
-import { WebWorkspaceHost } from './web-workspace-host';
+import { WebWorkspaceHost, webWorkspaceHostLayer } from './web-workspace-host';
 
 export type WebCsvViewerStartup =
   | { status: 'ready'; viewer: CsvViewerSession; acquireDroppedSource: (file: File) => Promise<CsvSourceId | CsvCapacityExceeded> }
@@ -28,7 +29,7 @@ export async function startWebCsvViewer(
 ): Promise<WebCsvViewerStartup> {
   try {
     const host = new WebWorkspaceHost(database, pickFile, limits);
-    const workspace = await createCsvViewer(database.open(), host, {
+    const workspace = await createCsvViewer(database.open(), buildWorkspaceHost(webWorkspaceHostLayer(host)), {
       diagnostics,
       startup: { signal, stopped: database.stopped },
     });

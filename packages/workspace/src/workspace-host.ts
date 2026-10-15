@@ -1,5 +1,5 @@
 import type { CsvCapacityExceeded, CsvSourceId, CsvViewerCapabilities, RecentCsvSource } from './csv-viewer';
-import { Context, Schema, type Effect, type Scope } from 'effect';
+import { Context, Effect, Layer, Schema, type Scope } from 'effect';
 import type { DataEngineError } from './database';
 import type { WorkspaceRequestError } from './errors';
 
@@ -56,6 +56,67 @@ export interface CsvWorkspaceHost {
 
 /** Each runtime supplies its own host when it composes the workspace. */
 export const CsvWorkspaceHost = Context.Service<CsvWorkspaceHost>('csv-viewer/Host');
+
+export interface SourceRegistry {
+  acquireSource: CsvWorkspaceHost['acquireSource'];
+  releaseSource: CsvWorkspaceHost['releaseSource'];
+  describeSource: CsvWorkspaceHost['describeSource'];
+  acquireEngineSource: CsvWorkspaceHost['acquireEngineSource'];
+}
+
+export const SourceRegistry = Context.Service<SourceRegistry>('csv-viewer/SourceRegistry');
+
+export interface ExportSink {
+  deliverExport: CsvWorkspaceHost['deliverExport'];
+}
+
+export const ExportSink = Context.Service<ExportSink>('csv-viewer/ExportSink');
+
+export interface RecentSources {
+  recentSources: CsvWorkspaceHost['recentSources'];
+  recordRecentSource: CsvWorkspaceHost['recordRecentSource'];
+}
+
+export const RecentSources = Context.Service<RecentSources>('csv-viewer/RecentSources');
+
+export interface Prompts {
+  confirmDiscardChanges: CsvWorkspaceHost['confirmDiscardChanges'];
+}
+
+export const Prompts = Context.Service<Prompts>('csv-viewer/Prompts');
+
+export const emptyRecentSources = {
+  recentSources: (): Effect.Effect<RecentCsvSource[]> => Effect.succeed([]),
+  recordRecentSource: (_sourceId: CsvSourceId): Effect.Effect<void> => Effect.void,
+} satisfies RecentSources;
+
+export const emptyRecentSourcesLayer = Layer.succeed(RecentSources, emptyRecentSources);
+
+export function workspaceHostLayer(
+  capabilities: CsvViewerCapabilities,
+): Layer.Layer<CsvWorkspaceHost, never, SourceRegistry | ExportSink | RecentSources | Prompts> {
+  return Layer.effect(CsvWorkspaceHost, Effect.gen(function* () {
+    const sources = yield* SourceRegistry;
+    const sink = yield* ExportSink;
+    const recents = yield* RecentSources;
+    const prompts = yield* Prompts;
+    return {
+      capabilities,
+      acquireSource: () => sources.acquireSource(),
+      releaseSource: (sourceId) => { sources.releaseSource(sourceId); },
+      describeSource: (sourceId) => sources.describeSource(sourceId),
+      acquireEngineSource: (sourceId) => sources.acquireEngineSource(sourceId),
+      deliverExport: (request) => sink.deliverExport(request),
+      recentSources: () => recents.recentSources(),
+      recordRecentSource: (sourceId) => recents.recordRecentSource(sourceId),
+      confirmDiscardChanges: (sourceName) => prompts.confirmDiscardChanges(sourceName),
+    } satisfies CsvWorkspaceHost;
+  }));
+}
+
+export function buildWorkspaceHost(layer: Layer.Layer<CsvWorkspaceHost>): CsvWorkspaceHost {
+  return Context.get(Effect.runSync(Effect.scoped(Layer.build(layer))), CsvWorkspaceHost);
+}
 
 /** An expected CSV Source or export destination access failure, classified by the host. Its message is safe to show. */
 export class CsvSourceUnavailableError extends Schema.TaggedError<CsvSourceUnavailableError>()('CsvSourceUnavailableError', {

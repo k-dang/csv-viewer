@@ -6,6 +6,7 @@ import { CsvSourceUnavailableError } from '@csv-viewer/workspace/workspace-host'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CsvWorkspaceFixture } from '../../integration/fixtures/desktop-workspace';
 import { diagnosticCapture } from '../../../../packages/workspace/test/diagnostic-capture';
+import * as fileIdentity from './desktop-csv-export';
 
 describe('DesktopWorkspaceHost behavior', () => {
   let fixture: CsvWorkspaceFixture;
@@ -316,6 +317,107 @@ describe('DesktopWorkspaceHost behavior', () => {
     await expect(fixture.viewer.call({ operation: 'csv.undo', ...request })).resolves.toMatchObject({
       hasUnexportedChanges: false,
     });
+  });
+
+  it('gives one id when two registrations overlap a file that appears during identity capture', async () => {
+    const filePath = fixture.file('overlap.csv');
+    const realCapture = fileIdentity.captureFileIdentity;
+    let captures = 0;
+    const bothCapturing = Promise.withResolvers<void>();
+    vi.spyOn(fileIdentity, 'captureFileIdentity').mockImplementation(async (candidate) => {
+      if (candidate !== filePath) return realCapture(candidate);
+      captures += 1;
+      const order = captures;
+      if (captures === 2) bothCapturing.resolve();
+      await bothCapturing.promise;
+      if (order === 1) return null;
+      await writeFile(filePath, 'value\n1\n');
+      return realCapture(filePath);
+    });
+
+    try {
+      const ids = await Promise.all([
+        Effect.runPromise(fixture.host.registerSource(filePath)),
+        Effect.runPromise(fixture.host.registerSource(filePath)),
+      ]);
+      expect(ids[0]).toBe(ids[1]);
+    } finally {
+      vi.mocked(fileIdentity.captureFileIdentity).mockRestore();
+    }
+  });
+
+  it('keeps the successful capture identity when a null capture of the same path finishes last', async () => {
+    const filePath = fixture.file('overlap-null-last.csv');
+    const realCapture = fileIdentity.captureFileIdentity;
+    let captures = 0;
+    const bothCapturing = Promise.withResolvers<void>();
+    const releaseNull = Promise.withResolvers<void>();
+    vi.spyOn(fileIdentity, 'captureFileIdentity').mockImplementation(async (candidate) => {
+      if (candidate !== filePath) return realCapture(candidate);
+      captures += 1;
+      const order = captures;
+      if (captures === 2) bothCapturing.resolve();
+      await bothCapturing.promise;
+      if (order === 1) {
+        await writeFile(filePath, 'value\n1\n');
+        return realCapture(filePath);
+      }
+      await releaseNull.promise;
+      return null;
+    });
+
+    try {
+      const first = Effect.runPromise(fixture.host.registerSource(filePath));
+      const second = Effect.runPromise(fixture.host.registerSource(filePath));
+      const successfulId = await Promise.race([first, second]);
+      releaseNull.resolve();
+      const ids = await Promise.all([first, second]);
+      expect(ids).toEqual([successfulId, successfulId]);
+
+      const aliasPath = fixture.file('overlap-null-last-alias.csv');
+      const outputPath = fixture.file('overlap-null-last-output.csv');
+      await link(filePath, aliasPath);
+      fixture.prompts.exportChoices.push(aliasPath, outputPath);
+      await expect(Effect.runPromise(fixture.host.deliverExport({
+        sourceId: successfulId,
+        suggestedName: 'overlap-null-last.csv',
+        contents: 'value\n2\n',
+      }))).resolves.toEqual({ status: 'delivered' });
+      expect(fixture.prompts.sourceConflictCount).toBe(1);
+      await expect(readFile(filePath, 'utf8')).resolves.toBe('value\n1\n');
+      await expect(readFile(outputPath, 'utf8')).resolves.toBe('value\n2\n');
+      await expect(Effect.runPromise(fixture.host.registerSource(aliasPath))).resolves.toBe(successfulId);
+    } finally {
+      vi.mocked(fileIdentity.captureFileIdentity).mockRestore();
+    }
+  });
+
+  it('reuses the inode id when a later capture of a path registered without identity succeeds', async () => {
+    const filePath = fixture.file('linked-later.csv');
+    const aliasPath = fixture.file('linked-later-alias.csv');
+    const realCapture = fileIdentity.captureFileIdentity;
+    let missOriginal = true;
+    vi.spyOn(fileIdentity, 'captureFileIdentity').mockImplementation(async (candidate) => {
+      if (candidate === filePath && missOriginal) return null;
+      return realCapture(candidate);
+    });
+
+    try {
+      const missingId = await Effect.runPromise(fixture.host.registerSource(filePath));
+      await writeFile(filePath, 'value\n1\n');
+      await link(filePath, aliasPath);
+      const inodeId = await Effect.runPromise(fixture.host.registerSource(aliasPath));
+      expect(inodeId).not.toBe(missingId);
+
+      missOriginal = false;
+      await expect(Effect.runPromise(fixture.host.registerSource(filePath))).resolves.toBe(inodeId);
+
+      missOriginal = true;
+      await expect(Effect.runPromise(fixture.host.registerSource(filePath))).resolves.toBe(inodeId);
+      await expect(Effect.runPromise(fixture.host.registerSource(aliasPath))).resolves.toBe(inodeId);
+    } finally {
+      vi.mocked(fileIdentity.captureFileIdentity).mockRestore();
+    }
   });
 });
 

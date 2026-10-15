@@ -15,7 +15,6 @@ import type {
   CsvEditState,
   CsvSourceId,
   CsvViewer,
-  RecentCsvSource,
   WorkingCsvId,
   WorkingCsvView,
   WorkspaceCloseImpact,
@@ -27,12 +26,12 @@ import type { WorkspaceRequestError } from '../../../../packages/workspace/src/e
 import type { ComparisonExecutor } from '../../../../packages/workspace/src/comparison/comparison-executor';
 import { DuckDbWasmWorkspaceDatabase } from '../../src/duckdb-wasm-database';
 import { scopedEngineSource } from '../../../../packages/workspace/src/engine-source';
+import { SourceTable, sourceDescription } from '../../../../packages/workspace/src/source-table';
 import {
   CsvSourceUnavailableError,
-  defaultDelimiterForSourceName,
+  emptyRecentSources,
   type CsvExportDelivery,
   type CsvExportRequestForDelivery,
-  type CsvSourceDescription,
   type CsvWorkspaceHost,
 } from '../../../../packages/workspace/src/workspace-host';
 import type { WorkspaceContractFixture } from '../../../../packages/workspace/test/contract/workspace-contract';
@@ -43,7 +42,6 @@ const require = createRequire(`${process.cwd()}/package.json`);
 const encoder = new TextEncoder();
 
 type MemorySource = {
-  sourceId: CsvSourceId;
   name: string;
   contents: string | null;
 };
@@ -58,8 +56,7 @@ class WasmContractHost implements CsvWorkspaceHost {
     exportCsvSuccessMessage: 'Export complete',
     warnOnPageUnload: false,
   } as const;
-  private readonly sourcesByName = new Map<string, MemorySource>();
-  private readonly sourcesById = new Map<CsvSourceId, MemorySource>();
+  private readonly sources = new SourceTable<MemorySource>();
   private readonly exportNames: string[] = [];
   private readonly exports = new Map<string, string>();
 
@@ -74,13 +71,12 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 
   describeSource(sourceId: CsvSourceId) {
-    return this.requireSource(sourceId).pipe(Effect.map((source) => ({
+    return this.requireSource(sourceId).pipe(Effect.map((source) => sourceDescription(
       sourceId,
-      name: source.name,
-      location: source.name,
-      sizeBytes: encoder.encode(source.contents).byteLength,
-      defaultDelimiter: defaultDelimiterForSourceName(source.name),
-    } satisfies CsvSourceDescription)));
+      source.name,
+      source.name,
+      encoder.encode(source.contents).byteLength,
+    )));
   }
 
   acquireEngineSource(sourceId: CsvSourceId) {
@@ -100,12 +96,12 @@ class WasmContractHost implements CsvWorkspaceHost {
     });
   }
 
-  recentSources(): Effect.Effect<RecentCsvSource[]> {
-    return Effect.succeed([]);
+  recentSources() {
+    return emptyRecentSources.recentSources();
   }
 
-  recordRecentSource() {
-    return Effect.void;
+  recordRecentSource(sourceId: CsvSourceId) {
+    return emptyRecentSources.recordRecentSource(sourceId);
   }
 
   confirmDiscardChanges() {
@@ -113,21 +109,17 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 
   writeSource(fileName: string, contents: string): CsvSourceId {
-    const existing = this.sourcesByName.get(fileName);
-    const source = existing ?? {
-      sourceId: crypto.randomUUID(),
-      name: fileName,
-      contents,
-    };
-    source.contents = contents;
-    this.sourcesByName.set(fileName, source);
-    this.sourcesById.set(source.sourceId, source);
-    return source.sourceId;
+    const existing = this.sources.find((source) => source.name === fileName);
+    if (existing) {
+      existing.body.contents = contents;
+      return existing.sourceId;
+    }
+    return this.sources.reserve({ name: fileName, contents }, () => false);
   }
 
   removeSource(fileName: string): void {
-    const source = this.sourcesByName.get(fileName);
-    if (source) source.contents = null;
+    const source = this.sources.find((entry) => entry.name === fileName);
+    if (source) source.body.contents = null;
   }
 
   captureNextExport(fileName: string): () => Promise<string> {
@@ -141,13 +133,11 @@ class WasmContractHost implements CsvWorkspaceHost {
   }
 
   private requireSource(sourceId: CsvSourceId) {
-    return Effect.suspend(() => {
-      const source = this.sourcesById.get(sourceId);
-      if (!source || source.contents === null) {
-        return Effect.fail(new CsvSourceUnavailableError({ code: 'missing-source', message: 'CSV Source is no longer available.' }));
-      }
-      return Effect.succeed({ ...source, contents: source.contents });
-    });
+    const missing = new CsvSourceUnavailableError({ code: 'missing-source', message: 'CSV Source is no longer available.' });
+    return this.sources.require(sourceId, missing).pipe(Effect.flatMap((source) => {
+      if (source.contents === null) return Effect.fail(missing);
+      return Effect.succeed({ name: source.name, contents: source.contents });
+    }));
   }
 }
 

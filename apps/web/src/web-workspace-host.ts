@@ -1,17 +1,21 @@
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 import type {
   CsvCapacityExceeded,
   CsvSourceId,
-  RecentCsvSource,
 } from '@csv-viewer/workspace/csv-viewer';
 import type { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import { scopedEngineSource } from '@csv-viewer/workspace/engine-source';
+import { SourceTable, sourceDescription } from '@csv-viewer/workspace/source-table';
 import {
   CsvSourceUnavailableError,
-  defaultDelimiterForSourceName,
+  emptyRecentSources,
+  emptyRecentSourcesLayer,
+  ExportSink,
+  Prompts,
+  SourceRegistry,
+  workspaceHostLayer,
   type CsvExportDelivery,
   type CsvExportRequestForDelivery,
-  type CsvSourceDescription,
   type CsvWorkspaceHost,
 } from '@csv-viewer/workspace/workspace-host';
 
@@ -35,7 +39,7 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     exportCsvSuccessMessage: 'Download started',
     warnOnPageUnload: true,
   } as const;
-  private readonly sources = new Map<CsvSourceId, File>();
+  private readonly sources = new SourceTable<File>();
 
   constructor(
     private readonly database: DuckDbWasmWorkspaceDatabase,
@@ -66,24 +70,20 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
         message: `CSV Viewer Web supports up to ${this.limits.workspaceBytes / 1_000_000} MB of open CSV files. Use the desktop application for larger workspaces.`,
       };
     }
-    // Check and reserve without yielding so concurrent selections include in-flight opens.
-    const sourceId = crypto.randomUUID();
-    this.sources.set(sourceId, file);
-    return sourceId;
+    return this.sources.reserve(file, () => false);
   }
 
   releaseSource(sourceId: CsvSourceId): void {
-    this.sources.delete(sourceId);
+    this.sources.release(sourceId);
   }
 
   describeSource(sourceId: CsvSourceId) {
-    return this.requireSource(sourceId).pipe(Effect.map((source) => ({
+    return this.requireSource(sourceId).pipe(Effect.map((source) => sourceDescription(
       sourceId,
-      name: source.name,
-      location: 'This browser session',
-      sizeBytes: source.size,
-      defaultDelimiter: defaultDelimiterForSourceName(source.name),
-    } satisfies CsvSourceDescription)));
+      source.name,
+      'This browser session',
+      source.size,
+    )));
   }
 
   acquireEngineSource(sourceId: CsvSourceId) {
@@ -119,12 +119,12 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
     });
   }
 
-  recentSources(): Effect.Effect<RecentCsvSource[]> {
-    return Effect.succeed([]);
+  recentSources() {
+    return emptyRecentSources.recentSources();
   }
 
-  recordRecentSource() {
-    return Effect.void;
+  recordRecentSource(sourceId: CsvSourceId) {
+    return emptyRecentSources.recordRecentSource(sourceId);
   }
 
   confirmDiscardChanges(sourceName: string) {
@@ -132,12 +132,21 @@ export class WebWorkspaceHost implements CsvWorkspaceHost {
   }
 
   private requireSource(sourceId: CsvSourceId) {
-    return Effect.suspend(() => {
-      const source = this.sources.get(sourceId);
-      return source ? Effect.succeed(source) : Effect.fail(new CsvSourceUnavailableError({
-        code: 'missing-source',
-        message: 'Select the CSV Source again. It is no longer available in this browser session.',
-      }));
-    });
+    return this.sources.require(sourceId, new CsvSourceUnavailableError({
+      code: 'missing-source',
+      message: 'Select the CSV Source again. It is no longer available in this browser session.',
+    }));
   }
+}
+
+export function webWorkspaceHostLayer(host: WebWorkspaceHost): Layer.Layer<CsvWorkspaceHost> {
+  const sources: SourceRegistry = host;
+  const sink: ExportSink = host;
+  const prompts: Prompts = host;
+  return workspaceHostLayer(host.capabilities).pipe(Layer.provide(Layer.mergeAll(
+    Layer.succeed(SourceRegistry, sources),
+    Layer.succeed(ExportSink, sink),
+    emptyRecentSourcesLayer,
+    Layer.succeed(Prompts, prompts),
+  )));
 }
