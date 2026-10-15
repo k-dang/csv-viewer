@@ -10,10 +10,17 @@ import {
   type WebContents,
 } from 'electron';
 import path from 'node:path';
-import { Effect, Schema } from 'effect';
+import { ConfigProvider, Deferred, Effect, Option, Queue, Schema } from 'effect';
 import { toError } from '@csv-viewer/workspace/errors';
 import { authorizeDroppedPathChannel } from '../dropped-path-channel';
-import { DesktopLifecycle, WindowWorkspace } from './desktop-lifecycle';
+import {
+  DesktopLifecycle,
+  devServerUrlConfig,
+  runDesktopProgram,
+  WindowWorkspace,
+  type CloseOutcome,
+  type DesktopProgramEvent,
+} from './desktop-lifecycle';
 import { buildApplicationMenuTemplate } from './application-menu';
 import { serveWorkspacePort } from './csv-viewer-port';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
@@ -75,8 +82,37 @@ const workspaceHost = openDesktopWorkspace(
   // File name predates the Recent CSV Source vocabulary; kept so existing installs keep their list.
   path.join(app.getPath('userData'), 'recent-files.json'),
 );
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let documentContents: WebContents | undefined;
+let acceptingDocuments = true;
+const quit = { allowed: false, requested: false };
+const pendingEvents: DesktopProgramEvent[] = [];
+let offerEvent: ((event: DesktopProgramEvent) => void) | null = null;
+
+/** Buffers events until the program owns the queue, so quit during module startup is not lost. */
+function pushEvent(event: DesktopProgramEvent): void {
+  if (event._tag === 'quit') {
+    if (quit.allowed || quit.requested) return;
+    quit.requested = true;
+  }
+  if (offerEvent) offerEvent(event);
+  else pendingEvents.push(event);
+}
+
+function connectEvents(events: Queue.Queue<DesktopProgramEvent>): void {
+  offerEvent = (event) => {
+    Queue.offerUnsafe(events, event);
+  };
+  for (const event of pendingEvents) Queue.offerUnsafe(events, event);
+  pendingEvents.length = 0;
+}
+
+function processEnv() {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
 const droppedPaths = new DroppedPathAuthorization();
 
 ipcMain.on(authorizeDroppedPathChannel, (event, payload) => {
@@ -94,7 +130,7 @@ async function showMessageBox(options: MessageBoxOptions): Promise<number> {
   return result.response;
 }
 
-function registerContentSecurityPolicy() {
+function registerContentSecurityPolicy(isDevelopment: boolean) {
   const csp = [
     "default-src 'self'",
     `script-src 'self'${isDevelopment ? " 'unsafe-inline'" : ''}`,
@@ -117,7 +153,7 @@ function registerContentSecurityPolicy() {
   });
 }
 
-const createWindow = Effect.fnUntraced(function* () {
+const createWindow = (devServerUrl: Option.Option<string>) => Effect.gen(function* () {
   const windowOptions: BrowserWindowConstructorOptions = {
     width: 1180,
     height: 760,
@@ -138,12 +174,16 @@ const createWindow = Effect.fnUntraced(function* () {
   droppedPaths.clear();
   documentContents = webContents;
   webContents.on('did-start-navigation', (details) => {
-    if (!details.isMainFrame || details.isSameDocument || quit.allowed) return;
+    if (!details.isMainFrame || details.isSameDocument || quit.allowed || !acceptingDocuments) return;
     droppedPaths.clear();
     documentWorkspace.replace().catch(() => {
       console.error('CSV Viewer could not open its workspace.');
       app.exit(1);
     });
+  });
+  webContents.on('render-process-gone', () => {
+    if (quit.allowed) return;
+    pushEvent({ _tag: 'renderer-gone' });
   });
   mainWindow.on('close', (event) => {
     if (!documentWorkspace.isOpen) return;
@@ -155,10 +195,9 @@ const createWindow = Effect.fnUntraced(function* () {
     }, reportCloseFailure);
   });
 
-  if (isDevelopment) {
-    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-    if (!devServerUrl) throw new Error('VITE_DEV_SERVER_URL is required in development.');
-    yield* Effect.tryPromise({ try: () => mainWindow.loadURL(devServerUrl), catch: toError });
+  if (Option.isSome(devServerUrl)) {
+    const url = devServerUrl.value;
+    yield* Effect.tryPromise({ try: () => mainWindow.loadURL(url), catch: toError });
     mainWindow.webContents.openDevTools({ mode: 'detach' });
     return;
   }
@@ -166,7 +205,7 @@ const createWindow = Effect.fnUntraced(function* () {
   yield* Effect.tryPromise({ try: () => mainWindow.loadFile(path.join(electronRoot, '../dist-renderer/index.html')), catch: toError });
 });
 
-function createApplicationMenu() {
+function createApplicationMenu(isDevelopment: boolean) {
   const template = buildApplicationMenuTemplate({
     platform: process.platform,
     appName: app.name,
@@ -237,10 +276,12 @@ function reportCloseFailure() {
 }
 
 /** The one window's document owns the workspace; closing the window or loading a new document ends it. */
-const documentWorkspace = new WindowWorkspace(async () => {
+const documentWorkspace = new WindowWorkspace(async (signal) => {
   const contents = documentContents;
   if (!contents) throw new Error('CSV Viewer has no document to serve.');
+  const stopped = Effect.runSync(Deferred.make<void>());
   const workspace = await createCsvViewer(DuckDbWorkspaceDatabase.open(), workspaceHost, {
+    startup: { signal, stopped },
     acquireDroppedPath: (filePath) => openAuthorizedDroppedPath(
       droppedPaths,
       (authorizedPath) => workspaceHost.acquireDroppedSource(authorizedPath),
@@ -254,46 +295,76 @@ const documentWorkspace = new WindowWorkspace(async () => {
   return { workspace, lifecycle, detach };
 });
 
-/** Registered before startup, so a quit while the workspace opens still waits for it and disposes it. */
-const quit = { allowed: false, requested: false };
+function finishQuit(outcome: CloseOutcome): void {
+  quit.requested = false;
+  switch (outcome) {
+    case 'cancelled':
+      acceptingDocuments = true;
+      return;
+    case 'disposed':
+      quit.allowed = true;
+      app.quit();
+      return;
+    case 'failed':
+    case 'forced':
+      app.exit(1);
+      return;
+    default: {
+      const unexpected: never = outcome;
+      throw unexpected;
+    }
+  }
+}
+
+/** Registered before the program starts, so a quit during acquisition still reaches it. */
 app.on('before-quit', (event) => {
   if (quit.allowed) return;
   event.preventDefault();
-  if (quit.requested) return;
-  quit.requested = true;
-  void documentWorkspace.close().then((outcome) => {
-    quit.requested = false;
-    if (outcome === 'disposed') {
-      quit.allowed = true;
-      app.quit();
-    } else if (outcome === 'failed' || outcome === 'forced') {
+  pushEvent({ _tag: 'quit' });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') pushEvent({ _tag: 'quit' });
+});
+
+const program = Effect.gen(function* () {
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  yield* Effect.sync(() => { connectEvents(events); });
+  const devServerUrl = yield* devServerUrlConfig.pipe(
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: processEnv() }))),
+  );
+  const isDevelopment = Option.isSome(devServerUrl);
+  yield* runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { acceptingDocuments = false; }),
+    startup: Effect.gen(function* () {
+      yield* Effect.tryPromise({ try: () => app.whenReady(), catch: toError });
+      registerContentSecurityPolicy(isDevelopment);
+      createApplicationMenu(isDevelopment);
+      app.on('activate', () => { pushEvent({ _tag: 'activate' }); });
+      yield* createWindow(devServerUrl);
+    }).pipe(Effect.catchCause(() => Effect.sync(() => {
+      console.error('CSV Viewer failed to start.');
       app.exit(1);
-    }
-  }, () => {
-    quit.requested = false;
-    reportCloseFailure();
-  });
-});
-
-const startup = Effect.gen(function* () {
-  yield* Effect.tryPromise({ try: () => app.whenReady(), catch: toError });
-  registerContentSecurityPolicy();
-  createApplicationMenu();
-  yield* createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      Effect.runFork(createWindow().pipe(Effect.catchCause(() => Effect.sync(() => {
+    }))),
+    openWindow: Effect.gen(function* () {
+      if (BrowserWindow.getAllWindows().length > 0) return;
+      yield* createWindow(devServerUrl).pipe(Effect.catchCause(() => Effect.sync(() => {
         console.error('CSV Viewer could not open a window.');
-      }))));
-    }
+      })));
+    }),
+    close: Effect.tryPromise({ try: () => documentWorkspace.close(), catch: toError }),
+    dropRenderer: Effect.tryPromise({ try: () => documentWorkspace.drop(), catch: toError }),
+    onClose: (outcome) => Effect.sync(() => { finishQuit(outcome); }),
+    onCloseFailure: Effect.sync(() => {
+      quit.requested = false;
+      acceptingDocuments = true;
+      reportCloseFailure();
+    }),
   });
 });
 
-Effect.runFork(startup.pipe(Effect.catchCause(() => Effect.sync(() => {
+Effect.runFork(program.pipe(Effect.catchCause(() => Effect.sync(() => {
   console.error('CSV Viewer failed to start.');
   app.exit(1);
 }))));
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});

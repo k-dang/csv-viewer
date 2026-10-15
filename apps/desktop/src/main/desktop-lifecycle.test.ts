@@ -1,8 +1,8 @@
 import type { ConfirmWorkspaceCloseOutcome, WorkspaceCloseImpact } from '@csv-viewer/workspace/csv-viewer';
-import { Deferred, Effect, Exit, Fiber, Logger } from 'effect';
+import { ConfigProvider, Deferred, Effect, Exit, Fiber, Logger, Option, Queue } from 'effect';
 import { TestClock, TestConsole } from 'effect/testing';
 import { expect, it, vi } from '@effect/vitest';
-import { DesktopLifecycle, WindowWorkspace, type DocumentWorkspace } from './desktop-lifecycle';
+import { DesktopLifecycle, devServerUrlConfig, runDesktopProgram, WindowWorkspace, type DesktopProgramEvent, type DocumentWorkspace } from './desktop-lifecycle';
 
 const impact: WorkspaceCloseImpact = {
   workingCsvsWithUnexportedChanges: [{ workingCsvId: 'csv-1', sourceName: 'people.csv' }],
@@ -172,6 +172,91 @@ it('keeps the workspace when the close prompt is cancelled', async () => {
   await expect(window.close()).resolves.toBe('cancelled');
   expect(window.isOpen).toBe(true);
   expect(events).toEqual(['open 1', 'prompt 1: false']);
+});
+
+it.effect('reads the dev server URL from Config and treats a missing value as production', () => Effect.gen(function* () {
+  const read = (env: Record<string, string>) => devServerUrlConfig.pipe(
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  expect(Option.getOrUndefined(yield* read({ VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173' }))).toBe('http://127.0.0.1:5173');
+  expect(Option.isNone(yield* read({}))).toBe(true);
+}));
+
+it.effect('interrupts startup when quit arrives and does not wait for acquisition to finish', () => Effect.gen(function* () {
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  const log: string[] = [];
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { log.push('prepare-quit'); }),
+    startup: Effect.scoped(Effect.gen(function* () {
+      log.push('startup');
+      yield* Effect.addFinalizer(() => Effect.sync(() => { log.push('startup-finalizer'); }));
+      yield* Effect.sleep('1 hour');
+      log.push('acquired');
+    })),
+    openWindow: Effect.void,
+    close: Effect.sync(() => {
+      log.push('close');
+      return 'disposed' as const;
+    }),
+    dropRenderer: Effect.void,
+    onClose: () => Effect.void,
+    onCloseFailure: Effect.void,
+  }));
+
+  yield* TestClock.adjust('1 second');
+  expect(log).toEqual(['startup']);
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(log).toEqual(['startup', 'prepare-quit', 'startup-finalizer', 'close']);
+  yield* TestClock.adjust('2 hours');
+  expect(log).not.toContain('acquired');
+}));
+
+it.effect('drops the workspace when the renderer is gone', () => Effect.gen(function* () {
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  let dropped = 0;
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.void,
+    startup: Effect.never,
+    openWindow: Effect.void,
+    close: Effect.succeed('disposed'),
+    dropRenderer: Effect.sync(() => { dropped += 1; }),
+    onClose: () => Effect.void,
+    onCloseFailure: Effect.void,
+  }));
+  yield* Queue.offer(events, { _tag: 'renderer-gone' });
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(dropped).toBe(1);
+}));
+
+it('interrupts workspace acquisition when quit arrives while it is opening', async () => {
+  const events: string[] = [];
+  const started = Promise.withResolvers<void>();
+  const window = new WindowWorkspace((signal) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    events.push('acquire');
+    yield* Effect.addFinalizer(() => Effect.sync(() => { events.push('finalizer'); }));
+    yield* Effect.sync(() => { started.resolve(); });
+    // SAFETY: quit interrupts this effect before a workspace value exists.
+    return yield* Effect.never as Effect.Effect<DocumentWorkspace>;
+  })), { signal }));
+  const opening = window.replace();
+  await started.promise;
+  await expect(window.close()).resolves.toBe('disposed');
+  expect(events).toEqual(['acquire', 'finalizer']);
+  await expect(opening).rejects.toThrow();
+  expect(window.isOpen).toBe(false);
+});
+
+it('drops an open workspace without a prompt when the renderer is gone', async () => {
+  const events: string[] = [];
+  const window = new WindowWorkspace(documentWorkspaces(events));
+  await window.replace();
+  await window.drop();
+  expect(events).toEqual(['open 1', 'detach 1', 'dispose 1']);
+  expect(window.isOpen).toBe(false);
 });
 
 it('waits for a workspace that is still opening when quit arrives, then disposes it', async () => {

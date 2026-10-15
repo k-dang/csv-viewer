@@ -329,6 +329,12 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
   }
 }
 
+it('reports a startup defect instead of an unsupported browser', async () => {
+  const database = new FatalTestDatabase();
+  vi.spyOn(database, 'open').mockReturnValue(Effect.die(new Error('PRIVATE startup defect')));
+  await expect(startWebCsvViewer(database, async () => null)).rejects.toThrow('PRIVATE startup defect');
+});
+
 it('reports a failed startup check and failed cleanup without driver text', async () => {
   const capture = diagnosticCapture();
   const database = new FatalTestDatabase(

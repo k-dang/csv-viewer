@@ -4,8 +4,11 @@ import type {
   CsvCapacityExceeded,
   CsvSourceId,
 } from '@csv-viewer/workspace/csv-viewer';
+import { DataEngineError } from '@csv-viewer/workspace/database';
+import { isExpectedWorkspaceError } from '@csv-viewer/workspace/errors';
 import type { WorkspaceDiagnostics } from '@csv-viewer/workspace/workspace-diagnostics';
 import { buildWorkspaceHost } from '@csv-viewer/workspace/workspace-host';
+import { Effect, Fiber } from 'effect';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import type { WebCsvCapacityLimits, WebCsvFilePicker } from './web-workspace-host';
 import { WebWorkspaceHost, webWorkspaceHostLayer } from './web-workspace-host';
@@ -38,8 +41,15 @@ export async function startWebCsvViewer(
       viewer: await connectInProcessSession(workspace),
       acquireDroppedSource: async (file) => host.registerSource(file),
     };
-  } catch {
-    return { status: 'unsupported' };
+  } catch (cause) {
+    // Cancellation and an engine that cannot start are unsupported. A defect stays a defect.
+    if (signal?.aborted || cause instanceof DataEngineError || isExpectedWorkspaceError(cause)) {
+      return { status: 'unsupported' };
+    }
+    await Effect.runPromise(Effect.logError('web.startup-defect').pipe(
+      Effect.annotateLogs({ outcome: 'failed' }),
+    ));
+    throw cause;
   }
 }
 
@@ -49,13 +59,21 @@ export function disposeWorkspaceWhenPageHides(
   page: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = window,
   reload: () => void = () => window.location.reload(),
 ): () => void {
-  let disposed = false;
-  const dispose = () => {
-    if (disposed) return;
-    disposed = true;
-    void workspace.dispose().catch(() => {
-      // The workspace already reports sanitized disposal failures.
-    });
+  const fiber = Effect.runFork(Effect.scoped(Effect.gen(function* () {
+    yield* Effect.addFinalizer(() => Effect.promise(async () => {
+      try {
+        await workspace.dispose();
+      } catch {
+        // The workspace already reports sanitized disposal failures.
+      }
+    }));
+    yield* Effect.never;
+  })));
+  let closed = false;
+  const closeScope = () => {
+    if (closed) return;
+    closed = true;
+    void Effect.runPromise(Fiber.interrupt(fiber));
   };
   const handlePageShow = (event: Event) => {
     if (!isPersistedPageTransition(event)) return;
@@ -64,7 +82,7 @@ export function disposeWorkspaceWhenPageHides(
   };
   const handlePageHide = (event: Event) => {
     page.removeEventListener('pagehide', handlePageHide);
-    dispose();
+    closeScope();
     if (!isPersistedPageTransition(event)) {
       page.removeEventListener('pageshow', handlePageShow);
     }
@@ -74,7 +92,7 @@ export function disposeWorkspaceWhenPageHides(
   return () => {
     page.removeEventListener('pagehide', handlePageHide);
     page.removeEventListener('pageshow', handlePageShow);
-    dispose();
+    closeScope();
   };
 }
 
