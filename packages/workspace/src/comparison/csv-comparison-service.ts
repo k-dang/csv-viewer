@@ -492,7 +492,7 @@ class CsvComparisonService implements Comparisons {
     }
     const disposed = yield* Effect.exit(this.executor.dispose());
     if (Exit.isFailure(disposed)) failures.push(disposed.cause);
-    this.endEvents();
+    yield* this.endEvents();
     if (failures.length > 0) return yield* Effect.failCause(failures.reduce((combined, cause) => Cause.combine(combined, cause), Cause.empty));
     this.lifecycle = 'disposed';
   }, Effect.uninterruptible);
@@ -517,7 +517,7 @@ class CsvComparisonService implements Comparisons {
     this.pairIndex.clear();
     this.dependencyIndex.clear();
     this.pendingRetirements.clear();
-    this.endEvents();
+    yield* this.endEvents();
     this.lifecycle = 'disposed';
     yield* Exit.asVoidAll(settled);
   }, Effect.uninterruptible);
@@ -828,9 +828,14 @@ class CsvComparisonService implements Comparisons {
     Effect.runSync(PubSub.publish(this.eventHub, event));
   }
 
-  private endEvents(): void {
-    Effect.runSync(PubSub.shutdown(this.eventHub));
-  }
+  // PubSub.shutdown interrupts takes and discards messages still buffered for a subscriber.
+  // A listening subscriber has to take `closed` before that happens.
+  private readonly endEvents = Effect.fnUntraced(function* (this: CsvComparisonService) {
+    while (PubSub.sizeUnsafe(this.eventHub) > 0) {
+      yield* Effect.yieldNow;
+    }
+    yield* PubSub.shutdown(this.eventHub);
+  });
 
   private attemptFiber(comparisonId: ComparisonId): AttemptFiber | undefined {
     const fiber = FiberMap.getUnsafe(this.attempts, comparisonId);

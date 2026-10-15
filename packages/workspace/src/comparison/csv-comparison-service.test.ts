@@ -766,4 +766,47 @@ describe('Comparisons interaction contract', () => {
     await reported;
     await service.dispose();
   });
+
+  it('delivers buffered closed to a listening subscriber before the event hub shuts down', async () => {
+    const store = new FakeCsvStore();
+    store.workingCsvs.set('a', workingCsv('a', 'a.csv'));
+    store.workingCsvs.set('b', workingCsv('b', 'b.csv'));
+    const runtime = ManagedRuntime.make(Layer.effect(Comparisons, makeComparisons(store)).pipe(
+      Layer.provide(Layer.succeed(ComparisonExecutor, new ScriptedComparisonExecutor())),
+    ));
+    runtimeDisposals.push(() => runtime.dispose());
+    const service = runtime.runSync(Comparisons);
+    const opened = service.open({ baselineId: 'a', candidateId: 'b' });
+    if (opened.status === 'rejected') throw new Error('open rejected');
+
+    const events: string[] = [];
+    let releaseListener!: () => void;
+    const listenerHeld = new Promise<void>((resolve) => {
+      releaseListener = resolve;
+    });
+    let holding = false;
+    const fiber = runtime.runFork(Stream.runForEach(service.events, (event) => Effect.promise(async () => {
+      events.push(event.kind);
+      if (holding) return;
+      holding = true;
+      await listenerHeld;
+    })));
+    await runtime.runPromise(Effect.yieldNow);
+
+    const begun = runtime.runSync(service.begin({
+      kind: 'apply-key',
+      comparisonId: opened.comparison.comparisonId,
+      key: ['id'],
+    }));
+    if (begun.status !== 'accepted') throw new Error('begin rejected');
+    await vi.waitUntil(() => holding, settles);
+
+    const disposal = runtime.runPromise(service.dispose());
+    await vi.waitUntil(() => service.getState(opened.comparison.comparisonId) === null, settles);
+    releaseListener();
+    await disposal;
+
+    expect(events).toContain('closed');
+    await runtime.runPromise(Fiber.join(fiber).pipe(Effect.timeout('2 seconds')));
+  });
 });
