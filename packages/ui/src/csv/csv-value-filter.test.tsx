@@ -18,7 +18,7 @@ afterEach(() => {
 describe('CsvValueFilter', () => {
   it('commits a typed search under StrictMode', async () => {
     vi.useFakeTimers();
-    const onModelChange = vi.fn();
+    const onModelChange: (model: ValueFilterModel | null) => void = vi.fn();
     const tab = new CsvTab(createTestCsvViewer(), workingCsvFixture({
       columns: [{ name: 'name', type: 'VARCHAR' }],
     }));
