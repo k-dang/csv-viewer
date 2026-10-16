@@ -167,23 +167,20 @@ export class ComparisonTab {
     this.setView('inspector');
   }
 
-  /** Previous/next reads the containing page, preserving a newer row choice while it loads. */
+  /**
+   * Previous/next reads the containing page on the selection fiber. `rows()` would fork a second
+   * read that can still call `receiveRows` after a newer choice interrupts `selection`.
+   */
   async selectIndex(index: number): Promise<void> {
     if (index < 0 || this.state.rowsLoading || this.state.totalRows === null || index >= this.state.totalRows) return;
     this.set({ selectionLoading: true });
     const offset = Math.floor(index / comparisonPageSize) * comparisonPageSize;
-    const fiber = this.runtime.fork('selection', Effect.tryPromise({
-      try: () => this.rows(offset, comparisonPageSize),
-      catch: (cause: unknown) => cause,
-    }).pipe(Effect.matchEffect({
-      onSuccess: (window) => Effect.sync(() => {
+    const fiber = this.runtime.fork('selection', this.loadRowsEffect(offset, comparisonPageSize).pipe(
+      Effect.tap((window) => Effect.sync(() => {
         const row = window?.rows[index - offset];
         this.set({ selection: row ? { row, index } : this.state.selection, selectionLoading: false });
-      }),
-      onFailure: () => Effect.sync(() => {
-        if (!this.disposed) this.set({ selectionLoading: false });
-      }),
-    })));
+      })),
+    ));
     await this.runtime.join(fiber);
   }
 

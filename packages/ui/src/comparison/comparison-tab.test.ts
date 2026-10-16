@@ -317,6 +317,36 @@ describe('ComparisonTab', () => {
     expect(tab.snapshot().selection).toBeNull();
   });
 
+  it('does not publish a page read superseded by a newer selection', async () => {
+    const row = (id: string): ComparisonRow => ({
+      keyValues: [id], classification: 'unchanged', baseline: { rowId: id, values: [] },
+      candidate: { rowId: id, values: [] }, changed: [],
+    });
+    const stale = Promise.withResolvers<ComparisonWindowOutcome>();
+    const getWindow = vi.fn().mockResolvedValueOnce({
+      status: 'ready', window: { comparisonId: 'comparison-1', resultToken: 'result-1',
+        offset: 0, totalRowCount: 205, keyColumns: ['id'], rows: [row('1')] },
+    }).mockReturnValueOnce(stale.promise);
+    const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
+      'comparison.get-window': getWindow,
+    } }), comparisonFixture({ applied: applied('result-1') }));
+    await tab.rows(0, 100);
+
+    const selecting = tab.selectIndex(100);
+    tab.selectRow(row('50'), 49);
+    stale.resolve({ status: 'ready', window: {
+      comparisonId: 'comparison-1', resultToken: 'result-1', offset: 100,
+      totalRowCount: 999, keyColumns: ['id'], rows: [row('101')],
+    } });
+    await selecting;
+    await stale.promise;
+
+    expect(tab.snapshot().selection?.row.keyValues).toEqual(['50']);
+    expect(tab.snapshot().selection?.index).toBe(49);
+    expect(tab.snapshot().totalRows).toBe(205);
+    expect(tab.snapshot().selectionLoading).toBe(false);
+  });
+
   it('owns row-window failures and clears them when a page succeeds', async () => {
     const getWindow = vi.fn().mockRejectedValueOnce(new Error('The row request failed.')).mockResolvedValueOnce(window('result-1'));
     const tab = new ComparisonTab(createTestCsvViewer({ handlers: {
