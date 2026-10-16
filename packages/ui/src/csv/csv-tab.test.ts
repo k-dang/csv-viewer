@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvCellEditResult, CsvColumnValueCounts, CsvEditState, CsvRowWindow } from '@csv-viewer/workspace/csv-viewer';
-import { CsvTab } from './csv-tab';
+import { CsvTab, openQueryDebounce } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer } from '../test-helpers/csv-viewer';
 
@@ -681,5 +681,23 @@ describe('CsvTab', () => {
     expect(state.workingCsv.columns).toEqual(workingCsv.columns);
     expect(state.focusedColumn).toBe('name');
     expect(state.revision).toBe(0);
+  });
+});
+
+describe('openQueryDebounce', () => {
+  it('commits a value set synchronously after subscribe', async () => {
+    vi.useFakeTimers();
+    const commits: string[] = [];
+    const debounced = openQueryDebounce('', (value) => {
+      commits.push(value);
+    });
+    try {
+      debounced.push('only');
+      await vi.advanceTimersByTimeAsync(150);
+      expect(commits).toEqual(['only']);
+    } finally {
+      debounced.dispose();
+      vi.useRealTimers();
+    }
   });
 });

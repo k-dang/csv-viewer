@@ -70,7 +70,10 @@ export type QueryDebounce = {
   dispose(): void;
 };
 
-/** One debounced text input. The value already stored at subscribe time is not committed. */
+/**
+ * One debounced text input. The value captured when listening starts is not committed. A first
+ * pull that is already a different value is kept: that edit landed before the stream subscribed.
+ */
 export function openQueryDebounce(initial: string, onCommit: (value: string) => void): QueryDebounce {
   const scope = Effect.runSync(Scope.make());
   const input = Effect.runSync(SubscriptionRef.make(initial));
@@ -78,8 +81,9 @@ export function openQueryDebounce(initial: string, onCommit: (value: string) => 
   let open = true;
 
   const listen = (): void => {
+    const subscribed = Effect.runSync(SubscriptionRef.get(input));
     const current = Effect.runFork(SubscriptionRef.changes(input).pipe(
-      Stream.drop(1),
+      Stream.mapAccum(() => true, (first, value) => [false, first && value === subscribed ? [] : [value]]),
       Stream.debounce(queryDebounce),
       Stream.runForEach((value) => Effect.sync(() => onCommit(value))),
     ));
