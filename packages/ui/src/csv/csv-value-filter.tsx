@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { topCountedValuesLimit, type CsvRow } from '@csv-viewer/workspace/csv-viewer';
-import { openQueryDebounce, type CsvTab, type CsvTabQuery, type CsvTabStatsResult } from './csv-tab';
+import { openQueryDebounce, type CsvTab, type CsvTabQuery, type CsvTabStatsResult, type QueryDebounce } from './csv-tab';
 import { formatCellValue, formatNumber } from './csv-format';
 import {
   isValuePicked,
@@ -53,11 +53,19 @@ export function CsvValueFilter({
   // CSV, the cell menu): it replaces the term and drops a draft still waiting on its debounce.
   const ownModel = useRef(JSON.stringify(model ?? null));
   const searchCommit = useRef<(value: string) => void>(() => undefined);
-  const [debouncedSearch] = useState(() => openQueryDebounce(
-    model?.contains ?? '',
-    (value) => searchCommit.current(value),
-  ));
-  useEffect(() => () => debouncedSearch.dispose(), [debouncedSearch]);
+  // StrictMode runs this cleanup and setup again, and does not rerun a useState initializer.
+  // The debounce has to be the instance this effect created, or a typed search never commits.
+  const debouncedSearch = useRef<QueryDebounce | null>(null);
+  useEffect(() => {
+    const debounce = openQueryDebounce(latestModel.current?.contains ?? '', (value) => {
+      searchCommit.current(value);
+    });
+    debouncedSearch.current = debounce;
+    return () => {
+      debounce.dispose();
+      if (debouncedSearch.current === debounce) debouncedSearch.current = null;
+    };
+  }, []);
   searchCommit.current = (value) => {
     const next = valueFilter(value, latestModel.current?.pick);
     ownModel.current = JSON.stringify(next);
@@ -67,12 +75,12 @@ export function CsvValueFilter({
     const incoming = JSON.stringify(model ?? null);
     if (incoming === ownModel.current) return;
     ownModel.current = incoming;
-    debouncedSearch.reset(model?.contains ?? '');
+    debouncedSearch.current?.reset(model?.contains ?? '');
     setSearch(model?.contains ?? '');
-  }, [debouncedSearch, model]);
+  }, [model]);
 
   function commit(contains: string, nextPick: ValuePick | undefined) {
-    debouncedSearch.reset(contains);
+    debouncedSearch.current?.reset(contains);
     const next = valueFilter(contains, nextPick);
     ownModel.current = JSON.stringify(next);
     onModelChange(next);
@@ -80,7 +88,7 @@ export function CsvValueFilter({
 
   function onSearchChange(value: string) {
     setSearch(value);
-    debouncedSearch.push(value);
+    debouncedSearch.current?.push(value);
   }
 
   const result = useFilterValueCounts(tab, columnName, open);
