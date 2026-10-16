@@ -4,6 +4,7 @@ import { ControllableWorker } from '../integration/fixtures/controllable-worker'
 import { diagnosticCapture } from '../../../packages/workspace/test/diagnostic-capture';
 import { DuckDbWasmWorkspaceDatabase } from './duckdb-wasm-database';
 import { connectInProcessSession } from '@csv-viewer/workspace/csv-viewer-client';
+import * as csvViewerClient from '@csv-viewer/workspace/csv-viewer-client';
 import type { CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonExecutor } from '../../../packages/workspace/src/comparison/comparison-executor';
@@ -328,6 +329,46 @@ class FatalTestDatabase extends DuckDbWasmWorkspaceDatabase {
     Deferred.doneUnsafe(this.stopped, Effect.void);
   }
 }
+
+async function startupAfterWorkspace(fail: () => Promise<never>): Promise<{
+  settled: 'rejected' | 'unsupported';
+  dispose: ReturnType<typeof vi.fn>;
+}> {
+  const database = new FatalTestDatabase();
+  const dispose = vi.fn(async () => undefined);
+  const connect = vi.spyOn(csvViewerClient, 'connectInProcessSession').mockImplementation(async (server) => {
+    const release = server.dispose.bind(server);
+    vi.spyOn(server, 'dispose').mockImplementation(() => {
+      dispose();
+      return release();
+    });
+    return fail();
+  });
+  try {
+    try {
+      const started = await startWebCsvViewer(database, async () => null);
+      if (started.status !== 'unsupported') throw new Error('Startup returned a workspace after connect failed.');
+      return { settled: 'unsupported', dispose };
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === 'Startup returned a workspace after connect failed.') throw cause;
+      return { settled: 'rejected', dispose };
+    }
+  } finally {
+    connect.mockRestore();
+  }
+}
+
+it('disposes a workspace that already exists when startup fails afterward', async () => {
+  const disposed = await startupAfterWorkspace(async () => { throw new Error('PRIVATE connect defect'); });
+  expect(disposed.settled).toBe('rejected');
+  expect(disposed.dispose).toHaveBeenCalledOnce();
+});
+
+it('disposes a workspace that already exists when startup is unsupported afterward', async () => {
+  const disposed = await startupAfterWorkspace(async () => { throw new DataEngineError({ cause: new Error('PRIVATE engine') }); });
+  expect(disposed.settled).toBe('unsupported');
+  expect(disposed.dispose).toHaveBeenCalledOnce();
+});
 
 it('reports a startup defect instead of an unsupported browser', async () => {
   const database = new FatalTestDatabase();

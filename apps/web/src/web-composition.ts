@@ -1,5 +1,5 @@
 import { connectInProcessSession } from '@csv-viewer/workspace/csv-viewer-client';
-import { createCsvViewer, type CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
+import { createCsvViewer, type CsvViewerSession, type CsvWorkspaceServer } from '@csv-viewer/workspace/csv-workspace';
 import type {
   CsvCapacityExceeded,
   CsvSourceId,
@@ -30,9 +30,10 @@ export async function startWebCsvViewer(
   pickFile: WebCsvFilePicker,
   { limits, signal, diagnostics }: WebCsvViewerOptions = {},
 ): Promise<WebCsvViewerStartup> {
+  let workspace: CsvWorkspaceServer | undefined;
   try {
     const host = new WebWorkspaceHost(database, pickFile, limits);
-    const workspace = await createCsvViewer(database.open(), buildWorkspaceHost(webWorkspaceHostLayer(host)), {
+    workspace = await createCsvViewer(database.open(), buildWorkspaceHost(webWorkspaceHostLayer(host)), {
       diagnostics,
       startup: { signal, stopped: database.stopped },
     });
@@ -42,6 +43,7 @@ export async function startWebCsvViewer(
       acquireDroppedSource: async (file) => host.registerSource(file),
     };
   } catch (cause) {
+    if (workspace) await releaseFailedStartup(workspace);
     // Cancellation and an engine that cannot start are unsupported. A defect stays a defect.
     if (signal?.aborted || cause instanceof DataEngineError || isExpectedWorkspaceError(cause)) {
       return { status: 'unsupported' };
@@ -50,6 +52,14 @@ export async function startWebCsvViewer(
       Effect.annotateLogs({ outcome: 'failed' }),
     ));
     throw cause;
+  }
+}
+
+async function releaseFailedStartup(workspace: CsvWorkspaceServer): Promise<void> {
+  try {
+    await workspace.dispose();
+  } catch {
+    // The workspace already reports sanitized disposal failures.
   }
 }
 

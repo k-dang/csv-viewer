@@ -10,13 +10,15 @@ import {
   type WebContents,
 } from 'electron';
 import path from 'node:path';
-import { ConfigProvider, Deferred, Effect, Option, Queue, Schema } from 'effect';
+import { ConfigProvider, Deferred, Effect, Logger, Option, Queue, Schema } from 'effect';
 import { toError } from '@csv-viewer/workspace/errors';
 import { authorizeDroppedPathChannel } from '../dropped-path-channel';
 import {
   DesktopLifecycle,
   devServerUrlConfig,
   runDesktopProgram,
+  observeDocumentOpen,
+  recoverTypedFailure,
   WindowWorkspace,
   type CloseOutcome,
   type DesktopProgramEvent,
@@ -176,7 +178,8 @@ const createWindow = (devServerUrl: Option.Option<string>) => Effect.gen(functio
   webContents.on('did-start-navigation', (details) => {
     if (!details.isMainFrame || details.isSameDocument || quit.allowed || !acceptingDocuments) return;
     droppedPaths.clear();
-    documentWorkspace.replace().catch(() => {
+    const opening = documentWorkspace.replace();
+    observeDocumentOpen(opening, () => {
       console.error('CSV Viewer could not open its workspace.');
       app.exit(1);
     });
@@ -188,7 +191,7 @@ const createWindow = (devServerUrl: Option.Option<string>) => Effect.gen(functio
   mainWindow.on('close', (event) => {
     if (!documentWorkspace.isOpen) return;
     event.preventDefault();
-    void documentWorkspace.close().then((outcome) => {
+    void Effect.runPromise(withReleaseLog(documentWorkspace.close())).then((outcome) => {
       if (outcome === 'disposed' && !mainWindow.isDestroyed()) mainWindow.close();
       else if (outcome === 'failed') reportCloseFailure();
       else if (outcome === 'forced') app.exit(1);
@@ -275,6 +278,12 @@ function reportCloseFailure() {
   console.error('CSV Viewer could not confirm closing. Try closing again.');
 }
 
+const exitProcess = (code: number) => { app.exit(code); };
+
+function withReleaseLog<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+  return effect.pipe(Effect.provide(Logger.layer([Logger.consoleLogFmt])));
+}
+
 /** The one window's document owns the workspace; closing the window or loading a new document ends it. */
 const documentWorkspace = new WindowWorkspace(async (signal) => {
   const contents = documentContents;
@@ -290,10 +299,10 @@ const documentWorkspace = new WindowWorkspace(async (signal) => {
   });
   const lifecycle = new DesktopLifecycle(workspace, (impact) => Effect.tryPromise({
     try: () => confirmWorkspaceClose(impact), catch: toError,
-  }), (code) => app.exit(code));
+  }), exitProcess);
   const detach = await serveWorkspacePort(contents, workspace);
   return { workspace, lifecycle, detach };
-});
+}, exitProcess);
 
 function finishQuit(outcome: CloseOutcome): void {
   quit.requested = false;
@@ -337,24 +346,24 @@ const program = Effect.gen(function* () {
   yield* runDesktopProgram({
     events,
     prepareQuit: Effect.sync(() => { acceptingDocuments = false; }),
-    startup: Effect.gen(function* () {
+    startup: recoverTypedFailure(Effect.gen(function* () {
       yield* Effect.tryPromise({ try: () => app.whenReady(), catch: toError });
       registerContentSecurityPolicy(isDevelopment);
       createApplicationMenu(isDevelopment);
       app.on('activate', () => { pushEvent({ _tag: 'activate' }); });
       yield* createWindow(devServerUrl);
-    }).pipe(Effect.catchCause(() => Effect.sync(() => {
+    }), () => {
       console.error('CSV Viewer failed to start.');
       app.exit(1);
-    }))),
+    }),
     openWindow: Effect.gen(function* () {
       if (BrowserWindow.getAllWindows().length > 0) return;
-      yield* createWindow(devServerUrl).pipe(Effect.catchCause(() => Effect.sync(() => {
+      yield* recoverTypedFailure(createWindow(devServerUrl), () => {
         console.error('CSV Viewer could not open a window.');
-      })));
+      });
     }),
-    close: Effect.tryPromise({ try: () => documentWorkspace.close(), catch: toError }),
-    dropRenderer: Effect.tryPromise({ try: () => documentWorkspace.drop(), catch: toError }),
+    close: withReleaseLog(documentWorkspace.close()),
+    dropRenderer: withReleaseLog(documentWorkspace.drop()),
     onClose: (outcome) => Effect.sync(() => { finishQuit(outcome); }),
     onCloseFailure: Effect.sync(() => {
       quit.requested = false;

@@ -1,4 +1,3 @@
-import { Effect } from 'effect';
 import { RendererWorkspace } from '@csv-viewer/ui/renderer-workspace';
 import { confirmTabClose } from '@csv-viewer/ui/confirm-tab-close';
 import { StrictMode } from 'react';
@@ -56,11 +55,7 @@ void startup.then((started) => {
       </CsvViewerProvider>
     </StrictMode>,
   );
-}).catch((cause: unknown) => {
+}).catch(() => {
   if (stopped) return;
-  // The composition root already died on this defect. Do not present it as an unsupported browser.
-  Effect.runFork(Effect.logError('web.startup-defect').pipe(
-    Effect.annotateLogs({ outcome: 'failed' }),
-    Effect.andThen(Effect.die(cause)),
-  ));
+  root.render(<WebStartupState status="failed" />);
 });
