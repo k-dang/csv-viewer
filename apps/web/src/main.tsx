@@ -56,5 +56,6 @@ void startup.then((started) => {
     </StrictMode>,
   );
 }).catch(() => {
-  if (!stopped) root.render(<WebStartupState status="unsupported" />);
+  if (stopped) return;
+  root.render(<WebStartupState status="failed" />);
 });
