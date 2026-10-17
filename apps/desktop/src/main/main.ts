@@ -86,7 +86,12 @@ const workspaceHost = openDesktopWorkspace(
 );
 let documentContents: WebContents | undefined;
 let acceptingDocuments = true;
-const quit = { allowed: false, requested: false };
+// SAFETY: `shared` starts empty and later holds the in-flight close effect. Null is that empty slot.
+const quit = {
+  allowed: false,
+  requested: false,
+  shared: null as Effect.Effect<CloseOutcome, Error> | null,
+};
 const pendingEvents: DesktopProgramEvent[] = [];
 let offerEvent: ((event: DesktopProgramEvent) => void) | null = null;
 
@@ -95,6 +100,7 @@ function pushEvent(event: DesktopProgramEvent): void {
   if (event._tag === 'quit') {
     if (quit.allowed || quit.requested) return;
     quit.requested = true;
+    quit.shared = documentWorkspace.inFlightClose();
   }
   if (offerEvent) offerEvent(event);
   else pendingEvents.push(event);
@@ -362,7 +368,12 @@ const program = Effect.gen(function* () {
         console.error('CSV Viewer could not open a window.');
       });
     }),
-    close: withReleaseLog(documentWorkspace.close()),
+    close: Effect.gen(function* () {
+      const shared = quit.shared;
+      quit.shared = null;
+      if (shared) return yield* shared;
+      return yield* withReleaseLog(documentWorkspace.close());
+    }),
     dropRenderer: withReleaseLog(documentWorkspace.drop()),
     onClose: (outcome) => Effect.sync(() => { finishQuit(outcome); }),
     onCloseFailure: Effect.sync(() => {

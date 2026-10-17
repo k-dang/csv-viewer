@@ -152,6 +152,8 @@ export type DocumentWorkspace = {
 export class WindowWorkspace {
   private current: Promise<DocumentWorkspace> | null = null;
   private opening: AbortController | null = null;
+  /** Set before take() yields, so a second close or a quit joins this confirmation. */
+  private activeClose: Deferred.Deferred<CloseOutcome, Error> | null = null;
 
   constructor(
     private readonly open: (signal: AbortSignal) => Promise<DocumentWorkspace>,
@@ -179,30 +181,51 @@ export class WindowWorkspace {
     return Object.assign(next, { signal: controller.signal });
   }
 
+  /**
+   * The close already waiting on a confirmation. A quit that arrives while it is showing must use
+   * this, including after the answer, or it starts a second prompt.
+   */
+  inFlightClose(): Effect.Effect<CloseOutcome, Error> | null {
+    const activeClose = this.activeClose;
+    return activeClose ? Deferred.await(activeClose) : null;
+  }
+
   /** Confirms and disposes the current workspace. With none open there is nothing to confirm. */
   readonly close = Effect.fnUntraced(function* (
     this: WindowWorkspace,
   ): Effect.fn.Return<CloseOutcome, Error> {
-    const taken = yield* this.take();
-    switch (taken._tag) {
-      case 'empty':
-      case 'aborted':
-        return 'disposed';
-      case 'forced':
-        return 'forced';
-      case 'opened': {
-        const outcome = yield* taken.owned.lifecycle.requestClose();
-        if (outcome === 'disposed' && this.current === taken.closing) {
-          taken.owned.detach();
-          this.current = null;
+    // Publish the shared close before the first yield. take() waits asynchronously, and an answer
+    // during that wait used to let the next close or quit prompt again.
+    if (this.activeClose) return yield* Deferred.await(this.activeClose);
+    const activeClose = Deferred.makeUnsafe<CloseOutcome, Error>();
+    this.activeClose = activeClose;
+    return yield* Effect.gen({ self: this }, function* () {
+      const taken = yield* this.take();
+      switch (taken._tag) {
+        case 'empty':
+        case 'aborted':
+          return 'disposed' as const;
+        case 'forced':
+          return 'forced' as const;
+        case 'opened': {
+          const outcome = yield* taken.owned.lifecycle.requestClose();
+          if (outcome === 'disposed' && this.current === taken.closing) {
+            taken.owned.detach();
+            this.current = null;
+          }
+          return outcome;
         }
-        return outcome;
+        default: {
+          const unexpected: never = taken;
+          return unexpected;
+        }
       }
-      default: {
-        const unexpected: never = taken;
-        return unexpected;
-      }
-    }
+    }).pipe(
+      Effect.onExit((exit) => Deferred.done(activeClose, exit)),
+      Effect.ensuring(Effect.sync(() => {
+        if (this.activeClose === activeClose) this.activeClose = null;
+      })),
+    );
   });
 
   /** The renderer is gone. End its workspace without a prompt, and do not open another. */

@@ -174,6 +174,44 @@ it('keeps the workspace when the close prompt is cancelled', async () => {
   expect(events).toEqual(['open 1', 'prompt 1: false']);
 });
 
+it('a second close shares the prompt when the answer arrives before that close reaches it', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const first = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const second = Effect.runPromise(window.close());
+  answer.resolve(false);
+  await expect(first).resolves.toBe('cancelled');
+  await expect(second).resolves.toBe('cancelled');
+  expect(prompts).toBe(1);
+  expect(window.isOpen).toBe(true);
+});
+
+it('a quit observed after the answer joins the close that was already showing', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const first = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const shared = window.inFlightClose();
+  if (!shared) throw new Error('Expected the showing close.');
+  answer.resolve(false);
+  await expect(first).resolves.toBe('cancelled');
+  await expect(Effect.runPromise(shared)).resolves.toBe('cancelled');
+  expect(prompts).toBe(1);
+});
+
 it.effect('reads the dev server URL from Config and treats a missing value as production', () => Effect.gen(function* () {
   const read = (env: Record<string, string>) => devServerUrlConfig.pipe(
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
