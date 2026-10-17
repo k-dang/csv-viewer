@@ -305,6 +305,66 @@ it.effect('quits during an in-flight open by disposing it and does not exit 1', 
   expect(exit).not.toHaveBeenCalled();
 }));
 
+it.effect('a loadFile ERR_ABORTED does not invoke the startup failure exit', () => Effect.gen(function* () {
+  const exit = vi.fn();
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  const log: string[] = [];
+  const started = Promise.withResolvers<void>();
+  const startupSettled = yield* Deferred.make<void>();
+  const aborted = new Error("ERR_ABORTED (-3) loading 'file:///workspace/apps/desktop/dist-renderer/index.html'");
+  const window = new WindowWorkspace((signal) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    log.push('acquire');
+    yield* Effect.addFinalizer(() => Effect.sync(() => { log.push('dispose'); }));
+    started.resolve();
+    // SAFETY: quit aborts this open before a workspace exists.
+    return yield* Effect.never as Effect.Effect<DocumentWorkspace>;
+  })), { signal }));
+  yield* Effect.addFinalizer(() => window.close().pipe(Effect.ignore));
+
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { log.push('prepare-quit'); }),
+    startup: recoverTypedFailure(Effect.gen(function* () {
+      log.push('startup');
+      const opening = window.replace();
+      observeDocumentOpen(opening, () => {
+        log.push('navigation-exit');
+        exit(1);
+      });
+      yield* Effect.promise(() => started.promise);
+      return yield* Effect.fail(aborted);
+    }), () => {
+      log.push('CSV Viewer failed to start.');
+      exit(1);
+    }).pipe(Effect.ensuring(Deferred.succeed(startupSettled, undefined))),
+    openWindow: Effect.void,
+    close: window.close().pipe(Effect.tap((outcome) => Effect.sync(() => { log.push(`close:${outcome}`); }))),
+    dropRenderer: Effect.void,
+    onClose: (outcome) => Effect.sync(() => { log.push(`quit:${outcome}`); }),
+    onCloseFailure: Effect.sync(() => { log.push('close-failed'); }),
+  }));
+
+  yield* Deferred.await(startupSettled);
+  expect(log).not.toContain('CSV Viewer failed to start.');
+  expect(exit).not.toHaveBeenCalled();
+
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(log).toContain('dispose');
+  expect(log).toContain('prepare-quit');
+  expect(log).toContain('quit:disposed');
+  expect(log).not.toContain('navigation-exit');
+  expect(log).not.toContain('close-failed');
+  expect(exit).not.toHaveBeenCalled();
+}));
+
+it.effect('a real document load failure still invokes the startup failure exit', () => Effect.gen(function* () {
+  const exit = vi.fn();
+  const missing = new Error("ERR_FILE_NOT_FOUND (-6) loading 'file:///workspace/apps/desktop/dist-renderer/index.html'");
+  yield* recoverTypedFailure(Effect.fail(missing), () => { exit(1); });
+  expect(exit.mock.calls).toEqual([[1]]);
+}));
+
 it('waits for a workspace that is still opening when quit arrives, then disposes it', async () => {
   const events: string[] = [];
   const opening = Promise.withResolvers<void>();
