@@ -1,4 +1,4 @@
-import { Effect, Fiber } from 'effect';
+import { Cause, Effect, Exit, Fiber, FiberMap, Scope, Stream, SubscriptionRef } from 'effect';
 import type { QueryState } from './query-status-indicator';
 import type {
   CsvColumn,
@@ -58,34 +58,82 @@ export type CsvTabState = {
 const emptyQuery: CsvTabQuery = { sort: [], filters: [], search: '' };
 
 /**
- * One CSV Tab: the per-Tab state of a Working CSV and every command the grid, Stats Panel, and
- * application menu run against it. Views read `snapshot()` through `useSyncExternalStore`; the
- * Tab speaks only CsvViewer contract types, so it knows nothing about AG Grid or React.
- *
- * Rules kept here so they cannot drift: one query feeds both row windows and Column Value Counts;
- * Live Stats refresh whenever that query or the data changes; every mutation bumps `revision` and
- * clears the selection; replies from a superseded query or a disposed Tab are dropped.
+ * How long typed query text waits before it is committed. Comparison search and the value-filter
+ * search share this one pause: `Stream.debounce` on a `SubscriptionRef`, not a pair of timers.
  */
-export class CsvTab {
-  private state: CsvTabState;
+export const queryDebounce = '150 millis';
+
+export type QueryDebounce = {
+  push(value: string): void;
+  /** Drops a pending commit and treats `value` as already settled. */
+  reset(value: string): void;
+  dispose(): void;
+};
+
+/**
+ * One debounced text input. The value captured when listening starts is not committed. A first
+ * pull that is already a different value is kept: that edit landed before the stream subscribed.
+ */
+export function openQueryDebounce(initial: string, onCommit: (value: string) => void): QueryDebounce {
+  const scope = Effect.runSync(Scope.make());
+  const input = Effect.runSync(SubscriptionRef.make(initial));
+  let fiber: Fiber.Fiber<void, unknown> | undefined;
+  let open = true;
+
+  const listen = (): void => {
+    const subscribed = Effect.runSync(SubscriptionRef.get(input));
+    const current = Effect.runFork(SubscriptionRef.changes(input).pipe(
+      Stream.mapAccum(() => true, (first, value) => [false, first && value === subscribed ? [] : [value]]),
+      Stream.debounce(queryDebounce),
+      Stream.runForEach((value) => Effect.sync(() => onCommit(value))),
+    ));
+    fiber = current;
+    Effect.runSync(Scope.addFinalizer(scope, Fiber.interrupt(current)));
+  };
+  listen();
+
+  return {
+    push(value: string): void {
+      if (open) Effect.runSync(SubscriptionRef.set(input, value));
+    },
+    reset(value: string): void {
+      if (!open) return;
+      if (fiber) Effect.runSync(Fiber.interrupt(fiber));
+      Effect.runSync(SubscriptionRef.set(input, value));
+      listen();
+    },
+    dispose(): void {
+      if (!open) return;
+      open = false;
+      Effect.runSync(Scope.close(scope, Exit.void));
+    },
+  };
+}
+
+/**
+ * Client runtime for one view model: `SubscriptionRef` state for React, and a `FiberMap` of
+ * in-flight reads. Starting a read under a key interrupts the previous read for that key.
+ * Closing the scope interrupts every read.
+ */
+export class ViewRuntime<A> {
   private readonly listeners = new Set<() => void>();
-  /** Advances when the query or the data changes; a row window from an older version is stale. */
-  private queryVersion = 0;
-  private statsFiber: Fiber.Fiber<void> | null = null;
-  private disposed = false;
+  private sequence = 0;
+  private closed = false;
 
-  constructor(
-    private readonly viewer: Pick<CsvViewer, 'call' | 'capabilities'>,
-    workingCsv: WorkingCsvView,
-  ) {
-    this.state = freshState(workingCsv);
+  private constructor(
+    private readonly scope: Scope.Closeable,
+    private readonly state: SubscriptionRef.SubscriptionRef<A>,
+    private readonly reads: FiberMap.FiberMap<string>,
+  ) {}
+
+  static open<A>(initial: A): ViewRuntime<A> {
+    const scope = Effect.runSync(Scope.make());
+    const state = Effect.runSync(SubscriptionRef.make(initial));
+    const reads = Effect.runSync(FiberMap.make<string>().pipe(Effect.provideService(Scope.Scope, scope)));
+    return new ViewRuntime(scope, state, reads);
   }
 
-  get workingCsvId(): string {
-    return this.state.workingCsv.workingCsvId;
-  }
-
-  readonly snapshot = (): CsvTabState => this.state;
+  readonly snapshot = (): A => SubscriptionRef.getUnsafe(this.state);
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -94,11 +142,92 @@ export class CsvTab {
     };
   };
 
+  /** Replaces the state and notifies React listeners in this turn. */
+  update(next: A): void {
+    Effect.runSync(SubscriptionRef.set(this.state, next));
+    for (const listener of this.listeners) listener();
+  }
+
+  /** A fresh key under `purpose`, so concurrent reads of that purpose do not interrupt each other. */
+  nextKey(purpose: string): string {
+    this.sequence += 1;
+    return `${purpose}:${this.sequence}`;
+  }
+
+  fork<Value, Err>(key: string, effect: Effect.Effect<Value, Err>): Fiber.Fiber<Value, Err> {
+    if (this.closed || this.reads.state._tag === 'Closed') return Effect.runFork(Effect.interrupt);
+    return Effect.runSync(FiberMap.run(this.reads, key, effect));
+  }
+
+  interrupt(key: string): void {
+    Effect.runSync(FiberMap.remove(this.reads, key));
+  }
+
+  /** Interrupts every in-flight read whose key starts with `prefix`. */
+  interruptPrefixed(prefix: string): void {
+    if (this.reads.state._tag !== 'Open') return;
+    const keys: string[] = [];
+    for (const [key] of this.reads) {
+      if (key.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) this.interrupt(key);
+  }
+
+  /** The fiber's value, `null` when a newer read or disposal interrupted it, or the original failure. */
+  join<A>(fiber: Fiber.Fiber<A, unknown>): Promise<A | null> {
+    return Effect.runPromise(Fiber.await(fiber)).then((exit) => {
+      if (Exit.isSuccess(exit)) return exit.value;
+      if (Cause.hasInterruptsOnly(exit.cause)) return null;
+      throw Cause.squash(exit.cause);
+    });
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+    if (this.closed) return;
+    this.closed = true;
+    Effect.runSync(Scope.close(this.scope, Exit.void));
+  }
+}
+
+/**
+ * One CSV Tab: the per-Tab state of a Working CSV and every command the grid, Stats Panel, and
+ * application menu run against it. Views read `snapshot()` through `useSyncExternalStore`; the
+ * Tab speaks only CsvViewer contract types, so it knows nothing about AG Grid or React.
+ *
+ * Rules kept here so they cannot drift: one query feeds both row windows and Column Value Counts;
+ * Live Stats refresh whenever that query or the data changes; every mutation bumps `revision` and
+ * clears the selection; a newer read interrupts the previous one, and a disposed Tab drops the reply.
+ */
+export class CsvTab {
+  private readonly runtime: ViewRuntime<CsvTabState>;
+  private disposed = false;
+
+  constructor(
+    private readonly viewer: Pick<CsvViewer, 'call' | 'capabilities'>,
+    workingCsv: WorkingCsvView,
+  ) {
+    this.runtime = ViewRuntime.open(freshState(workingCsv));
+  }
+
+  private get state(): CsvTabState {
+    return this.runtime.snapshot();
+  }
+
+  get workingCsvId(): string {
+    return this.state.workingCsv.workingCsvId;
+  }
+
+  readonly snapshot = (): CsvTabState => this.runtime.snapshot();
+
+  readonly subscribe = (listener: () => void): (() => void) => this.runtime.subscribe(listener);
+
   /** Reopen CSV: same Tab, new data. Query, selection, and Stats Panel start over. */
   replaceWorkingCsv(workingCsv: WorkingCsvView): void {
-    this.queryVersion += 1;
-    this.stopStats();
-    this.set({ ...freshState(workingCsv), exporting: this.state.exporting, revision: this.state.revision + 1 });
+    this.runtime.interruptPrefixed('rows:');
+    this.runtime.interrupt('stats');
+    const current = this.state;
+    this.runtime.update({ ...freshState(workingCsv), exporting: current.exporting, revision: current.revision + 1 });
   }
 
   setSearch(search: string): void {
@@ -132,7 +261,7 @@ export class CsvTab {
   toggleStats(): void {
     const { stats, focusedColumn, workingCsv } = this.state;
     if (stats.open) {
-      this.stopStats();
+      this.runtime.interrupt('stats');
       this.set({ stats: { ...stats, open: false } });
       return;
     }
@@ -155,11 +284,10 @@ export class CsvTab {
    */
   async rows(offset: number, limit: number): Promise<CsvRowWindow | null> {
     if (this.disposed) return null;
-    const version = this.queryVersion;
     const { query, workingCsv } = this.state;
     this.set({ queryStatus: 'querying' });
-    try {
-      const window = await this.viewer.call({
+    const effect = Effect.tryPromise({
+      try: () => this.viewer.call({
         operation: 'csv.get-rows',
         workingCsvId: workingCsv.workingCsvId,
         offset,
@@ -167,19 +295,21 @@ export class CsvTab {
         sort: query.sort,
         filters: query.filters,
         search: query.search.trim(),
-      });
-      if (this.stale(version)) return null;
-      this.set({
-        queryStatus: 'ready',
-        filteredRowCount: window.filteredRowCount,
-        totalRowCount: window.totalRowCount,
-      });
-      return window;
-    } catch (error) {
-      if (this.stale(version)) return null;
-      this.set({ queryStatus: 'failed' });
-      throw error;
-    }
+      }),
+      catch: (cause: unknown) => cause,
+    }).pipe(
+      Effect.tap((window) => Effect.sync(() => {
+        this.set({
+          queryStatus: 'ready',
+          filteredRowCount: window.filteredRowCount,
+          totalRowCount: window.totalRowCount,
+        });
+      })),
+      Effect.tapError(() => Effect.sync(() => {
+        this.set({ queryStatus: 'failed' });
+      })),
+    );
+    return this.runtime.join(this.runtime.fork(this.runtime.nextKey('rows'), effect));
   }
 
   /** Resolves false when the edit was rejected, so the grid can restore the previous cell value. */
@@ -332,8 +462,7 @@ export class CsvTab {
 
   dispose(): void {
     this.disposed = true;
-    this.stopStats();
-    this.listeners.clear();
+    this.runtime.dispose();
   }
 
   /** Export admission and cleanup are shared; completion preserves each export's edit semantics. */
@@ -356,7 +485,7 @@ export class CsvTab {
       const result = await operation();
       // An admitted write still resolves successfully after disposal; the grid uses this result.
       if (this.disposed) return true;
-      this.queryVersion += 1;
+      this.runtime.interruptPrefixed('rows:');
       const columns = schemaColumns(result);
       const workingCsv = columns
         ? { ...this.state.workingCsv, columns }
@@ -385,25 +514,25 @@ export class CsvTab {
   }
 
   private setQuery(query: CsvTabQuery): void {
-    this.queryVersion += 1;
+    this.runtime.interruptPrefixed('rows:');
     const hasActiveQuery = query.sort.length > 0 || query.filters.length > 0 || query.search.trim().length > 0;
     this.set({ query, hasActiveQuery, queryStatus: 'querying' });
     this.refreshStats();
   }
 
   private refreshStats(): void {
-    this.stopStats();
+    this.runtime.interrupt('stats');
     if (this.disposed || !this.state.stats.open) return;
     const { query, stats } = this.state;
     this.set({ stats: { ...stats, result: { status: 'loading' } } });
-    this.statsFiber = Effect.runFork(Effect.tryPromise({
+    this.runtime.fork('stats', Effect.tryPromise({
       try: () => this.valueCounts(stats.column, { filters: query.filters, search: query.search }),
-      catch: (error) => error,
+      catch: (cause: unknown) => cause,
     }).pipe(Effect.matchEffect({
       onSuccess: (counts) => Effect.sync(() => this.settleStats({ status: 'ready', counts })),
-      onFailure: (error) => Effect.sync(() => this.settleStats({
+      onFailure: (cause) => Effect.sync(() => this.settleStats({
         status: 'failed',
-        message: error instanceof Error ? error.message : 'Unable to calculate column value counts.',
+        message: cause instanceof Error ? cause.message : 'Unable to calculate column value counts.',
       })),
     })));
   }
@@ -419,11 +548,28 @@ export class CsvTab {
     });
   }
 
-  /** Interrupts only the renderer continuation; CsvViewer's backend request still runs. */
-  private stopStats(): void {
-    if (!this.statsFiber) return;
-    Effect.runFork(Fiber.interrupt(this.statsFiber));
-    this.statsFiber = null;
+  /**
+   * Counts for the value-filter list. A newer watch interrupts the previous one, so a superseded
+   * reply never calls `onResult`. The returned function interrupts this watch.
+   */
+  watchValueCounts(
+    column: string,
+    scope: Pick<CsvTabQuery, 'filters' | 'search'>,
+    onResult: (result: Exclude<CsvTabStatsResult, { status: 'loading' }>) => void,
+  ): () => void {
+    const fiber = this.runtime.fork('valueCounts', Effect.tryPromise({
+      try: () => this.valueCounts(column, scope),
+      catch: (cause: unknown) => cause,
+    }).pipe(Effect.matchEffect({
+      onSuccess: (counts) => Effect.sync(() => onResult({ status: 'ready', counts })),
+      onFailure: (cause) => Effect.sync(() => onResult({
+        status: 'failed',
+        message: cause instanceof Error ? cause.message : 'Unable to load column values.',
+      })),
+    })));
+    return () => {
+      Effect.runSync(Fiber.interrupt(fiber));
+    };
   }
 
   private settleStats(result: CsvTabStatsResult): void {
@@ -431,13 +577,8 @@ export class CsvTab {
     this.set({ stats: { ...this.state.stats, result } });
   }
 
-  private stale(version: number): boolean {
-    return this.disposed || version !== this.queryVersion;
-  }
-
   private set(patch: Partial<CsvTabState>): void {
-    this.state = { ...this.state, ...patch };
-    for (const listener of this.listeners) listener();
+    this.runtime.update({ ...this.state, ...patch });
   }
 }
 

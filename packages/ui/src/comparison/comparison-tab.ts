@@ -1,3 +1,4 @@
+import { Effect, Result } from 'effect';
 import type {
   ComparisonRow,
   ComparisonRowOrder,
@@ -6,6 +7,7 @@ import type {
   ComparisonWindow,
   CsvViewer,
 } from '@csv-viewer/workspace/csv-viewer';
+import { openQueryDebounce, ViewRuntime, type QueryDebounce } from '../csv/csv-tab';
 
 export const comparisonPageSize = 100;
 const rowReadFailure = 'Unable to load comparison rows. Try again.';
@@ -46,26 +48,23 @@ export type ComparisonTabState = {
  * Rules kept here so they cannot drift: commands read their inputs from this state and are no-ops
  * without them; a rejected outcome or a failed call becomes `actionError`; editing the draft hides
  * the current invalid-key diagnostics; `receive` ignores older projections; a row window from a
- * superseded result or query is dropped; late requests never update state after `dispose`.
+ * superseded result or query is interrupted; late requests never update state after `dispose`.
  * A replacement projection is presented together with its first page and selected row.
+ * Search commits through the shared query debounce.
  */
 export class ComparisonTab {
-  private state: ComparisonTabState;
-  private readonly listeners = new Set<() => void>();
+  private readonly runtime: ViewRuntime<ComparisonTabState>;
+  private readonly searchDebounce: QueryDebounce;
   private disposed = false;
-  private selectionRequest = 0;
-  private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private progressTimer: ReturnType<typeof setTimeout> | undefined;
   private committedSearch = '';
-  /** Invalidates every read when its result or query changes, including first-page preparation. */
-  private rowRequestVersion = 0;
   private firstWindow: ComparisonWindow | null = null;
 
   constructor(
     private readonly viewer: Pick<CsvViewer, 'call'>,
     comparison: ComparisonView,
   ) {
-    this.state = {
+    const initial: ComparisonTabState = {
       comparison,
       presentedComparison: comparison,
       preparingResult: false,
@@ -85,21 +84,22 @@ export class ComparisonTab {
       actionError: null,
       acknowledgedAttemptId: null,
     };
+    this.runtime = ViewRuntime.open(initial);
+    this.searchDebounce = openQueryDebounce('', (search) => this.commitSearch(search));
     if (comparison.operation) this.delayProgress();
+  }
+
+  private get state(): ComparisonTabState {
+    return this.runtime.snapshot();
   }
 
   get comparisonId(): string {
     return this.state.comparison.comparisonId;
   }
 
-  readonly snapshot = (): ComparisonTabState => this.state;
+  readonly snapshot = (): ComparisonTabState => this.runtime.snapshot();
 
-  readonly subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  };
+  readonly subscribe = (listener: () => void): (() => void) => this.runtime.subscribe(listener);
 
   /** A newer projection of this Comparison. Older or equal versions are ignored. */
   receive(comparison: ComparisonView): void {
@@ -141,13 +141,7 @@ export class ComparisonTab {
   setSearch(search: string): void {
     if (this.disposed || search === this.state.search) return;
     this.set({ search });
-    clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = undefined;
-      if (this.committedSearch === this.state.search) return;
-      this.committedSearch = this.state.search;
-      this.resetQuery({});
-    }, 150);
+    this.searchDebounce.push(search);
   }
 
   setView(view: ComparisonTabState['view']): void {
@@ -164,7 +158,7 @@ export class ComparisonTab {
   }
 
   selectRow(row: ComparisonRow, index: number): void {
-    this.selectionRequest += 1;
+    this.runtime.interrupt('selection');
     this.set({ selection: { row, index }, selectionLoading: false });
   }
 
@@ -173,16 +167,21 @@ export class ComparisonTab {
     this.setView('inspector');
   }
 
-  /** Previous/next reads the containing page, preserving a newer row choice while it loads. */
+  /**
+   * Previous/next reads the containing page on the selection fiber. `rows()` would fork a second
+   * read that can still call `receiveRows` after a newer choice interrupts `selection`.
+   */
   async selectIndex(index: number): Promise<void> {
     if (index < 0 || this.state.rowsLoading || this.state.totalRows === null || index >= this.state.totalRows) return;
-    const request = ++this.selectionRequest;
     this.set({ selectionLoading: true });
     const offset = Math.floor(index / comparisonPageSize) * comparisonPageSize;
-    const window = await this.rows(offset, comparisonPageSize);
-    if (this.disposed || request !== this.selectionRequest) return;
-    const row = window?.rows[index - offset];
-    this.set({ selection: row ? { row, index } : this.state.selection, selectionLoading: false });
+    const fiber = this.runtime.fork('selection', this.loadRowsEffect(offset, comparisonPageSize).pipe(
+      Effect.tap((window) => Effect.sync(() => {
+        const row = window?.rows[index - offset];
+        this.set({ selection: row ? { row, index } : this.state.selection, selectionLoading: false });
+      })),
+    ));
+    await this.runtime.join(fiber);
   }
 
   /** Hides feedback for the current attempt. */
@@ -229,51 +228,92 @@ export class ComparisonTab {
    * failed, or superseded; views only deliver the returned page to their grid.
    */
   rows(offset: number, limit: number): Promise<ComparisonWindow | null> {
-    return this.state.preparingResult ? Promise.resolve(null) : this.loadRows(offset, limit);
+    if (this.disposed || this.state.preparingResult) return Promise.resolve(null);
+    return this.loadRows(offset, limit);
   }
 
   /** Every page, including replacement preparation and Inspector navigation, settles here. */
-  private async loadRows(offset: number, limit: number): Promise<ComparisonWindow | null> {
+  private loadRows(offset: number, limit: number): Promise<ComparisonWindow | null> {
+    const fiber = this.runtime.fork(this.runtime.nextKey('rows'), this.loadRowsEffect(offset, limit));
+    return this.runtime.join(fiber);
+  }
+
+  private loadRowsEffect(offset: number, limit: number): Effect.Effect<ComparisonWindow | null> {
     const { comparison, rows, order } = this.state;
     const applied = comparison.applied;
-    if (this.disposed || !applied) return null;
-    const version = this.rowRequestVersion;
-    try {
-      let window: ComparisonWindow | null;
-      const cached = this.firstWindow;
-      if (offset === 0 && limit <= comparisonPageSize && cached) {
-        // Cached reads yield too, so a query change can supersede them before delivery.
-        window = await Promise.resolve({ ...cached, rows: cached.rows.slice(0, limit) });
-      } else {
-        const outcome = await this.viewer.call({
-          operation: 'comparison.get-window', comparisonId: comparison.comparisonId,
-          resultToken: applied.resultToken, offset, limit,
-          rows, search: this.committedSearch, order,
-        });
-        if (outcome.status === 'rejected') throw new Error(outcome.fault.message);
-        window = outcome.status === 'ready' ? outcome.window : null;
+    if (this.disposed || !applied) return Effect.succeed(null);
+    const cached = this.firstWindow;
+    // Cached reads yield too, so a query change can interrupt them before delivery.
+    const loader = offset === 0 && limit <= comparisonPageSize && cached
+      ? Effect.promise(() => Promise.resolve({ ...cached, rows: cached.rows.slice(0, limit) }))
+      : this.fetchWindow(comparison.comparisonId, applied.resultToken, offset, limit, rows, order);
+    return Effect.result(loader).pipe(Effect.map((fetched) => {
+      if (Result.isFailure(fetched)) {
+        if (!this.disposed) this.set({ rowsError: rowReadFailure });
+        return null;
       }
-      if (this.disposed || version !== this.rowRequestVersion || !window) return null;
-      if (this.state.preparingResult) {
-        const previous = this.state.selection;
-        const selectedIndex = previous && JSON.stringify(applied.key) === JSON.stringify(this.state.presentedComparison.applied?.key)
-          ? window.rows.findIndex(row => JSON.stringify(row.keyValues) === JSON.stringify(previous.row.keyValues)) : -1;
-        this.firstWindow = window;
-        this.set({
-          presentedComparison: this.state.comparison,
-          queryVersion: this.state.queryVersion + 1,
-          totalRows: window.totalRowCount,
-          selection: selectedIndex >= 0 ? { row: window.rows[selectedIndex], index: window.offset + selectedIndex }
-            : window.rows[0] ? { row: window.rows[0], index: window.offset } : null,
-          rowsLoading: false,
-          rowsError: null,
-        });
-      } else this.receiveRows(window);
+      const window = fetched.success;
+      if (window === null || this.disposed) return null;
+      this.publishWindow(window, applied);
       return window;
-    } catch {
-      if (!this.disposed && version === this.rowRequestVersion) this.set({ rowsError: rowReadFailure });
-      return null;
+    }));
+  }
+
+  private fetchWindow(
+    comparisonId: string,
+    resultToken: string,
+    offset: number,
+    limit: number,
+    rows: ComparisonRowsMode,
+    order: ComparisonTabState['order'],
+  ): Effect.Effect<ComparisonWindow | null, string> {
+    return Effect.tryPromise({
+      try: () => this.viewer.call({
+        operation: 'comparison.get-window',
+        comparisonId,
+        resultToken,
+        offset,
+        limit,
+        rows,
+        search: this.committedSearch,
+        order,
+      }),
+      catch: () => 'failed',
+    }).pipe(Effect.flatMap((outcome) => {
+      switch (outcome.status) {
+        case 'ready':
+          return Effect.succeed(outcome.window);
+        case 'rejected':
+          return Effect.fail('rejected');
+        case 'result-replaced':
+        case 'comparison-not-found':
+          return Effect.succeed(null);
+        default: {
+          const exhaustive: never = outcome;
+          return Effect.die(exhaustive);
+        }
+      }
+    }));
+  }
+
+  private publishWindow(window: ComparisonWindow, applied: NonNullable<ComparisonView['applied']>): void {
+    if (this.state.preparingResult) {
+      const previous = this.state.selection;
+      const selectedIndex = previous && JSON.stringify(applied.key) === JSON.stringify(this.state.presentedComparison.applied?.key)
+        ? window.rows.findIndex((row) => JSON.stringify(row.keyValues) === JSON.stringify(previous.row.keyValues)) : -1;
+      this.firstWindow = window;
+      this.set({
+        presentedComparison: this.state.comparison,
+        queryVersion: this.state.queryVersion + 1,
+        totalRows: window.totalRowCount,
+        selection: selectedIndex >= 0 ? { row: window.rows[selectedIndex], index: window.offset + selectedIndex }
+          : window.rows[0] ? { row: window.rows[0], index: window.offset } : null,
+        rowsLoading: false,
+        rowsError: null,
+      });
+      return;
     }
+    this.receiveRows(window);
   }
 
   /** Replaces the previous query's selection with its first row, then preserves later choices. */
@@ -288,15 +328,21 @@ export class ComparisonTab {
     this.set({ totalRows: window.totalRowCount, rowsLoading: false, selection, rowsError: null });
   }
 
+  private commitSearch(search: string): void {
+    if (this.disposed || this.committedSearch === search) return;
+    this.committedSearch = search;
+    this.resetQuery({});
+  }
+
   private resetQuery(patch: Partial<ComparisonTabState>): void {
-    this.selectionRequest += 1;
+    this.runtime.interrupt('selection');
     this.firstWindow = null;
     if (this.state.preparingResult && !patch.comparison) {
       this.set(patch);
       this.prepareResult();
       return;
     }
-    this.rowRequestVersion += 1;
+    this.runtime.interruptPrefixed('rows:');
     this.set({
       ...patch,
       queryVersion: this.state.queryVersion + 1,
@@ -312,16 +358,16 @@ export class ComparisonTab {
 
   dispose(): void {
     this.disposed = true;
-    this.listeners.clear();
-    clearTimeout(this.searchTimer);
+    this.searchDebounce.dispose();
     clearTimeout(this.progressTimer);
+    this.runtime.dispose();
   }
 
   /** Keeps the displayed result intact until loadRows can publish its replacement's first page. */
   private prepareResult(): void {
-    this.rowRequestVersion += 1;
+    this.runtime.interruptPrefixed('rows:');
+    this.runtime.interrupt('selection');
     this.firstWindow = null;
-    this.selectionRequest += 1;
     this.set({ rowsLoading: true, rowsError: null, selectionLoading: false });
     void this.loadRows(0, comparisonPageSize);
   }
@@ -357,18 +403,22 @@ export class ComparisonTab {
 
   private set(patch: Partial<ComparisonTabState>): void {
     const wasComparing = this.isComparing();
-    this.state = { ...this.state, ...patch };
-    this.state.preparingResult = this.state.comparison.applied?.resultToken !== this.state.presentedComparison.applied?.resultToken;
-    if (!this.isComparing()) {
+    const next: ComparisonTabState = { ...this.state, ...patch };
+    next.preparingResult = next.comparison.applied?.resultToken !== next.presentedComparison.applied?.resultToken;
+    if (!this.comparing(next)) {
       clearTimeout(this.progressTimer);
       this.progressTimer = undefined;
-      this.state.progressVisible = false;
+      next.progressVisible = false;
     } else if (!wasComparing) this.delayProgress();
-    for (const listener of this.listeners) listener();
+    this.runtime.update(next);
   }
 
   private isComparing(): boolean {
-    return Boolean(this.state.comparison.operation) || (this.state.preparingResult && !this.state.rowsError);
+    return this.comparing(this.state);
+  }
+
+  private comparing(state: ComparisonTabState): boolean {
+    return Boolean(state.comparison.operation) || (state.preparingResult && !state.rowsError);
   }
 
   /** The tab owns one timer across operation phases and the first-row read. */

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CsvCellEditResult, CsvColumnValueCounts, CsvEditState, CsvRowWindow } from '@csv-viewer/workspace/csv-viewer';
-import { CsvTab } from './csv-tab';
+import { CsvTab, openQueryDebounce } from './csv-tab';
 import { workingCsvFixture } from '../test-helpers/csv-views';
 import { createTestCsvViewer } from '../test-helpers/csv-viewer';
 
@@ -147,6 +147,27 @@ describe('CsvTab', () => {
     disposed.reject(failure);
     await expect(previousTab).resolves.toBeNull();
     expect(tab.snapshot()).toBe(state);
+  });
+
+  it('keeps the new Live Stats when a superseded request resolves after it', async () => {
+    const superseded = deferred<CsvColumnValueCounts>();
+    const current = deferred<CsvColumnValueCounts>();
+    const getCounts = vi.fn()
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(current.promise);
+    const tab = new CsvTab(createTestCsvViewer({ handlers: { 'csv.get-column-value-counts': getCounts } }), workingCsv);
+
+    tab.toggleStats();
+    tab.setStatsColumn('age');
+    current.resolve(counts(1));
+    await vi.waitFor(() => expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(1) }));
+    const state = tab.snapshot();
+
+    superseded.resolve(counts(250));
+    await superseded.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tab.snapshot()).toBe(state);
+    expect(tab.snapshot().stats.result).toEqual({ status: 'ready', counts: counts(1) });
   });
 
   it('keeps the latest Live Stats when superseded requests finish or reject', async () => {
@@ -660,5 +681,23 @@ describe('CsvTab', () => {
     expect(state.workingCsv.columns).toEqual(workingCsv.columns);
     expect(state.focusedColumn).toBe('name');
     expect(state.revision).toBe(0);
+  });
+});
+
+describe('openQueryDebounce', () => {
+  it('commits a value set synchronously after subscribe', async () => {
+    vi.useFakeTimers();
+    const commits: string[] = [];
+    const debounced = openQueryDebounce('', (value) => {
+      commits.push(value);
+    });
+    try {
+      debounced.push('only');
+      await vi.advanceTimersByTimeAsync(150);
+      expect(commits).toEqual(['only']);
+    } finally {
+      debounced.dispose();
+      vi.useRealTimers();
+    }
   });
 });
