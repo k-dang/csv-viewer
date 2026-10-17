@@ -311,7 +311,7 @@ function settleOpen(opening: Promise<DocumentWorkspace>): Promise<OpenSettlement
   );
 }
 
-/** Recovers typed failures. A cause that includes an interrupt fails again so quit can close. */
+/** Recovers typed failures. An interrupt fails again so quit can close. A superseded document load does not. */
 export function recoverTypedFailure<E, R>(
   effect: Effect.Effect<void, E, R>,
   onFailure: () => void,
@@ -321,8 +321,14 @@ export function recoverTypedFailure<E, R>(
       // SAFETY: Interrupt reasons carry no typed error. Re-failing the cause keeps the fiber's error channel empty.
       return Effect.failCause(cause as Cause.Cause<never>);
     }
+    if (isSupersededDocumentLoad(Cause.squash(cause))) return Effect.void;
     return Effect.sync(onFailure);
   }));
+}
+
+/** Electron rejects an in-flight loadFile or loadURL with a message that starts with ERR_ABORTED. */
+function isSupersededDocumentLoad(cause: unknown): boolean {
+  return cause instanceof Error && cause.message.startsWith('ERR_ABORTED');
 }
 
 /** The open started by document navigation. An aborted signal is quit or a gone renderer, not a process failure. */
