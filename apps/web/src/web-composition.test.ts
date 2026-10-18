@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { it as effectIt } from '@effect/vitest';
 import { createNodeDuckDbWasmDatabase } from '../integration/fixtures/wasm-workspace';
 import { ControllableWorker } from '../integration/fixtures/controllable-worker';
 import { diagnosticCapture } from '../../../packages/workspace/test/diagnostic-capture';
@@ -9,12 +10,14 @@ import type { CsvViewerSession } from '@csv-viewer/workspace/csv-workspace';
 import { createCsvViewer } from '@csv-viewer/workspace/csv-workspace';
 import type { ComparisonExecutor } from '../../../packages/workspace/src/comparison/comparison-executor';
 import { DataEngineError } from '@csv-viewer/workspace/database';
+import { WorkspaceRequestError } from '@csv-viewer/workspace/errors';
 import { openInScope } from '../../../packages/workspace/test/scoped-database';
 import type { CsvViewerEvent } from '@csv-viewer/workspace/csv-viewer';
-import { Deferred, Effect, Exit, Fiber } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Logger } from 'effect';
+import { TestClock, TestConsole } from 'effect/testing';
 import { AsyncDuckDB } from '@duckdb/duckdb-wasm';
 import { WebWorkspaceHost } from './web-workspace-host';
-import { disposeWorkspaceWhenPageHides, startWebCsvViewer } from './web-composition';
+import { disposeWorkspaceWhenPageHides, settleFailedWebStartup, startWebCsvViewer } from './web-composition';
 
 // The CsvViewer contract itself runs against this same Wasm engine from the integration suite,
 // so these cases only cover what the web composition root adds:
@@ -286,7 +289,7 @@ describe('web CsvViewer composition', () => {
 
     await checking.promise;
     database.failWorker();
-    await expect(startup).resolves.toEqual({ status: 'unsupported' });
+    await expect(startup).resolves.toEqual({ status: 'failed' });
     checkResult.resolve();
     for (const stage of ['workspace.close-database-connection', 'workspace.close-database-engine', 'workspace.release-database']) {
       expect(capture.outcome(stage)).toBe('succeeded');
@@ -370,6 +373,55 @@ it('disposes a workspace that already exists when startup is unsupported afterwa
   expect(disposed.dispose).toHaveBeenCalledOnce();
 });
 
+it('reports a stopped engine during startup as a failed reload instead of an unsupported browser', async () => {
+  const checking = Promise.withResolvers<void>();
+  const checkResult = Promise.withResolvers<void>();
+  const database = new FatalTestDatabase(Effect.promise(() => {
+    checking.resolve();
+    return checkResult.promise;
+  }));
+  const startup = startWebCsvViewer(database, async () => null);
+  await checking.promise;
+  database.failWorker();
+  await expect(startup).resolves.toEqual({ status: 'failed' });
+  checkResult.resolve();
+});
+
+it('keeps an expected workspace request that is not a stopped engine unsupported', async () => {
+  const disposed = await startupAfterWorkspace(async () => {
+    throw new WorkspaceRequestError({ message: 'Working CSV is closing.' });
+  });
+  expect(disposed.settled).toBe('unsupported');
+  expect(disposed.dispose).toHaveBeenCalledOnce();
+});
+
+effectIt.effect('logs a startup defect and rejects when disposal does not settle within 60 seconds', () => Effect.gen(function* () {
+  const watched = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+    Effect.provide(Logger.layer([Logger.consoleLogFmt])),
+  );
+  const release = Promise.withResolvers<void>();
+  const dispose = vi.fn(() => release.promise);
+  yield* Effect.addFinalizer(() => Effect.sync(() => { release.resolve(); }));
+  const failing = yield* Effect.forkScoped(watched(settleFailedWebStartup(
+    { dispose },
+    new Error('PRIVATE startup defect'),
+    undefined,
+  )));
+  yield* TestClock.adjust('59 seconds');
+  expect(failing.pollUnsafe()).toBeUndefined();
+  const early = [...(yield* TestConsole.logLines), ...(yield* TestConsole.errorLines)].map(String);
+  expect(early.some((line) => line.includes('web.startup-defect'))).toBe(false);
+  yield* TestClock.adjust('1 second');
+  const exit = yield* Fiber.await(failing);
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    expect(Cause.squash(exit.cause)).toMatchObject({ message: 'PRIVATE startup defect' });
+  }
+  const lines = [...(yield* TestConsole.logLines), ...(yield* TestConsole.errorLines)].map(String);
+  expect(lines.some((line) => line.includes('message=web.startup-defect') && line.includes('outcome=failed'))).toBe(true);
+  expect(dispose).toHaveBeenCalledOnce();
+}));
+
 it('reports a startup defect instead of an unsupported browser', async () => {
   const database = new FatalTestDatabase();
   vi.spyOn(database, 'open').mockReturnValue(Effect.die(new Error('PRIVATE startup defect')));
@@ -403,7 +455,7 @@ it('reports Worker termination failure during acquisition as startup cleanup', a
   await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
   worker.emitError(new Error('PRIVATE Worker crash'));
 
-  await expect(startup).resolves.toEqual({ status: 'unsupported' });
+  await expect(startup).resolves.toEqual({ status: 'failed' });
   expect(capture.outcome('workspace.release-database')).toBe('cleanup-failed');
   expect(capture.logs.join('')).not.toContain('PRIVATE');
 });
