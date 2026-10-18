@@ -88,7 +88,8 @@ export class DesktopLifecycle {
 
 /**
  * One main-process program. Callers register quit before invoking it. Quit interrupts startup,
- * then closes the workspace. A renderer crash drops that workspace without a prompt.
+ * then closes the workspace. A renderer crash drops that workspace without a prompt, unless a
+ * close or quit confirmation is in flight: that crash joins the confirmation instead.
  */
 export const runDesktopProgram = (input: DesktopProgram) => Effect.scoped(Effect.gen(function* () {
   const work = yield* FiberSet.make<void, never>();
@@ -154,6 +155,11 @@ export class WindowWorkspace {
   private opening: AbortController | null = null;
   /** Set before take() yields, so a second close or a quit joins this confirmation. */
   private activeClose: Deferred.Deferred<CloseOutcome, Error> | null = null;
+  /**
+   * Confirmations a crash observed while they were showing. `drop` joins these after the
+   * confirmation has answered, when `activeClose` is already clear.
+   */
+  private readonly crashCloses: Array<Deferred.Deferred<CloseOutcome, Error>> = [];
 
   constructor(
     private readonly open: (signal: AbortSignal) => Promise<DocumentWorkspace>,
@@ -188,6 +194,14 @@ export class WindowWorkspace {
   inFlightClose(): Effect.Effect<CloseOutcome, Error> | null {
     const activeClose = this.activeClose;
     return activeClose ? Deferred.await(activeClose) : null;
+  }
+
+  /**
+   * Call when the renderer dies, before the program handles that event. A crash during a
+   * confirmation must join it, including when the event waits until the answer has cleared it.
+   */
+  observeRendererGone(): void {
+    if (this.activeClose) this.crashCloses.push(this.activeClose);
   }
 
   /** Confirms and disposes the current workspace. With none open there is nothing to confirm. */
@@ -228,8 +242,16 @@ export class WindowWorkspace {
     );
   });
 
-  /** The renderer is gone. End its workspace without a prompt, and do not open another. */
+  /**
+   * The renderer is gone. A crash while close or quit is confirming joins that confirmation and
+   * does not dispose. Cancel therefore leaves the workspace. Otherwise end it without a prompt.
+   */
   readonly drop = Effect.fnUntraced(function* (this: WindowWorkspace): Effect.fn.Return<void, Error> {
+    const joined = this.crashCloses.shift() ?? this.activeClose;
+    if (joined) {
+      yield* Deferred.await(joined).pipe(Effect.ignore);
+      return;
+    }
     const taken = yield* this.take();
     switch (taken._tag) {
       case 'empty':

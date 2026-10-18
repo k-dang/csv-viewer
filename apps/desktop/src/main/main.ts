@@ -102,6 +102,7 @@ function pushEvent(event: DesktopProgramEvent): void {
     quit.requested = true;
     quit.shared = documentWorkspace.inFlightClose();
   }
+  if (event._tag === 'renderer-gone') documentWorkspace.observeRendererGone();
   if (offerEvent) offerEvent(event);
   else pendingEvents.push(event);
 }

@@ -297,6 +297,46 @@ it('drops an open workspace without a prompt when the renderer is gone', async (
   expect(window.isOpen).toBe(false);
 });
 
+it('a renderer crash during a close confirmation leaves the workspace when the prompt is cancelled', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const closing = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const dropping = Effect.runPromise(window.drop());
+  expect(events).toEqual(['open 1']);
+  expect(window.isOpen).toBe(true);
+  answer.resolve(false);
+  await expect(closing).resolves.toBe('cancelled');
+  await dropping;
+  expect(window.isOpen).toBe(true);
+  expect(events).toEqual(['open 1', 'prompt 1: false']);
+});
+
+it('a renderer crash observed during quit still leaves the workspace after the confirmation is cancelled', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const closing = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  window.observeRendererGone();
+  answer.resolve(false);
+  await expect(closing).resolves.toBe('cancelled');
+  await Effect.runPromise(window.drop());
+  expect(window.isOpen).toBe(true);
+  expect(events).toEqual(['open 1', 'prompt 1: false']);
+});
+
 it.effect('quits during an in-flight open by disposing it and does not exit 1', () => Effect.gen(function* () {
   const exit = vi.fn();
   const events = yield* Queue.unbounded<DesktopProgramEvent>();
