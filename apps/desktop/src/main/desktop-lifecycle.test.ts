@@ -1,8 +1,8 @@
 import type { ConfirmWorkspaceCloseOutcome, WorkspaceCloseImpact } from '@csv-viewer/workspace/csv-viewer';
-import { Deferred, Effect, Exit, Fiber, Logger } from 'effect';
+import { ConfigProvider, Deferred, Effect, Exit, Fiber, Logger, Option, Queue } from 'effect';
 import { TestClock, TestConsole } from 'effect/testing';
 import { expect, it, vi } from '@effect/vitest';
-import { DesktopLifecycle, WindowWorkspace, type DocumentWorkspace } from './desktop-lifecycle';
+import { DesktopLifecycle, devServerUrlConfig, observeDocumentOpen, recoverTypedFailure, runDesktopProgram, WindowWorkspace, type DesktopProgramEvent, type DocumentWorkspace } from './desktop-lifecycle';
 
 const impact: WorkspaceCloseImpact = {
   workingCsvsWithUnexportedChanges: [{ workingCsvId: 'csv-1', sourceName: 'people.csv' }],
@@ -157,10 +157,10 @@ it('ends the workspace with the window, and a later window opens a fresh one', a
   const events: string[] = [];
   const window = new WindowWorkspace(documentWorkspaces(events));
   await window.replace();
-  await expect(window.close()).resolves.toBe('disposed');
+  await expect(Effect.runPromise(window.close())).resolves.toBe('disposed');
   expect(window.isOpen).toBe(false);
   expect(window.get()).toBeNull();
-  await expect(window.close()).resolves.toBe('disposed');
+  await expect(Effect.runPromise(window.close())).resolves.toBe('disposed');
   await window.replace();
   expect(events).toEqual(['open 1', 'prompt 1: true', 'dispose 1', 'detach 1', 'open 2']);
 });
@@ -169,10 +169,279 @@ it('keeps the workspace when the close prompt is cancelled', async () => {
   const events: string[] = [];
   const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.succeed(false)));
   await window.replace();
-  await expect(window.close()).resolves.toBe('cancelled');
+  await expect(Effect.runPromise(window.close())).resolves.toBe('cancelled');
   expect(window.isOpen).toBe(true);
   expect(events).toEqual(['open 1', 'prompt 1: false']);
 });
+
+it('a second close shares the prompt when the answer arrives before that close reaches it', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const first = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const second = Effect.runPromise(window.close());
+  answer.resolve(false);
+  await expect(first).resolves.toBe('cancelled');
+  await expect(second).resolves.toBe('cancelled');
+  expect(prompts).toBe(1);
+  expect(window.isOpen).toBe(true);
+});
+
+it('a quit observed after the answer joins the close that was already showing', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const first = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const shared = window.inFlightClose();
+  if (!shared) throw new Error('Expected the showing close.');
+  answer.resolve(false);
+  await expect(first).resolves.toBe('cancelled');
+  await expect(Effect.runPromise(shared)).resolves.toBe('cancelled');
+  expect(prompts).toBe(1);
+});
+
+it.effect('reads the dev server URL from Config and treats a missing value as production', () => Effect.gen(function* () {
+  const read = (env: Record<string, string>) => devServerUrlConfig.pipe(
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  expect(Option.getOrUndefined(yield* read({ VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173' }))).toBe('http://127.0.0.1:5173');
+  expect(Option.isNone(yield* read({}))).toBe(true);
+}));
+
+it.effect('interrupts startup when quit arrives and does not wait for acquisition to finish', () => Effect.gen(function* () {
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  const log: string[] = [];
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { log.push('prepare-quit'); }),
+    startup: Effect.scoped(Effect.gen(function* () {
+      log.push('startup');
+      yield* Effect.addFinalizer(() => Effect.sync(() => { log.push('startup-finalizer'); }));
+      yield* Effect.sleep('1 hour');
+      log.push('acquired');
+    })),
+    openWindow: Effect.void,
+    close: Effect.sync(() => {
+      log.push('close');
+      return 'disposed' as const;
+    }),
+    dropRenderer: Effect.void,
+    onClose: () => Effect.void,
+    onCloseFailure: Effect.void,
+  }));
+
+  yield* TestClock.adjust('1 second');
+  expect(log).toEqual(['startup']);
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(log).toEqual(['startup', 'prepare-quit', 'startup-finalizer', 'close']);
+  yield* TestClock.adjust('2 hours');
+  expect(log).not.toContain('acquired');
+}));
+
+it.effect('drops the workspace when the renderer is gone', () => Effect.gen(function* () {
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  let dropped = 0;
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.void,
+    startup: Effect.never,
+    openWindow: Effect.void,
+    close: Effect.succeed('disposed'),
+    dropRenderer: Effect.sync(() => { dropped += 1; }),
+    onClose: () => Effect.void,
+    onCloseFailure: Effect.void,
+  }));
+  yield* Queue.offer(events, { _tag: 'renderer-gone' });
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(dropped).toBe(1);
+}));
+
+it('interrupts workspace acquisition when quit arrives while it is opening', async () => {
+  const events: string[] = [];
+  const started = Promise.withResolvers<void>();
+  const window = new WindowWorkspace((signal) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    events.push('acquire');
+    yield* Effect.addFinalizer(() => Effect.sync(() => { events.push('finalizer'); }));
+    yield* Effect.sync(() => { started.resolve(); });
+    // SAFETY: quit interrupts this effect before a workspace value exists.
+    return yield* Effect.never as Effect.Effect<DocumentWorkspace>;
+  })), { signal }));
+  const opening = window.replace();
+  await started.promise;
+  await expect(Effect.runPromise(window.close())).resolves.toBe('disposed');
+  expect(events).toEqual(['acquire', 'finalizer']);
+  await expect(opening).rejects.toThrow();
+  expect(window.isOpen).toBe(false);
+});
+
+it('drops an open workspace without a prompt when the renderer is gone', async () => {
+  const events: string[] = [];
+  const window = new WindowWorkspace(documentWorkspaces(events));
+  await window.replace();
+  await Effect.runPromise(window.drop());
+  expect(events).toEqual(['open 1', 'detach 1', 'dispose 1']);
+  expect(window.isOpen).toBe(false);
+});
+
+it('a renderer crash during a close confirmation leaves the workspace when the prompt is cancelled', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const closing = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  const dropping = Effect.runPromise(window.drop());
+  expect(events).toEqual(['open 1']);
+  expect(window.isOpen).toBe(true);
+  answer.resolve(false);
+  await expect(closing).resolves.toBe('cancelled');
+  await dropping;
+  expect(window.isOpen).toBe(true);
+  expect(events).toEqual(['open 1', 'prompt 1: false']);
+});
+
+it('a renderer crash observed during quit still leaves the workspace after the confirmation is cancelled', async () => {
+  const events: string[] = [];
+  const answer = Promise.withResolvers<boolean>();
+  let prompts = 0;
+  const window = new WindowWorkspace(documentWorkspaces(events, () => Effect.promise(() => {
+    prompts += 1;
+    return answer.promise;
+  })));
+  await window.replace();
+  const closing = Effect.runPromise(window.close());
+  await vi.waitFor(() => { expect(prompts).toBe(1); });
+  window.observeRendererGone();
+  answer.resolve(false);
+  await expect(closing).resolves.toBe('cancelled');
+  await Effect.runPromise(window.drop());
+  expect(window.isOpen).toBe(true);
+  expect(events).toEqual(['open 1', 'prompt 1: false']);
+});
+
+it.effect('quits during an in-flight open by disposing it and does not exit 1', () => Effect.gen(function* () {
+  const exit = vi.fn();
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  const log: string[] = [];
+  const started = Promise.withResolvers<void>();
+  const window = new WindowWorkspace((signal) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    log.push('acquire');
+    yield* Effect.addFinalizer(() => Effect.sync(() => { log.push('dispose'); }));
+    started.resolve();
+    // SAFETY: quit aborts this open before a workspace exists.
+    return yield* Effect.never as Effect.Effect<DocumentWorkspace>;
+  })), { signal }));
+
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { log.push('prepare-quit'); }),
+    startup: recoverTypedFailure(Effect.gen(function* () {
+      log.push('startup');
+      const opening = window.replace();
+      observeDocumentOpen(opening, () => {
+        log.push('navigation-exit');
+        exit(1);
+      });
+      yield* Effect.promise(() => started.promise);
+      yield* Effect.never;
+    }), () => {
+      log.push('startup-exit');
+      exit(1);
+    }),
+    openWindow: recoverTypedFailure(Effect.void, () => { exit(1); }),
+    close: window.close().pipe(Effect.tap((outcome) => Effect.sync(() => { log.push(`close:${outcome}`); }))),
+    dropRenderer: Effect.void,
+    onClose: () => Effect.void,
+    onCloseFailure: Effect.sync(() => { log.push('close-failed'); }),
+  }));
+
+  yield* Effect.promise(() => started.promise);
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(log).toContain('dispose');
+  expect(log).not.toContain('close-failed');
+  expect(log).not.toContain('navigation-exit');
+  expect(log).not.toContain('startup-exit');
+  expect(exit).not.toHaveBeenCalled();
+}));
+
+it.effect('a loadFile ERR_ABORTED does not invoke the startup failure exit', () => Effect.gen(function* () {
+  const exit = vi.fn();
+  const events = yield* Queue.unbounded<DesktopProgramEvent>();
+  const log: string[] = [];
+  const started = Promise.withResolvers<void>();
+  const startupSettled = yield* Deferred.make<void>();
+  const aborted = new Error("ERR_ABORTED (-3) loading 'file:///workspace/apps/desktop/dist-renderer/index.html'");
+  const window = new WindowWorkspace((signal) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    log.push('acquire');
+    yield* Effect.addFinalizer(() => Effect.sync(() => { log.push('dispose'); }));
+    started.resolve();
+    // SAFETY: quit aborts this open before a workspace exists.
+    return yield* Effect.never as Effect.Effect<DocumentWorkspace>;
+  })), { signal }));
+  yield* Effect.addFinalizer(() => window.close().pipe(Effect.ignore));
+
+  const program = yield* Effect.forkChild(runDesktopProgram({
+    events,
+    prepareQuit: Effect.sync(() => { log.push('prepare-quit'); }),
+    startup: recoverTypedFailure(Effect.gen(function* () {
+      log.push('startup');
+      const opening = window.replace();
+      observeDocumentOpen(opening, () => {
+        log.push('navigation-exit');
+        exit(1);
+      });
+      yield* Effect.promise(() => started.promise);
+      return yield* Effect.fail(aborted);
+    }), () => {
+      log.push('CSV Viewer failed to start.');
+      exit(1);
+    }).pipe(Effect.ensuring(Deferred.succeed(startupSettled, undefined))),
+    openWindow: Effect.void,
+    close: window.close().pipe(Effect.tap((outcome) => Effect.sync(() => { log.push(`close:${outcome}`); }))),
+    dropRenderer: Effect.void,
+    onClose: (outcome) => Effect.sync(() => { log.push(`quit:${outcome}`); }),
+    onCloseFailure: Effect.sync(() => { log.push('close-failed'); }),
+  }));
+
+  yield* Deferred.await(startupSettled);
+  expect(log).not.toContain('CSV Viewer failed to start.');
+  expect(exit).not.toHaveBeenCalled();
+
+  yield* Queue.offer(events, { _tag: 'quit' });
+  expect(yield* Fiber.join(program)).toBe('disposed');
+  expect(log).toContain('dispose');
+  expect(log).toContain('prepare-quit');
+  expect(log).toContain('quit:disposed');
+  expect(log).not.toContain('navigation-exit');
+  expect(log).not.toContain('close-failed');
+  expect(exit).not.toHaveBeenCalled();
+}));
+
+it.effect('a real document load failure still invokes the startup failure exit', () => Effect.gen(function* () {
+  const exit = vi.fn();
+  const missing = new Error("ERR_FILE_NOT_FOUND (-6) loading 'file:///workspace/apps/desktop/dist-renderer/index.html'");
+  yield* recoverTypedFailure(Effect.fail(missing), () => { exit(1); });
+  expect(exit.mock.calls).toEqual([[1]]);
+}));
 
 it('waits for a workspace that is still opening when quit arrives, then disposes it', async () => {
   const events: string[] = [];
@@ -183,10 +452,52 @@ it('waits for a workspace that is still opening when quit arrives, then disposes
     return open();
   });
   void window.replace();
-  const quit = window.close();
+  const quit = Effect.runPromise(window.close());
   expect(events).toEqual([]);
   opening.resolve();
   await expect(quit).resolves.toBe('disposed');
   expect(events).toEqual(['open 1', 'prompt 1: true', 'dispose 1', 'detach 1']);
   expect(window.isOpen).toBe(false);
+});
+
+it.effect('force-exits when an aborted open does not finish releasing', () => Effect.gen(function* () {
+  const watched = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+    Effect.provide(Logger.layer([Logger.consoleLogFmt])),
+  );
+  const forceExit = vi.fn();
+  const started = Promise.withResolvers<void>();
+  const window = new WindowWorkspace(() => {
+    started.resolve();
+    return new Promise<DocumentWorkspace>(() => undefined);
+  }, forceExit);
+  void window.replace();
+  yield* Effect.promise(() => started.promise);
+  const quitting = yield* Effect.forkScoped(watched(window.close()));
+  yield* Effect.yieldNow;
+  yield* TestClock.adjust('59 seconds');
+  expect(quitting.pollUnsafe()).toBeUndefined();
+  expect(forceExit).not.toHaveBeenCalled();
+  yield* TestClock.adjust('1 second');
+  expect(yield* Fiber.join(quitting)).toBe('forced');
+  expect(forceExit.mock.calls).toEqual([[1]]);
+  const lines = [...(yield* TestConsole.logLines), ...(yield* TestConsole.errorLines)].map(String);
+  expect(lines.some((line) => line.includes('message=workspace.release-unfinished') && line.includes('outcome=failed'))).toBe(true);
+}));
+
+it('fails when releasing an open workspace fails after the renderer is gone, and quit can still see it', async () => {
+  const dispose = vi.fn(async () => { throw new Error('release failed'); });
+  const workspace: DocumentWorkspace['workspace'] = {
+    publishIntent: () => undefined,
+    confirmClose: async () => ({ status: 'ready' }),
+    dispose,
+  };
+  const window = new WindowWorkspace(async () => ({
+    workspace,
+    lifecycle: new DesktopLifecycle(workspace, () => Effect.succeed(true), () => undefined),
+    detach: () => undefined,
+  }));
+  await window.replace();
+  await expect(Effect.runPromise(window.drop())).rejects.toThrow('CSV Viewer could not release the workspace.');
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(window.isOpen).toBe(true);
 });

@@ -40,21 +40,32 @@ import.meta.hot?.dispose(dispose);
 
 void startup.then((started) => {
   if (stopped) return;
-  if (started.status === 'unsupported') {
-    root.render(<WebStartupState status="unsupported" />);
-    return;
+  switch (started.status) {
+    case 'unsupported':
+      root.render(<WebStartupState status="unsupported" />);
+      return;
+    case 'failed':
+      root.render(<WebStartupState status="failed" />);
+      return;
+    case 'ready':
+      workspace = new RendererWorkspace(started.viewer, {
+        confirmClose: confirmTabClose,
+        acquireDroppedSource: started.acquireDroppedSource,
+      });
+      root.render(
+        <StrictMode>
+          <CsvViewerProvider viewer={started.viewer}>
+            <App workspace={workspace} />
+          </CsvViewerProvider>
+        </StrictMode>,
+      );
+      return;
+    default: {
+      const unexpected: never = started;
+      return unexpected;
+    }
   }
-  workspace = new RendererWorkspace(started.viewer, {
-    confirmClose: confirmTabClose,
-    acquireDroppedSource: started.acquireDroppedSource,
-  });
-  root.render(
-    <StrictMode>
-      <CsvViewerProvider viewer={started.viewer}>
-        <App workspace={workspace} />
-      </CsvViewerProvider>
-    </StrictMode>,
-  );
 }).catch(() => {
-  if (!stopped) root.render(<WebStartupState status="unsupported" />);
+  if (stopped) return;
+  root.render(<WebStartupState status="failed" />);
 });

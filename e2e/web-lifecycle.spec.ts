@@ -66,7 +66,7 @@ test('can open another CSV after source preparation defects without exhausting c
   await captureState(page, testInfo, 'open-recovered');
 });
 
-test('shows checking and unsupported states when the real engine cannot load', async ({ page }, testInfo) => {
+test('shows checking and the reload failure when the real engine cannot load', async ({ page }, testInfo) => {
   const diagnostics = captureDiagnostics(page);
   const requested = Promise.withResolvers<void>();
   const failLoad = Promise.withResolvers<void>();
@@ -87,11 +87,13 @@ test('shows checking and unsupported states when the real engine cannot load', a
     await expect(page.getByRole('button', { name: 'Open CSV', exact: true })).toHaveCount(0);
     await captureState(page, testInfo, 'checking');
     failLoad.resolve();
-    await expect(page.getByRole('heading', { name: 'This browser cannot start CSV Viewer Web', exact: true })).toBeVisible();
-    await expect(page.getByText('You can use CSV Viewer Desktop on this computer instead.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'CSV Viewer could not start', exact: true })).toBeVisible();
+    await expect(page.getByText('Reload the page to try again. Your CSV Sources have not been opened or uploaded.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reload CSV Viewer', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'This browser cannot start CSV Viewer Web', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Open CSV', exact: true })).toHaveCount(0);
     await expect.poll(() => diagnostics.some((line) => line.includes('message=workspace.acquire-database ') && line.includes('outcome=interrupted'))).toBe(true);
-    await captureState(page, testInfo, 'unsupported');
+    await captureState(page, testInfo, 'failed');
     await attachDiagnostics(testInfo, diagnostics);
   } finally {
     failLoad.resolve();

@@ -107,6 +107,27 @@ test('window close and app quit share confirmation; cancelling preserves edits a
   expect(await readFile(path.join(directory, 'people.csv'), 'utf8')).toBe(contents);
 });
 
+test('quitting while the workspace opens exits cleanly', async () => {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && key !== 'ELECTRON_RUN_AS_NODE' && key !== 'VITE_DEV_SERVER_URL') env[key] = value;
+  }
+  const early = await _electron.launch({
+    executablePath: requireDesktop('electron'),
+    args: [desktopRoot, `--user-data-dir=${path.join(directory, 'early-user-data')}`, '--no-sandbox'],
+    env,
+  });
+  const electronProcess = early.process();
+  const closed = early.waitForEvent('close');
+  try {
+    await early.evaluate(({ app: electronApp }) => { electronApp.quit(); });
+    await closed;
+    await expect.poll(() => electronProcess.exitCode).toBe(0);
+  } finally {
+    if (electronProcess.exitCode === null) await early.close();
+  }
+});
+
 test('a renderer reload ends the previous document workspace, so reopening shows the CSV Source', async () => {
   await openSource(path.join(directory, 'people.csv'));
   await editCell(page, 'name', 0, 'Ada edited');
